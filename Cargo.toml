@@ -19,6 +19,16 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 sha2 = "0.11.1"
 hex = "0.4.3"
 libc = "0.2.191"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
+hyper = { version = "1.12.0", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio", "server-auto"] }
+http-body-util = "0.1.5"
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["native-tokio", "http1", "ring", "tls12", "logging"] }
+# time: jiff (Phase 2 decision, used everywhere)
+jiff = "0.2.39"
+url = "2.5.8"
+base64 = "0.23.1"
+bytes = "1.12.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
