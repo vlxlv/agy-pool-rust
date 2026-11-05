@@ -29,6 +29,9 @@ jiff = "0.2.39"
 url = "2.5.8"
 base64 = "0.23.1"
 bytes = "1.12.1"
+pbkdf2 = "0.13.0"
+hmac = "0.13.0"
+getrandom = "0.4.3"
 
 [dev-dependencies]
 tempfile = "3.27.0"

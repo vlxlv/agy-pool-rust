@@ -1,0 +1,62 @@
+[
+  {
+    "password": "correct horse",
+    "plaintext": "",
+    "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+    "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+    "bundle": {
+      "format": "agy-pool-encrypted-v1",
+      "kdf": "pbkdf2_hmac_sha256",
+      "iterations": 100000,
+      "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+      "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+      "ciphertext": "",
+      "tag": "2NsbEoULo9BUn7kMYv44AGY+OExDHzfVsMOdYIcTd50="
+    }
+  },
+  {
+    "password": "correct horse",
+    "plaintext": "a",
+    "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+    "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+    "bundle": {
+      "format": "agy-pool-encrypted-v1",
+      "kdf": "pbkdf2_hmac_sha256",
+      "iterations": 100000,
+      "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+      "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+      "ciphertext": "vQ==",
+      "tag": "k+3kWQRI79JUJh/l0z5Zr+xsDVX7u5MXK7B0oR/Vj+U="
+    }
+  },
+  {
+    "password": "correct horse",
+    "plaintext": "exactly-32-bytes-of-plaintext!!!",
+    "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+    "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+    "bundle": {
+      "format": "agy-pool-encrypted-v1",
+      "kdf": "pbkdf2_hmac_sha256",
+      "iterations": 100000,
+      "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+      "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+      "ciphertext": "uR72ykBjSQH/P9Hl+cZCywQYc2QoR/M2EsYgUTa1ZMU=",
+      "tag": "DBZ7+ya+pX726nPfjjg/IqcGBtBS/IxIDIdQ7mn1D64="
+    }
+  },
+  {
+    "password": "correct horse",
+    "plaintext": "longer than one 32-byte keystream block, with unicode: 配额 ✓",
+    "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+    "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+    "bundle": {
+      "format": "agy-pool-encrypted-v1",
+      "kdf": "pbkdf2_hmac_sha256",
+      "iterations": 100000,
+      "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+      "nonce": "ZmVkY2JhOTg3NjU0MzIxMA==",
+      "ciphertext": "sAn5zlF9EFikbJKn79xCmBpFOCshX/d/F9c8WjbmIIUc8VLdGCvc7Dzv/HTYRq6LM2RGEmZZjiQyvIlsTMVkjWc=",
+      "tag": "5WI8AGgh6z6/xLw+06Jllsti/3AgbYYWh+rKEZfAJLM="
+    }
+  }
+]

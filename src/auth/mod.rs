@@ -478,6 +478,13 @@ async fn refresh_token_impl(
 
     let (status, resp_body) = match crate::http::post_form(&token_url(), &form, Duration::from_secs(10)).await {
         Ok(res) => res,
+        Err(crate::http::HttpError::Body(e)) => {
+            crate::observability::record_auth_refresh_failure();
+            return Err(AuthError::Message(format!(
+                "failed to read token refresh response: {}",
+                e
+            )));
+        }
         Err(e) => {
             crate::observability::record_auth_refresh_failure();
             return Err(AuthError::Message(format!(
