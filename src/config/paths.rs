@@ -349,7 +349,38 @@ pub fn reset_native_agy_dir() {
 }
 
 /// Returns the active root directory for native agy state.
+/// Test builds only: panics if `path` lies inside live agy-pool state on this host, whatever the
+/// test-mode flag says. Tests can flip that flag and reset the data dir; on 2026-11-06 a racing
+/// test did, and another test's save_pool overwrote the live gateway's state.db.
+#[cfg(test)]
+fn deny_live_path(path: PathBuf) -> PathBuf {
+    let home = real_host_user_home();
+    let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| clean_path(&path));
+    for live in [".local/share/agy-pool", ".config/agy-pool", ".gemini", ".local/bin"] {
+        let root = home.join(live);
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        if resolved.starts_with(&root) || path.starts_with(home.join(live)) {
+            panic!(
+                "test resolved a live path {} (under {}); configure a temp dir first",
+                path.display(),
+                root.display()
+            );
+        }
+    }
+    path
+}
+
+#[cfg(not(test))]
+#[inline]
+fn deny_live_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 pub fn native_agy_dir() -> PathBuf {
+    deny_live_path(native_agy_dir_unchecked())
+}
+
+fn native_agy_dir_unchecked() -> PathBuf {
     let custom = NATIVE_AGY_CUSTOM_ROOT.read().unwrap_or_else(|e| e.into_inner());
     if let Some(ref root) = *custom {
         return root.clone();
@@ -843,6 +874,10 @@ pub fn configure_default_data_dir() -> Result<(), ConfigError> {
 
 /// Returns the active writable data directory.
 pub fn data_dir() -> PathBuf {
+    deny_live_path(data_dir_unchecked())
+}
+
+fn data_dir_unchecked() -> PathBuf {
     let configured = CONFIGURED_DATA_DIR.read().unwrap_or_else(|e| e.into_inner());
     if let Some(ref d) = *configured {
         return d.clone();
@@ -1406,6 +1441,32 @@ mod tests {
             }
         }
         set_test_mode(orig_test_mode);
+    }
+
+    #[test]
+    fn live_paths_panic_even_with_test_mode_off() {
+        // Reproduces the 2026-11-06 incident's state: test mode off and no configured data dir,
+        // so the default would be the live ~/.local/share/agy-pool.
+        let _g = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let was_test_mode = is_test_mode();
+        set_test_mode(false);
+        reset_data_dir();
+        let data = std::panic::catch_unwind(data_dir);
+        let native = std::panic::catch_unwind(native_agy_dir);
+        set_test_mode(was_test_mode);
+        assert!(
+            data.is_err(),
+            "data_dir() must panic instead of returning the live data dir"
+        );
+        assert!(
+            native.is_err(),
+            "native_agy_dir() must panic instead of returning the live ~/.gemini"
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        configure_data_dir(tmp.path()).unwrap();
+        assert!(data_dir().starts_with(std::fs::canonicalize(tmp.path()).unwrap()));
+        reset_data_dir();
     }
 
     #[test]
