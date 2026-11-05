@@ -1,0 +1,28 @@
+[package]
+name = "agy-pool"
+version = "0.1.1-alpha.2"
+edition = "2024"
+rust-version = "1.99"
+
+[lib]
+name = "agy_pool"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agy-pool"
+path = "src/main.rs"
+
+[dependencies]
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha2 = "0.11.1"
+hex = "0.4.3"
+libc = "0.2.191"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[profile.release]
+strip = true
+lto = "thin"
