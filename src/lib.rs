@@ -7,6 +7,7 @@ pub mod config;
 pub mod http;
 pub mod observability;
 pub mod quota;
+pub mod scheduler;
 pub mod storage;
 
 #[cfg(test)]
