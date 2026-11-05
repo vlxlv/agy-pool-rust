@@ -1,8 +1,12 @@
 pub mod db;
+pub mod inflight;
 pub mod model;
 pub mod pool;
 
 pub use db::*;
+pub use inflight::{
+    LeaseGuard, lease_in_flight, lease_in_flight_with_db, reserve_in_flight, reserve_in_flight_with_db,
+};
 pub use model::*;
 pub use pool::*;
 
