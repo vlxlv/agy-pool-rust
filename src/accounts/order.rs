@@ -828,8 +828,13 @@ pub fn compare_accounts(a: &crate::storage::Account, b: &crate::storage::Account
 mod tests {
     use super::*;
 
-    fn create_test_order_pool() -> (tempfile::TempDir, crate::storage::Pool) {
-        let _l = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Returns the TEST_LOCK guard: callers must hold it for the whole test, since the data dir is global.
+    fn create_test_order_pool() -> (
+        std::sync::MutexGuard<'static, ()>,
+        tempfile::TempDir,
+        crate::storage::Pool,
+    ) {
+        let lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::config::set_test_mode(true);
         let dir = tempfile::tempdir().unwrap();
         crate::config::configure_data_dir(dir.path()).unwrap();
@@ -901,7 +906,7 @@ mod tests {
         p.accounts = vec![acc1, acc2, acc3, acc4];
         p.active_account_id = Some("acc_1".to_string());
         crate::storage::save_pool(&p).unwrap();
-        (dir, p)
+        (lock, dir, p)
     }
 
     #[test]
@@ -954,7 +959,7 @@ mod tests {
 
     #[test]
     fn test_move_account() {
-        let (_dir, _) = create_test_order_pool();
+        let (_lock, _dir, _) = create_test_order_pool();
 
         // Move acc_1 to bottom
         let res = move_account("acc_1", "bottom").unwrap();
@@ -1000,7 +1005,7 @@ mod tests {
 
     #[test]
     fn test_swap_accounts() {
-        let (_dir, _) = create_test_order_pool();
+        let (_lock, _dir, _) = create_test_order_pool();
 
         // Swap acc_1 and acc_3
         let res = swap_accounts("acc_1", "acc_3").unwrap();
@@ -1021,7 +1026,7 @@ mod tests {
 
     #[test]
     fn test_sort_accounts() {
-        let (_dir, _) = create_test_order_pool();
+        let (_lock, _dir, _) = create_test_order_pool();
 
         // Sort by quota (default descending: acc_3 (95%), acc_1 (80%), acc_2 (50%), acc_10 (blocked: penalty -1))
         let res = sort_accounts("quota", false, false).unwrap();
@@ -1083,7 +1088,7 @@ mod tests {
 
     #[test]
     fn test_reorder_accounts() {
-        let (_dir, _) = create_test_order_pool();
+        let (_lock, _dir, _) = create_test_order_pool();
 
         // Permute all 4 accounts: 4, 3, 2, 1
         let res = reorder_accounts(&["4", "3", "2", "1"]).unwrap();
@@ -1106,7 +1111,7 @@ mod tests {
 
     #[test]
     fn test_print_account_order_preview() {
-        let (_dir, p) = create_test_order_pool();
+        let (_lock, _dir, p) = create_test_order_pool();
         let mut buf = Vec::new();
         print_account_order_preview(&mut buf, &p.accounts, &[1], p.active_account_id.as_deref(), Some(false)).unwrap();
         let out = String::from_utf8(buf).unwrap();
