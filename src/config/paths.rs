@@ -835,6 +835,8 @@ pub fn configure_data_dir(dir: &Path) -> Result<(), ConfigError> {
             real_target.display()
         )));
     }
+    // Before the locks dir is created below: a live path must not even get a directory made.
+    let real_target = deny_live_path(real_target);
 
     let mut configured = CONFIGURED_DATA_DIR.write().unwrap_or_else(|e| e.into_inner());
     *configured = Some(real_target.clone());
