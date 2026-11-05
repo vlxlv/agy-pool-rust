@@ -39,3 +39,12 @@ tempfile = "3.27.0"
 [profile.release]
 strip = true
 lto = "thin"
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.hmac]
+opt-level = 3
+
+[profile.dev.package.pbkdf2]
+opt-level = 3
