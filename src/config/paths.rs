@@ -61,13 +61,13 @@ pub fn clean_path<P: AsRef<Path>>(path: P) -> PathBuf {
 }
 
 /// Resolves relative path to absolute against the current working directory, then cleans it.
-pub fn make_absolute<P: AsRef<Path>>(path: P) -> PathBuf {
+pub fn make_absolute<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     let p = path.as_ref();
     if p.is_absolute() {
-        clean_path(p)
+        Ok(clean_path(p))
     } else {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        clean_path(cwd.join(p))
+        let cwd = std::env::current_dir()?;
+        Ok(clean_path(cwd.join(p)))
     }
 }
 
@@ -140,12 +140,12 @@ pub fn real_host_user_home() -> PathBuf {
 fn detect_real_production_gemini_dir() -> PathBuf {
     if let Ok(explicit) = std::env::var("AGY_REAL_GEMINI_DIR")
         && !explicit.is_empty()
+        && let Ok(abs) = make_absolute(expand_user(PathBuf::from(explicit)))
     {
-        let abs = make_absolute(expand_user(PathBuf::from(explicit)));
         if let Ok(eval) = std::fs::canonicalize(&abs) {
-            return clean_path(&eval);
+            return clean_path(eval);
         }
-        return clean_path(&abs);
+        return clean_path(abs);
     }
 
     let real_home = real_host_user_home();
@@ -297,9 +297,13 @@ pub fn set_synthetic_sandbox_root(root: &Path) -> SyntheticSandboxGuard {
     let orig_env = std::env::var("AGY_SANDBOX_DIR").ok();
 
     if !root.as_os_str().is_empty() {
-        let abs = make_absolute(root);
-        let eval = std::fs::canonicalize(&abs).unwrap_or(abs);
-        let clean = clean_path(&eval);
+        let clean = match make_absolute(root) {
+            Ok(abs) => {
+                let eval = std::fs::canonicalize(&abs).unwrap_or(abs);
+                clean_path(eval)
+            }
+            Err(_) => clean_path(root),
+        };
         *root_guard = Some(clean.clone());
         // SAFETY: caller holds TEST_LOCK in tests when mutating environment variables.
         unsafe {
@@ -476,7 +480,16 @@ pub fn assert_safe_destructive_path(path: &Path) -> Result<(), ConfigError> {
     if path.as_os_str().is_empty() {
         return Ok(());
     }
-    let abs = make_absolute(expand_user(path));
+    let abs = match make_absolute(expand_user(path)) {
+        Ok(a) => a,
+        Err(err) => {
+            return Err(ConfigError::Guard(format!(
+                "[FAIL-CLOSED GUARD] failed to resolve destructive path \"{}\": {}",
+                path.display(),
+                err
+            )));
+        }
+    };
     let clean_abs = clean_path(&abs);
 
     // Check 1: nominal path
@@ -582,7 +595,16 @@ pub fn assert_safe_native_token_write(path: &Path) -> Result<(), ConfigError> {
         ));
     }
 
-    let abs = make_absolute(expand_user(path));
+    let abs = match make_absolute(expand_user(path)) {
+        Ok(a) => a,
+        Err(err) => {
+            return Err(ConfigError::Guard(format!(
+                "[FAIL-CLOSED GUARD] failed to resolve native token write path \"{}\": {}",
+                path.display(),
+                err
+            )));
+        }
+    };
     let clean_target = clean_path(&abs);
 
     let mut resolved_target = resolve_path_symlinks(&clean_target);
@@ -657,7 +679,16 @@ pub fn assert_safe_native_token_write(path: &Path) -> Result<(), ConfigError> {
             "[FAIL-CLOSED GUARD] canonical native token file is unconfigured".to_string(),
         ));
     }
-    let canonical_abs = make_absolute(expand_user(&canonical_token_file));
+    let canonical_abs = match make_absolute(expand_user(&canonical_token_file)) {
+        Ok(a) => a,
+        Err(err) => {
+            return Err(ConfigError::Guard(format!(
+                "[FAIL-CLOSED GUARD] failed to resolve canonical native token path \"{}\": {}",
+                canonical_token_file.display(),
+                err
+            )));
+        }
+    };
     let clean_canonical = clean_path(&canonical_abs);
     let clean_lock = PathBuf::from(format!("{}.lock", clean_canonical.display()));
     let canonical_dir = clean_canonical.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -712,7 +743,16 @@ pub fn assert_safe_read_path(path: &Path) -> Result<(), ConfigError> {
     if !is_test_mode() || path.as_os_str().is_empty() {
         return Ok(());
     }
-    let abs = make_absolute(expand_user(path));
+    let abs = match make_absolute(expand_user(path)) {
+        Ok(a) => a,
+        Err(err) => {
+            return Err(ConfigError::Guard(format!(
+                "[FAIL-CLOSED GUARD] failed to resolve read path \"{}\": {}",
+                path.display(),
+                err
+            )));
+        }
+    };
     let clean_abs = clean_path(&abs);
 
     if is_protected_production_dir(&clean_abs) {
@@ -745,7 +785,16 @@ pub fn assert_safe_read_path(path: &Path) -> Result<(), ConfigError> {
 
 /// Sets the writable data directory with fail-closed safety checks.
 pub fn configure_data_dir(dir: &Path) -> Result<(), ConfigError> {
-    let abs = make_absolute(expand_user(dir));
+    let abs = match make_absolute(expand_user(dir)) {
+        Ok(a) => a,
+        Err(err) => {
+            return Err(ConfigError::Guard(format!(
+                "failed to resolve data directory \"{}\": {}",
+                dir.display(),
+                err
+            )));
+        }
+    };
     let real_target = std::fs::canonicalize(&abs).unwrap_or(abs);
     let real_target = clean_path(&real_target);
 
@@ -1372,5 +1421,51 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert!(configure_data_dir(tmp.path()).is_ok());
         reset_data_dir();
+    }
+
+    struct CwdRestoreGuard {
+        orig_cwd: PathBuf,
+    }
+
+    impl Drop for CwdRestoreGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.orig_cwd);
+        }
+    }
+
+    #[test]
+    fn guards_fail_closed_when_cwd_is_gone() {
+        let _g = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let orig_mode = is_test_mode();
+        set_test_mode(true);
+
+        let orig_cwd = std::env::current_dir().expect("must get current dir");
+        let _guard = CwdRestoreGuard { orig_cwd };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_path = tmp.path().to_path_buf();
+        std::env::set_current_dir(&tmp_path).expect("must chdir to tempdir");
+        drop(tmp);
+        let _ = std::fs::remove_dir_all(&tmp_path);
+
+        let destructive_res = assert_safe_destructive_path(Path::new("relative/file"));
+        assert!(destructive_res.is_err(), "expected error when cwd is deleted");
+        let destructive_err = destructive_res.unwrap_err().to_string();
+        assert!(
+            destructive_err.contains("[FAIL-CLOSED GUARD] failed to resolve"),
+            "destructive error message must contain '[FAIL-CLOSED GUARD] failed to resolve', got: {}",
+            destructive_err
+        );
+
+        let read_res = assert_safe_read_path(Path::new("relative/file"));
+        assert!(read_res.is_err(), "expected error when cwd is deleted");
+        let read_err = read_res.unwrap_err().to_string();
+        assert!(
+            read_err.contains("[FAIL-CLOSED GUARD] failed to resolve"),
+            "read error message must contain '[FAIL-CLOSED GUARD] failed to resolve', got: {}",
+            read_err
+        );
+
+        set_test_mode(orig_mode);
     }
 }

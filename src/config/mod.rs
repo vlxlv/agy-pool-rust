@@ -226,7 +226,16 @@ const FORBIDDEN_KEYS: &[&str] = &[
 ];
 
 pub fn load_config_file(path: &Path) -> Result<StaticConfig, ConfigError> {
-    let abs_path = make_absolute(expand_user(path));
+    let abs_path = match make_absolute(expand_user(path)) {
+        Ok(a) => a,
+        Err(err) => {
+            return Err(ConfigError::Validation(format!(
+                "invalid config file path \"{}\": {}",
+                path.display(),
+                err
+            )));
+        }
+    };
     let data = match std::fs::read(&abs_path) {
         Ok(d) => d,
         Err(e) => {
@@ -334,10 +343,23 @@ pub fn load_config_file(path: &Path) -> Result<StaticConfig, ConfigError> {
     Ok(cfg)
 }
 
-pub fn compute_config_file_hash(path: &Path) -> std::io::Result<String> {
+pub fn compute_config_file_hash(path: &Path) -> Result<String, ConfigError> {
     use sha2::{Digest, Sha256};
-    let abs_path = make_absolute(expand_user(path));
-    let data = std::fs::read(&abs_path)?;
+    let abs_path = match make_absolute(expand_user(path)) {
+        Ok(a) => a,
+        Err(err) => {
+            return Err(ConfigError::Io(format!("failed to resolve config path: {}", err)));
+        }
+    };
+    let data = match std::fs::read(&abs_path) {
+        Ok(d) => d,
+        Err(err) => {
+            return Err(ConfigError::Io(format!(
+                "failed to read config file for hashing: {}",
+                err
+            )));
+        }
+    };
     let mut hasher = Sha256::new();
     hasher.update(&data);
     let digest = hasher.finalize();
@@ -347,13 +369,11 @@ pub fn compute_config_file_hash(path: &Path) -> std::io::Result<String> {
 pub fn resolve_default_config_file() -> Result<PathBuf, ConfigError> {
     if let Ok(explicit) = std::env::var("AGY_CONFIG_FILE")
         && !explicit.is_empty()
+        && let Ok(abs) = make_absolute(expand_user(Path::new(&explicit)))
+        && let Ok(meta) = std::fs::metadata(&abs)
+        && !meta.is_dir()
     {
-        let abs = make_absolute(expand_user(Path::new(&explicit)));
-        if let Ok(meta) = std::fs::metadata(&abs)
-            && !meta.is_dir()
-        {
-            return Ok(abs);
-        }
+        return Ok(abs);
     }
 
     let home = std::env::var_os("HOME")
