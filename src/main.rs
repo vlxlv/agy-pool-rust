@@ -1,5 +1,17 @@
-#[tokio::main]
-async fn main() {
+fn main() {
+    if std::env::var("AGY_POOL_DAEMON_CHILD").as_deref() == Ok("1") {
+        let code = agy_pool::daemon::run_daemon_child(&mut std::io::stderr());
+        std::process::exit(code);
+    }
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to initialize tokio runtime");
+    rt.block_on(async_main());
+}
+
+async fn async_main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         match args[1].as_str() {

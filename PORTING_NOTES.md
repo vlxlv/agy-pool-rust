@@ -41,3 +41,76 @@ This document records Go tests and internals that are not ported 1:1 into the Ru
 ### 1. TestResponseCommitter_StateTransitions and TestResponseCommitter_WriteTransitionsState
 - **Reason**: In Go, `ResponseCommitter` is an imperative mutable wrapper around `http.ResponseWriter` implementing `http.Hijacker` that transitions states (`stateUncommitted` -> `stateHeadersCommitted` -> `stateDataCommitted`) across explicit `WriteHeader` and `Write` calls. In Rust's hyper-based architecture, HTTP responses are values (`http::Response<ProxyBody>`). Commitment is structural: once headers are sent to the client via `send_buffered` or `send_stream`, the response is returned as `Attempt::Done(Response<ProxyBody>)` and streaming body chunks stream through `StreamBody`. There is no separate mutable wrapper or `Hijack` trait needed.
 - **Covering Rust test**: `proxy::tests::core::test_send_stream_commit_and_truncation_error` (verifies streaming commitment semantics and truncation handling) and `proxy::tests::core::test_send_buffered_commit_state` (verifies buffered response commitment and header state).
+
+## internal/daemon (Daemon Lifecycle, PID, Runtime Stats, Log Management)
+
+### Tests Not Ported 1:1 (With Reasons)
+
+1. **TestMain**
+   - **Reason**: Go test runner hook (`testing.M`) for global test process initialization and cleanup. Not applicable in Rust, which uses cargo's test harness with scoped `TestEnvGuard` / `crate::config::TEST_LOCK` isolation per test.
+   - **Covering Rust mechanism**: `crate::daemon::test_env` RAII guard and `scripts/rust-test.sh` unshare sandbox.
+
+2. **TestHelperMultiProcess**
+   - **Reason**: Go sub-process trampoline (`GO_WANT_HELPER_PROCESS=1`) called via `os.Args` to simulate separate daemon binaries in Go's single-binary test runner. In Rust, multi-process tests either invoke real background binaries or run in dedicated integration test targets (`tests/daemon_child.rs`).
+   - **Covering Rust test**: `rust/tests/daemon_child.rs:test_daemon_child_production_lifecycle` and `lifecycle::tests::test_multi_instance_subprocess_lifecycle`.
+
+### 50 Ported Tests (Go -> Rust Mapping)
+
+| Go Test Name | Rust Module & Test Name |
+| --- | --- |
+| `TestCanonicalizeDir` | `daemon::instance::tests::test_canonicalize_dir` |
+| `TestCgroupScope` | `daemon::systemd::tests::test_cgroup_scope` |
+| `TestCheckInstanceStatus` | `daemon::instance::tests::test_check_instance_status` |
+| `TestClearLog_Semantics` | `daemon::log::tests::test_clear_log_semantics` |
+| `TestCollectRuntimeStats` | `daemon::runtime::tests::test_collect_runtime_stats` |
+| `TestConcurrentStart_Protection` | `daemon::lifecycle::tests::test_concurrent_start_protection` |
+| `TestConfigMismatch_And_Tampering` | `daemon::lifecycle::tests::test_config_mismatch_and_tampering` |
+| `TestDaemonChild_ProductionLifecycle` | `tests/daemon_child.rs::test_daemon_child_production_lifecycle` |
+| `TestDaemon_ProactiveTokenRefresh` | `daemon::server::tests::test_daemon_proactive_token_refresh` |
+| `TestDaemon_StartsQuotaRefresher` | `daemon::server::tests::test_daemon_starts_quota_refresher` |
+| `TestDataDir_SymlinkCanonicalization` | `daemon::instance::tests::test_data_dir_symlink_canonicalization` |
+| `TestFailClosedProductionLogPath` | `daemon::pid::tests::test_fail_closed_production_log_path` |
+| `TestFailClosedProductionPIDPath` | `daemon::pid::tests::test_fail_closed_production_pid_path` |
+| `TestFormatGoVersion` | `daemon::runtime::tests::test_format_go_version` |
+| `TestFormatMemoryBytes` | `daemon::runtime::tests::test_format_memory_bytes` |
+| `TestFormatSize` | `daemon::log::tests::test_format_size` |
+| `TestFormatUptime` | `daemon::runtime::tests::test_format_uptime` |
+| `TestGetRuntimeStats_FreshnessAndPID` | `daemon::runtime::tests::test_get_runtime_stats_freshness_and_pid` |
+| `TestHelperProcess_BackgroundDaemonSpawnAndStop` | `daemon::lifecycle::tests::test_helper_process_background_daemon_spawn_and_stop` |
+| `TestIsAgyPoolProcess_PID1` | `daemon::lifecycle::tests::test_is_agy_pool_process_pid1` |
+| `TestIsDaemonOutdated` | `daemon::server::tests::test_is_daemon_outdated` |
+| `TestIsProcessAlive_ESRCH` | `daemon::lifecycle::tests::test_is_process_alive_esrch` |
+| `TestMatchesInstance` | `daemon::instance::tests::test_matches_instance` |
+| `TestMaybeRotateLog_RateLimiting` | `daemon::log::tests::test_maybe_rotate_log_rate_limiting` |
+| `TestMultiInstance_ForegroundIsolation` | `daemon::instance::tests::test_multi_instance_foreground_isolation` |
+| `TestMultiInstance_SubprocessLifecycle` | `daemon::instance::tests::test_multi_instance_subprocess_lifecycle` |
+| `TestObservability_CaseM_OlderRuntimeJSONDecodesSafely` | `daemon::runtime::tests::test_observability_case_m_older_runtime_json_decodes_safely` |
+| `TestObservability_CaseN_StalePIDRejectsStats` | `daemon::runtime::tests::test_observability_case_n_stale_pid_rejects_stats` |
+| `TestPerInstance_PIDLocks` | `daemon::instance::tests::test_per_instance_pid_locks` |
+| `TestPerInstance_StateDB_And_Log_Isolation` | `daemon::instance::tests::test_per_instance_state_db_and_log_isolation` |
+| `TestPIDFile_LegacyFormat` | `daemon::pid::tests::test_pid_file_legacy_format` |
+| `TestPIDFile_MalformedAndMissing` | `daemon::pid::tests::test_pid_file_malformed_and_missing` |
+| `TestPIDFile_OwnershipSafeRemoval` | `daemon::pid::tests::test_pid_file_ownership_safe_removal` |
+| `TestPIDFileTampering_FailClosed` | `daemon::lifecycle::tests::test_pid_file_tampering_fail_closed` |
+| `TestPIDFile_WriteAndReadRoundtrip` | `daemon::pid::tests::test_pid_file_write_and_read_roundtrip` |
+| `TestResolveInstanceContext` | `daemon::instance::tests::test_resolve_instance_context` |
+| `TestRestartDaemon_Sequencing` | `daemon::lifecycle::tests::test_restart_daemon_sequencing` |
+| `TestRotateLogIfNeeded_CopytruncateAndShift` | `daemon::log::tests::test_rotate_log_if_needed_copytruncate_and_shift` |
+| `TestRunForeground_LifecycleAndGracefulShutdown` | `daemon::server::tests::test_run_foreground_lifecycle_and_graceful_shutdown` |
+| `TestRuntimeStats_CorruptFile` | `daemon::runtime::tests::test_runtime_stats_corrupt_file` |
+| `TestRuntimeStats_EmptyFile` | `daemon::runtime::tests::test_runtime_stats_empty_file` |
+| `TestRuntimeStats_MissingFile` | `daemon::runtime::tests::test_runtime_stats_missing_file` |
+| `TestRuntimeStats_WriteAndReadRoundtrip` | `daemon::runtime::tests::test_runtime_stats_write_and_read_roundtrip` |
+| `TestRuntimeStatsWriter_100EventCoalescenceAndFinalZero` | `daemon::runtime::tests::test_runtime_stats_writer_100_event_coalescence_and_final_zero` |
+| `TestRuntimeStatsWriter_MultipleAccountsStressCoalescence` | `daemon::runtime::tests::test_runtime_stats_writer_multiple_accounts_stress_coalescence` |
+| `TestSameDataDir_DifferentConfigFile_Rejected` | `daemon::instance::tests::test_same_data_dir_different_config_file_rejected` |
+| `TestSamePort_Collision` | `daemon::instance::tests::test_same_port_collision` |
+| `TestStalePIDDetection` | `daemon::pid::tests::test_stale_pid_detection` |
+| `TestStopDaemon_Scenarios` | `daemon::lifecycle::tests::test_stop_daemon_scenarios` |
+| `TestTryAcquirePIDLock` | `daemon::pid::tests::test_try_acquire_pid_lock` |
+
+### Additional Safety and Integration Tests
+- `daemon::lifecycle::tests::send_signal_refuses_live_gateway_pid` (refuses signal delivery to live host gateway PID)
+- `daemon::systemd::tests::systemctl_refused_in_tests` (panics unconditionally in test builds)
+- `tests/daemon_child.rs::second_rust_gateway_refused_while_go_runs` (cross-runtime binary port-collision detection)
+- `daemon::server::tests::test_run_foreground_refuses_production_port_in_test_mode` (prevents binding production port 8899 in tests)
