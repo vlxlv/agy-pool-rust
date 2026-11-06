@@ -1,0 +1,16 @@
+TestTop_ResponsiveLayouts -> crate::cli::top::tests::test_top_responsive_layouts
+TestTop_AccountStates -> crate::cli::top::tests::test_top_account_states
+TestTop_UnknownQuota -> crate::cli::top::tests::test_top_unknown_quota
+TestTop_LongFriendlyNames_And_CJK -> crate::cli::top::tests::test_top_long_friendly_names_and_cjk
+TestTop_InFlight_ZeroOneN -> crate::cli::top::tests::test_top_in_flight_zero_one_n
+TestTop_IntervalBounds -> crate::cli::top::tests::test_top_interval_bounds
+TestTop_KeyHandling_Q_Plus_Minus_R -> crate::cli::top::tests::test_top_key_handling_q_plus_minus_r
+TestTop_RawMode_AlternateScreenAndCRLF -> crate::cli::top::tests::test_top_raw_mode_alternate_screen_and_crlf
+TestTop_TerminalRestorationOnPanic -> crate::cli::top::tests::test_top_terminal_restoration_on_panic
+TestTop_Privacy -> crate::cli::top::tests::test_top_privacy
+TestTop_ShowEmail -> crate::cli::top::tests::test_top_show_email
+TestTop_AliasesAndFlags -> crate::cli::top::tests::test_top_aliases_and_flags
+TestTop_BoundedWidthsAssertion -> crate::cli::top::tests::test_top_bounded_widths_assertion
+TestTop_PrintRepresentativeWidths -> crate::cli::top::tests::test_top_print_representative_widths
+TestTop_TelemetryBlock -> crate::cli::top::tests::test_top_telemetry_block
+top_restores_terminal_mode_on_every_exit -> crate::cli::top::tests::top_restores_terminal_mode_on_every_exit
