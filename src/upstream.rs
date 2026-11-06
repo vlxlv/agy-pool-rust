@@ -448,7 +448,10 @@ async fn dial_tcp(addrs: &[std::net::SocketAddr], timeout: Duration) -> Result<t
         let mut last_err = None;
         for addr in addrs {
             match tokio::net::TcpStream::connect(addr).await {
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => {
+                    let _ = stream.set_nodelay(true);
+                    return Ok(stream);
+                }
                 Err(e) => last_err = Some(e),
             }
         }

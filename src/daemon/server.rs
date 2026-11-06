@@ -310,6 +310,7 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
                 Ok(res) => res,
                 Err(_) => break,
             };
+            let _ = stream.set_nodelay(true);
             let io = hyper_util::rt::TokioIo::new(stream);
             let h = Arc::clone(&handler);
             tokio::spawn(async move {
@@ -317,9 +318,9 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
                     let h = Arc::clone(&h);
                     async move { Ok::<_, std::convert::Infallible>(h.serve(req).await) }
                 });
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await;
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                builder.pipeline_flush(true);
+                let _ = builder.serve_connection(io, service).await;
             });
         }
     };

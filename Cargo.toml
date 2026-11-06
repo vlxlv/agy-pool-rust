@@ -44,7 +44,9 @@ rcgen = "0.14.10"
 
 [profile.release]
 strip = true
-lto = "thin"
+lto = true
+codegen-units = 1
+panic = "abort"
 
 [profile.dev.package.sha2]
 opt-level = 3
