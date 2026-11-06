@@ -1,7 +1,8 @@
 name: Release
 
-# A `v*` tag runs the security audit and CI gate, builds all platform binaries and
-# Debian packages, generates checksums, and publishes the GitHub release.
+# A `v*` tag runs the security audit and CI gate in parallel, builds all Linux platform
+# binaries and Debian packages with cache and smoke tests, verifies checksums, and publishes
+# the GitHub release.
 on:
   push:
     tags: ['v*']
@@ -56,6 +57,8 @@ jobs:
           v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
           test -n "$v"
           rustup toolchain install "$v" --profile minimal -c rustfmt,clippy && rustup default "$v"
+      - uses: Swatinem/rust-cache@v2
+        if: startsWith(github.ref, 'refs/tags/')
       - name: Gate (fmt, clippy, tests)
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -67,7 +70,6 @@ jobs:
 
   audit:
     name: Security Audit
-    needs: prepare
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -117,6 +119,8 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: Build release binary
         run: |
           mkdir -p dist
@@ -124,16 +128,45 @@ jobs:
           cp "target/${{ matrix.target }}/release/agy-pool" "dist/${{ matrix.asset }}"
           chmod +x "dist/${{ matrix.asset }}"
 
-      - name: Verify binary and build Debian package
+      - name: Verify binary linkage and CLI
         run: |
-          # x86_64 musl builds are static-pie; both forms have no dynamic loader.
           file "dist/${{ matrix.asset }}"
           file "dist/${{ matrix.asset }}" | grep -Eq 'statically linked|static-pie linked'
           VERSION_OUT=$("dist/${{ matrix.asset }}" --version)
           echo "$VERSION_OUT"
           [ "$VERSION_OUT" = "agy-pool ${VERSION}" ]
           "dist/${{ matrix.asset }}" --help
+
+      - name: Build and test Debian package
+        run: |
           ./scripts/build-deb.sh "${{ matrix.deb }}" "${VERSION}" "dist/${{ matrix.asset }}" dist
+          DEB_FILE="dist/agy-pool_${VERSION}_${{ matrix.deb }}.deb"
+          test -f "$DEB_FILE"
+          sudo dpkg -i "$DEB_FILE"
+          /usr/bin/agy-pool --version
+          sudo dpkg -r agy-pool
+
+      - name: Runtime daemon smoke test
+        run: |
+          tmp_dir=$(mktemp -d)
+          mkdir -p "$tmp_dir/data" "$tmp_dir/config"
+          cat << 'EOF' > "$tmp_dir/config/config.json"
+          {
+            "version": 1,
+            "server": {
+              "listen": "127.0.0.1",
+              "port": 18899
+            }
+          }
+          EOF
+          AGY_DATA_DIR="$tmp_dir/data" AGY_CONFIG_FILE="$tmp_dir/config/config.json" AGY_POOL_DAEMON_CHILD=1 "dist/${{ matrix.asset }}" &
+          DAEMON_PID=$!
+          sleep 1
+          RESP=$(curl -s --fail --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:18899/healthz)
+          echo "Healthcheck response: $RESP"
+          echo "$RESP" | grep -q '"status":"ok"'
+          kill -TERM $DAEMON_PID 2>/dev/null || true
+          rm -rf "$tmp_dir"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
