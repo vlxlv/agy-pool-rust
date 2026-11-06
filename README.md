@@ -39,15 +39,15 @@ xychart-beta
     line "Throughput" [100, 114.0]
 ```
 
-> **指标说明（以 Go 100% 为基准，实测数据源自 [Benchmark Suite](https://github.com/vlxlv/agy-pool-rust/actions/workflows/benchmark.yml) / [scripts/benchmark-compare.py](scripts/benchmark-compare.py)）：**
-> - **Cold Start（冷启动耗时）：** `0.72 ms` vs `2.00 ms`（**-64.0%**，仅占 Go 的 36.0%）
-> - **Idle RSS（空闲常驻内存）：** `5.78 MiB` vs `12.58 MiB`（**-54.0%**，仅占 Go 的 46.0%）
-> - **OS Threads（运行时系统线程）：** `5` vs `9`（**-44.4%**，仅占 Go 的 55.6%）
-> - **Binary Size（二进制体积）：** `7.78 MiB` vs `11.85 MiB`（**-34.4%**，仅占 Go 的 65.6%）
-> - **P50 Latency（中位请求延迟）：** `0.86 ms` vs `0.99 ms`（**-13.1%**，仅占 Go 的 86.9%）
-> - **P95 Latency（95 分位延迟）：** `2.49 ms` vs `2.87 ms`（**-13.2%**，仅占 Go 的 86.8%）
-> - **P99 Latency（99 分位延迟）：** `3.45 ms` vs `3.95 ms`（**-12.7%**，仅占 Go 的 87.3%）
-> - **Throughput（最大 QPS 吞吐量）：** `17,980.5 req/s` vs `15,775.6 req/s`（**+14.0%**，达到 Go 的 114.0%）
+> **Benchmark Breakdown (Go = 100% baseline; measured via [Benchmark Suite](https://github.com/vlxlv/agy-pool-rust/actions/workflows/benchmark.yml) / [scripts/benchmark-compare.py](scripts/benchmark-compare.py)):**
+> - **Cold Start:** `0.72 ms` vs `2.00 ms` (**-64.0%**, 36.0% of Go)
+> - **Idle RSS:** `5.78 MiB` vs `12.58 MiB` (**-54.0%**, 46.0% of Go)
+> - **OS Threads:** `5` vs `9` (**-44.4%**, 55.6% of Go)
+> - **Binary Size:** `7.78 MiB` vs `11.85 MiB` (**-34.4%**, 65.6% of Go)
+> - **P50 Latency (Median):** `0.86 ms` vs `0.99 ms` (**-13.1%**, 86.9% of Go)
+> - **P95 Latency:** `2.49 ms` vs `2.87 ms` (**-13.2%**, 86.8% of Go)
+> - **P99 Latency:** `3.45 ms` vs `3.95 ms` (**-12.7%**, 87.3% of Go)
+> - **Throughput (Peak QPS):** `17,980.5 req/s` vs `15,775.6 req/s` (**+14.0%**, 114.0% of Go)
 
 ## Install
 

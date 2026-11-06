@@ -177,10 +177,27 @@ def main():
 
     # 3. Idle Memory Footprint & Throughput
     print(f"[*] Starting daemons for idle footprint & HTTP load test...")
-    rust_proc, rust_tmp = start_daemon(args.rust_bin, 18891)
-    go_proc, go_tmp = start_daemon(args.go_bin, 18892)
+    rust_proc, rust_tmp = None, None
+    go_proc, go_tmp = None, None
+
+    def cleanup_proc(proc, tmp_dir):
+        if proc is not None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            except Exception:
+                pass
+        if tmp_dir and os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
+        rust_proc, rust_tmp = start_daemon(args.rust_bin, 18891)
+        go_proc, go_tmp = start_daemon(args.go_bin, 18892)
+
         # Settle for 1 second
         time.sleep(1)
         rust_mem = read_proc_status(rust_proc.pid)
@@ -191,12 +208,8 @@ def main():
         rust_bench = measure_throughput_and_latency("127.0.0.1", 18891, total=args.requests, concurrency=args.concurrency)
         go_bench = measure_throughput_and_latency("127.0.0.1", 18892, total=args.requests, concurrency=args.concurrency)
     finally:
-        rust_proc.terminate()
-        go_proc.terminate()
-        rust_proc.wait()
-        go_proc.wait()
-        shutil.rmtree(rust_tmp, ignore_errors=True)
-        shutil.rmtree(go_tmp, ignore_errors=True)
+        cleanup_proc(rust_proc, rust_tmp)
+        cleanup_proc(go_proc, go_tmp)
 
     # Calculate Deltas
     def delta_str(val_rust, val_go, higher_is_better=True):

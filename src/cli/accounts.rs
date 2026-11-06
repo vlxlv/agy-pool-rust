@@ -736,7 +736,7 @@ fn render_wide_quota_dashboard(
             " {}[Protected]{} {}Low Quota Reserve{}  {}[Disabled] Excluded{}",
             CLR_YELLOW, CLR_RESET, CLR_DIM, CLR_RESET, CLR_DIM, CLR_RESET
         );
-        let short_status = if crate::daemon::is_port_listening(port) {
+        let short_status = if daemon_running {
             format!("{}RUNNING (:{port}){}", CLR_GREEN, CLR_RESET)
         } else {
             format!("{}STOPPED{}", CLR_DIM, CLR_RESET)
