@@ -23,6 +23,7 @@ env:
 
 jobs:
   test:
+    name: Code Hygiene & Test Suite
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
@@ -42,11 +43,104 @@ jobs:
       - run: cargo test -- --test-threads=16
       - name: Fail if tests wrote to live state paths
         run: for p in ~/.local/share/agy-pool ~/.config/agy-pool ~/.gemini; do test ! -e "$p" || { echo "tests wrote to $p"; find "$p" | head; exit 1; }; done
-      - name: Build release binary and verify CLI
+
+  build:
+    name: Build & Smoke Test (${{ matrix.deb }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            target: x86_64-unknown-linux-musl
+            asset: agy-pool-linux-amd64
+            deb: amd64
+          - runner: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: agy-pool-linux-arm64
+            deb: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install musl-tools
         run: |
-          cargo build --release
-          ./target/release/agy-pool --version
-          ./target/release/agy-pool --help
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install the Rust version pinned by Cargo.toml (rust-version)
+        run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal && rustup default "$v"
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: |
+          mkdir -p dist
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          AGY_POOL_VERSION=${VERSION} cargo build --release --locked --target ${{ matrix.target }}
+          cp "target/${{ matrix.target }}/release/agy-pool" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+
+      - name: Verify binary linkage and CLI
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          file "dist/${{ matrix.asset }}"
+          file "dist/${{ matrix.asset }}" | grep -Eq 'statically linked|static-pie linked'
+          VERSION_OUT=$("dist/${{ matrix.asset }}" --version)
+          echo "$VERSION_OUT"
+          [ "$VERSION_OUT" = "agy-pool ${VERSION}" ]
+          "dist/${{ matrix.asset }}" --help
+
+      - name: Build and test Debian package
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          ./scripts/build-deb.sh "${{ matrix.deb }}" "${VERSION}" "dist/${{ matrix.asset }}" dist
+          DEB_FILE="dist/agy-pool_${VERSION}_${{ matrix.deb }}.deb"
+          test -f "$DEB_FILE"
+          sudo dpkg -i "$DEB_FILE"
+          /usr/bin/agy-pool --version
+          sudo dpkg -r agy-pool
+
+      - name: Runtime daemon smoke test
+        run: |
+          tmp_dir=$(mktemp -d)
+          mkdir -p "$tmp_dir/data" "$tmp_dir/config"
+          cat << 'EOF' > "$tmp_dir/config/config.json"
+          {
+            "version": 1,
+            "server": {
+              "listen": "127.0.0.1",
+              "port": 18899
+            }
+          }
+          EOF
+          AGY_DATA_DIR="$tmp_dir/data" AGY_CONFIG_FILE="$tmp_dir/config/config.json" AGY_POOL_DAEMON_CHILD=1 "dist/${{ matrix.asset }}" &
+          DAEMON_PID=$!
+          sleep 1
+          RESP=$(curl -s --fail --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:18899/healthz)
+          echo "Healthcheck response: $RESP"
+          echo "$RESP" | grep -q '"status":"ok"'
+          kill -TERM $DAEMON_PID 2>/dev/null || true
+          rm -rf "$tmp_dir"
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    # Scheduled runs also fire on forks with Actions enabled; don't file issues there.
+    if: github.event.repository.fork == false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   # Shared-state races in tests only show up under some schedules; repeat the suite at several
   # thread counts on scheduled weekly runs and manual triggers.
@@ -79,15 +173,3 @@ jobs:
           done
       - name: Fail if tests wrote to live state paths
         run: for p in ~/.local/share/agy-pool ~/.config/agy-pool ~/.gemini; do test ! -e "$p" || { echo "tests wrote to $p"; find "$p" | head; exit 1; }; done
-
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    # Scheduled runs also fire on forks with Actions enabled; don't file issues there.
-    if: github.event.repository.fork == false
-    steps:
-      - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
