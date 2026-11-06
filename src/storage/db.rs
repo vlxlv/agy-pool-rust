@@ -162,28 +162,7 @@ pub fn ensure_file_permissions(db_path: &Path) -> Result<(), StorageError> {
 }
 
 fn current_rfc3339() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as libc::time_t;
-    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
-    // SAFETY: tm is stack-allocated, gmtime_r writes valid fields or returns null.
-    unsafe {
-        if libc::gmtime_r(&now, tm.as_mut_ptr()).is_null() {
-            return "1970-01-01T00:00:00Z".to_string();
-        }
-        let tm = tm.assume_init();
-        let mut buf = [0u8; 64];
-        let len = libc::strftime(
-            buf.as_mut_ptr() as *mut libc::c_char,
-            buf.len(),
-            c"%Y-%m-%dT%H:%M:%SZ".as_ptr(),
-            &tm,
-        );
-        std::str::from_utf8(&buf[..len])
-            .unwrap_or("1970-01-01T00:00:00Z")
-            .to_string()
-    }
+    jiff::Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 struct ConnectionPool {
