@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/vlxlv/agy-pool-go/internal/config"
 	"github.com/vlxlv/agy-pool-go/internal/storage"
@@ -22,6 +23,47 @@ func main() {
 			p.Accounts = append(p.Accounts,
 				&storage.Account{ID: "acc_1", Name: "Main"},
 				&storage.Account{ID: "acc_2", Name: "Work"})
+			return nil
+		})
+		fmt.Println("OK", err)
+	case "seed3": // create the DB and three accounts with distinct quota states
+		err := storage.PoolTransaction(func(p *storage.Pool) error {
+			f1 := 0.9
+			f2 := 0.6
+			f3 := 0.3
+			now := time.Now().Unix()
+			p.Accounts = append(p.Accounts,
+				&storage.Account{
+					ID:   "acc_1",
+					Name: "Alpha",
+					LastQuota: &storage.QuotaState{
+						Gemini5H:          &storage.QuotaWindow{Fraction: &f1},
+						GeminiWeekly:      &storage.QuotaWindow{Fraction: &f1},
+						RemainingFraction: &f1,
+						UpdatedAt:         &now,
+					},
+				},
+				&storage.Account{
+					ID:   "acc_2",
+					Name: "Beta",
+					LastQuota: &storage.QuotaState{
+						Gemini5H:          &storage.QuotaWindow{Fraction: &f2},
+						GeminiWeekly:      &storage.QuotaWindow{Fraction: &f2},
+						RemainingFraction: &f2,
+						UpdatedAt:         &now,
+					},
+				},
+				&storage.Account{
+					ID:   "acc_3",
+					Name: "Gamma",
+					LastQuota: &storage.QuotaState{
+						Gemini5H:          &storage.QuotaWindow{Fraction: &f3},
+						GeminiWeekly:      &storage.QuotaWindow{Fraction: &f3},
+						RemainingFraction: &f3,
+						UpdatedAt:         &now,
+					},
+				},
+			)
 			return nil
 		})
 		fmt.Println("OK", err)
