@@ -1,0 +1,86 @@
+name: Go vs Rust Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      requests:
+        description: 'Total HTTP requests for load benchmark'
+        required: false
+        default: '5000'
+        type: string
+      concurrency:
+        description: 'Concurrent client workers'
+        required: false
+        default: '20'
+        type: string
+      go_version:
+        description: 'Go version/tag from vlxlv/agy-pool-go (leave empty for latest)'
+        required: false
+        default: 'v0.1.0'
+        type: string
+  schedule:
+    # Run weekly benchmark comparison on Monday 04:00 UTC
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Side-by-Side Performance Comparison
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install musl-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install pinned Rust version
+        run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal && rustup default "$v"
+          rustup target add x86_64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build Rust release binary (musl)
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          AGY_POOL_VERSION=${VERSION} cargo build --release --locked --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/agy-pool ./agy-pool-rust
+          chmod +x ./agy-pool-rust
+          ./agy-pool-rust --version
+
+      - name: Download Go release binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GO_TAG: ${{ inputs.go_version }}
+        run: |
+          if [ -n "$GO_TAG" ]; then
+            gh release download "$GO_TAG" --repo vlxlv/agy-pool-go -p 'agy-pool-linux-amd64'
+          else
+            gh release download --repo vlxlv/agy-pool-go -p 'agy-pool-linux-amd64'
+          fi
+          mv agy-pool-linux-amd64 ./agy-pool-go
+          chmod +x ./agy-pool-go
+          ./agy-pool-go --version
+
+      - name: Run comparative benchmark suite
+        run: |
+          REQUESTS="${{ inputs.requests || '5000' }}"
+          CONCURRENCY="${{ inputs.concurrency || '20' }}"
+          python3 scripts/benchmark-compare.py \
+            --rust-bin ./agy-pool-rust \
+            --go-bin ./agy-pool-go \
+            --requests "$REQUESTS" \
+            --concurrency "$CONCURRENCY" \
+            --cold-start-runs 50 \
+            --markdown-file "$GITHUB_STEP_SUMMARY"
