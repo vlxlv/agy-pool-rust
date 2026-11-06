@@ -480,14 +480,14 @@ fn write_agy_token_file_inner(account: &crate::storage::Account) -> Result<(), A
     };
 
     let payload = serde_json::json!({
+        "auth_method": "consumer",
+        "id_token": account.id_token,
         "token": {
             "access_token": account.access_token,
-            "token_type": "Bearer",
+            "expiry": format_iso_expiry(expiry_ts as f64),
             "refresh_token": account.refresh_token,
-            "expiry": format_iso_expiry(expiry_ts as f64)
-        },
-        "auth_method": "consumer",
-        "id_token": account.id_token
+            "token_type": "Bearer"
+        }
     });
 
     crate::storage::atomic_json_write(&token_file, &payload)?;

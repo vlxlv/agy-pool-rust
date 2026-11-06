@@ -49,7 +49,10 @@ fn default_exec(_binary: &std::path::Path, _argv: &[String], _env: &[(String, St
 fn default_exec(binary: &std::path::Path, argv: &[String], env: &[(String, String)]) -> std::io::Error {
     use std::os::unix::process::CommandExt;
     let mut cmd = std::process::Command::new(binary);
-    cmd.args(argv);
+    if !argv.is_empty() {
+        cmd.arg0(&argv[0]);
+        cmd.args(&argv[1..]);
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }

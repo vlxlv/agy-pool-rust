@@ -49,8 +49,39 @@ pub fn send_signal(pid: i32, sig: i32) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+#[cfg(test)]
+pub type SystemdScopeOverrideFn = fn(i32) -> &'static str;
+
+#[cfg(test)]
+pub type SystemctlRecorderFn = fn(&str, &str);
+
+#[cfg(test)]
+static SYSTEMD_SCOPE_OVERRIDE: std::sync::Mutex<Option<SystemdScopeOverrideFn>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+static SYSTEMCTL_RECORDER: std::sync::Mutex<Option<SystemctlRecorderFn>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub fn set_systemd_scope_override(hook: Option<SystemdScopeOverrideFn>) {
+    let mut lock = SYSTEMD_SCOPE_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
+    *lock = hook;
+}
+
+#[cfg(test)]
+pub fn set_systemctl_recorder(hook: Option<SystemctlRecorderFn>) {
+    let mut lock = SYSTEMCTL_RECORDER.lock().unwrap_or_else(|e| e.into_inner());
+    *lock = hook;
+}
+
 /// systemd_scope reports how systemd supervises pid: "--user", "--system", or "" when it does not.
 pub fn systemd_scope(pid: i32) -> &'static str {
+    #[cfg(test)]
+    {
+        let lock = SYSTEMD_SCOPE_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(f) = *lock {
+            return f(pid);
+        }
+    }
     let path = format!("/proc/{}/cgroup", pid);
     if let Ok(b) = std::fs::read_to_string(path) {
         cgroup_scope(&b)
@@ -79,6 +110,11 @@ pub fn cgroup_scope(cgroup: &str) -> &'static str {
 pub fn systemctl(scope: &str, verb: &str) -> Result<(), DaemonError> {
     #[cfg(test)]
     {
+        let lock = SYSTEMCTL_RECORDER.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(recorder) = *lock {
+            recorder(scope, verb);
+            return Ok(());
+        }
         panic!(
             "SAFETY GUARD: systemctl is refused in tests (scope={}, verb={})",
             scope, verb

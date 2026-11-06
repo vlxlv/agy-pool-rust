@@ -204,7 +204,8 @@ fn wait_restarted(
     old_pid: i32,
     scope: &str,
 ) -> Result<super::lifecycle::StartResult, DaemonError> {
-    for _ in 0..50 {
+    let max_attempts = if cfg!(test) { 3 } else { 50 };
+    for _ in 0..max_attempts {
         if let Some(info) = super::pid::get_daemon_info(Some(pid_file))
             && info.pid != old_pid
             && super::pid::is_process_alive(info.pid)
@@ -383,5 +384,132 @@ mod tests {
 
         let _ = stop_daemon(Some(&pid_file), port, Duration::from_secs(3));
         kill_guard.disarm();
+    }
+
+    static SYSTEMCTL_RECORDER_CALLS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+    fn test_record_systemctl(scope: &str, verb: &str) {
+        let mut calls = SYSTEMCTL_RECORDER_CALLS.lock().unwrap_or_else(|e| e.into_inner());
+        calls.push((scope.to_string(), verb.to_string()));
+    }
+
+    fn test_scope_override(_pid: i32) -> &'static str {
+        "--user"
+    }
+
+    #[test]
+    fn rust_restart_uses_systemctl_when_unit_active() {
+        use std::os::unix::process::CommandExt;
+
+        let env = crate::daemon::test_env();
+
+        struct ResetHooks;
+        impl Drop for ResetHooks {
+            fn drop(&mut self) {
+                crate::daemon::systemd::set_systemd_scope_override(None);
+                crate::daemon::systemd::set_systemctl_recorder(None);
+            }
+        }
+        let _reset_guard = ResetHooks;
+
+        SYSTEMCTL_RECORDER_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        crate::daemon::systemd::set_systemd_scope_override(Some(test_scope_override));
+        crate::daemon::systemd::set_systemctl_recorder(Some(test_record_systemctl));
+
+        // Spawns sleep 30 with argv0 as agy-pool so is_agy_pool_process identifies it
+        let child = std::process::Command::new("sleep")
+            .arg0("agy-pool")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep 30");
+        let child_pid = child.id() as i32;
+
+        struct ChildGuard(Option<std::process::Child>);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                if let Some(mut c) = self.0.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+            }
+        }
+        let _child_guard = ChildGuard(Some(child));
+
+        let pid_file = env.temp_dir.path().join("systemd_test.pid");
+        let log_file = env.temp_dir.path().join("systemd_test.log");
+        let port = 19876;
+
+        let ctx = super::super::instance::resolve_instance_context(Some(env.temp_dir.path()), None, Some(port), None)
+            .unwrap();
+
+        super::super::pid::write_pid_file(
+            &pid_file,
+            super::super::pid::DaemonInfo {
+                pid: child_pid,
+                data_dir: Some(env.temp_dir.path().to_str().unwrap().to_string()),
+                config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+                port: Some(port),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // 1. Restart path:
+        let opts = super::super::lifecycle::LaunchOptions {
+            port,
+            state_dir: Some(env.temp_dir.path().to_path_buf()),
+            config_file: ctx.config_path.clone(),
+            pid_file: Some(pid_file.clone()),
+            log_file: Some(log_file),
+            entrypoint_path: Some(super::super::pid::get_entrypoint_path()),
+            ..Default::default()
+        };
+
+        // RestartInstance calls systemctl("--user", "restart") and then wait_restarted
+        let restart_res = restart_instance(&ctx, opts);
+        // wait_restarted will time out since recorder does not spawn a new daemon
+        assert!(
+            restart_res.is_err(),
+            "expected restart to time out waiting for systemd unit"
+        );
+
+        {
+            let calls = SYSTEMCTL_RECORDER_CALLS.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(
+                *calls,
+                vec![("--user".to_string(), "restart".to_string())],
+                "expected recorder to see exactly ('--user', 'restart')"
+            );
+        }
+
+        // Assert child is still alive and no new daemon took over
+        assert!(super::super::pid::is_process_alive(child_pid));
+        let info = super::super::pid::read_pid_file(&pid_file).unwrap();
+        assert_eq!(info.pid, child_pid, "no new daemon process was spawned");
+
+        // 2. Stop path:
+        SYSTEMCTL_RECORDER_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let stop_res = stop_with_file(&ctx, &pid_file, Duration::from_millis(50));
+        assert!(
+            stop_res.is_err(),
+            "expected stop_with_file to time out as child was not killed"
+        );
+
+        {
+            let calls = SYSTEMCTL_RECORDER_CALLS.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(
+                *calls,
+                vec![("--user".to_string(), "stop".to_string())],
+                "expected recorder to see exactly ('--user', 'stop')"
+            );
+        }
+
+        assert!(super::super::pid::is_process_alive(child_pid));
     }
 }
