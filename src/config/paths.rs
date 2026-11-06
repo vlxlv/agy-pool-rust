@@ -353,10 +353,16 @@ pub fn reset_native_agy_dir() {
 /// test-mode flag says. Tests can flip that flag and reset the data dir; on 2026-11-06 a racing
 /// test did, and another test's save_pool overwrote the live gateway's state.db.
 #[cfg(test)]
-fn deny_live_path(path: PathBuf) -> PathBuf {
+pub(crate) fn deny_live_path(path: PathBuf) -> PathBuf {
     let home = real_host_user_home();
     let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| clean_path(&path));
-    for live in [".local/share/agy-pool", ".config/agy-pool", ".gemini", ".local/bin"] {
+    for live in [
+        ".local/share/agy-pool",
+        ".config/agy-pool",
+        ".gemini",
+        ".local/bin",
+        ".local/libexec/agy-pool",
+    ] {
         let root = home.join(live);
         let root = std::fs::canonicalize(&root).unwrap_or(root);
         if resolved.starts_with(&root) || path.starts_with(home.join(live)) {
@@ -372,7 +378,7 @@ fn deny_live_path(path: PathBuf) -> PathBuf {
 
 #[cfg(not(test))]
 #[inline]
-fn deny_live_path(path: PathBuf) -> PathBuf {
+pub(crate) fn deny_live_path(path: PathBuf) -> PathBuf {
     path
 }
 
@@ -1443,6 +1449,27 @@ mod tests {
             }
         }
         set_test_mode(orig_test_mode);
+    }
+
+    #[test]
+    fn deny_live_path_covers_every_live_root() {
+        let home = real_host_user_home();
+        for live in [
+            ".local/share/agy-pool",
+            ".config/agy-pool",
+            ".gemini",
+            ".local/bin",
+            ".local/libexec/agy-pool",
+        ] {
+            let p = home.join(live).join("agy-native");
+            assert!(
+                std::panic::catch_unwind(|| deny_live_path(p.clone())).is_err(),
+                "{} must be denied",
+                p.display()
+            );
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(deny_live_path(tmp.path().join("x")), tmp.path().join("x"));
     }
 
     #[test]
