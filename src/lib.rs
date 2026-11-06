@@ -8,6 +8,7 @@ pub mod conversation;
 pub mod forecast;
 pub mod http;
 pub mod observability;
+pub mod proxy;
 pub mod quota;
 pub mod scheduler;
 pub mod storage;

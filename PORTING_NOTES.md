@@ -35,3 +35,32 @@ This document records Go tests that are not ported 1:1 into the Rust codebase or
 ### 8. TestFilterRequestHeaders_StripsIdempotencyForGeneration
 - **Reason**: Tests header filtering for generation vs non-generation requests (`FilterRequestHeaders`). Belongs to Task 13 (`rust/src/proxy/mod.rs`).
 - **Covering Rust test**: Task 13 `proxy::tests::filter_request_headers_strips_idempotency_for_generation`.
+
+## Deferred to Task 13
+
+The following tests are handler-level (they call `Handler.ServeHTTP`/`HandleProxy` or configure `BackendURLProvider` with an `httptest` upstream server) and are deferred to Task 13 when the full `proxy::Handler` HTTP dispatch loop and streaming pipeline are implemented:
+
+### internal/proxy/model_cooldown_test.go
+- `TestProxy_ModelCapacityExhausted_CoolsDownOnlyThatModel`
+- `TestProxy_SlowStart_CoolsDownOnlyThatModel`
+
+### internal/proxy/failover_test.go
+- `TestGeneration_AllAccountsRestricted_NoUpstreamRequest`
+- `TestValidationPersistenceFailureStillFailsOverWithoutReplay`
+- `TestExplicitFailover_429`
+- `TestExplicitFailover_ValidationRequired`
+- `TestExplicitFailover_AuthError`
+- `TestExplicitFailover_TokenRefreshFailure`
+- `TestOrdinaryUpstreamError_NoFailover`
+- `TestAllAccountsExhausted_503`
+- `TestUnknownFieldPreservationDuringFailover`
+- `TestProxy_SoftFailover_FailsOverAndSoftCooldown`
+- `TestFailover_TransportPreConnectAndAfterConnect`
+
+### internal/proxy/verification_pending_test.go
+- `TestVerificationPending_OnlyOneConfirmationInFlight`
+- `TestVerificationPending_MultiplePendingOnlyOneTriedPerRequest`
+- `TestVerificationPending_TransportFailureRemainsPending`
+- `TestVerificationPending_ClaimReleasedOnEveryExitPath`
+- `TestVerificationPending_NoReplayAfterCommit`
+- `TestVerificationPending_ForcesTokenRefreshOnConfirmation`
