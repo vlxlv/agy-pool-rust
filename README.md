@@ -26,14 +26,28 @@ Automated side-by-side benchmark from GitHub Actions ([Run #42256839654](https:/
 
 ```mermaid
 xychart-beta
-    title "Rust vs Go Performance Profile (Go Baseline = 100%)"
-    x-axis ["Cold Start", "Idle RSS", "OS Threads", "Binary Size", "P50 Latency", "P95 Latency", "P99 Latency", "Throughput"]
+    title "Rust vs Go Performance Delta (Go Baseline = 100%)"
+    x-axis ["Go", "Rust"]
     y-axis "Relative to Go (%)" 0 --> 130
-    line "Go Baseline" [100, 100, 100, 100, 100, 100, 100, 100]
-    line "Rust" [36, 46, 56, 66, 87, 87, 87, 114]
+    line "Cold Start" [100, 36.0]
+    line "Idle RSS" [100, 46.0]
+    line "OS Threads" [100, 55.6]
+    line "Binary Size" [100, 65.6]
+    line "P50 Latency" [100, 86.9]
+    line "P95 Latency" [100, 86.8]
+    line "P99 Latency" [100, 87.3]
+    line "Throughput" [100, 114.0]
 ```
 
-> **Note:** For Cold Start, Idle RSS, Threads, Binary Size, and Tail Latency (P50/P95/P99), lower is better (Rust consumes only 36%–87% of Go). For Throughput, higher is better (Rust achieves 114% of Go / +14.0% QPS).
+> **指标说明（以 Go 100% 为基准，实测数据源自 [Run #42256839654](https://github.com/vlxlv/agy-pool-rust/actions/runs/42256839654)）：**
+> - **Cold Start（冷启动耗时）：** `0.72 ms` vs `2.00 ms`（**-64.0%**，仅占 Go 的 36.0%）
+> - **Idle RSS（空闲常驻内存）：** `5.78 MiB` vs `12.58 MiB`（**-54.0%**，仅占 Go 的 46.0%）
+> - **OS Threads（运行时系统线程）：** `5` vs `9`（**-44.4%**，仅占 Go 的 55.6%）
+> - **Binary Size（二进制体积）：** `7.78 MiB` vs `11.85 MiB`（**-34.4%**，仅占 Go 的 65.6%）
+> - **P50 Latency（中位请求延迟）：** `0.86 ms` vs `0.99 ms`（**-13.1%**，仅占 Go 的 86.9%）
+> - **P95 Latency（95 分位延迟）：** `2.49 ms` vs `2.87 ms`（**-13.2%**，仅占 Go 的 86.8%）
+> - **P99 Latency（99 分位延迟）：** `3.45 ms` vs `3.95 ms`（**-12.7%**，仅占 Go 的 87.3%）
+> - **Throughput（最大 QPS 吞吐量）：** `17,980.5 req/s` vs `15,775.6 req/s`（**+14.0%**，达到 Go 的 114.0%）
 
 ## Install
 
