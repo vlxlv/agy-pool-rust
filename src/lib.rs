@@ -1,4 +1,8 @@
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Release builds inject the tag version (like Go's `-X config.Version=`); `update` compares against it.
+pub const VERSION: &str = match option_env!("AGY_POOL_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 pub mod accounts;
 pub mod auth;
