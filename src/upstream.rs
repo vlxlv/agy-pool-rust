@@ -1313,8 +1313,10 @@ mod tests {
                     let mut methods = vec![0u8; nmethods];
                     client.read_exact(&mut methods).await.unwrap();
 
-                    // If user/pass offered [0x00, 0x02], pick 0x02
+                    // Go offers exactly [NotRequired, UsernamePassword] when the URL has userinfo, else [NotRequired].
+                    // A panic here drops the socket, so the client side of the test fails too.
                     if methods.contains(&0x02) {
+                        assert_eq!(&methods[..], &[0x00, 0x02]);
                         client.write_all(&[0x05, 0x02]).await.unwrap();
                         let mut auth_head = [0u8; 2];
                         client.read_exact(&mut auth_head).await.unwrap();
