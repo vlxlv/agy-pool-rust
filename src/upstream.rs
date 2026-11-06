@@ -471,7 +471,7 @@ pub fn add_test_root_certificate(cert: rustls::pki_types::CertificateDer<'static
     EXTRA_ROOT_CERTS.write().unwrap().push(cert);
 }
 
-fn client_config() -> std::sync::Arc<rustls::ClientConfig> {
+pub(crate) fn client_config() -> std::sync::Arc<rustls::ClientConfig> {
     let mut roots = rustls::RootCertStore::empty();
     let res = rustls_native_certs::load_native_certs();
     for cert in res.certs {

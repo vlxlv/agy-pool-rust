@@ -123,12 +123,6 @@ fn get_self_paths() -> HashSet<PathBuf> {
             paths.insert(real_p);
         }
         paths.insert(p);
-
-        let p_go = home.join(".local/bin/agy-pool-go");
-        if let Ok(real_p) = std::fs::canonicalize(&p_go) {
-            paths.insert(real_p);
-        }
-        paths.insert(p_go);
     }
 
     let p_usr = PathBuf::from("/usr/local/bin/agy-pool");
@@ -137,12 +131,6 @@ fn get_self_paths() -> HashSet<PathBuf> {
     }
     paths.insert(p_usr);
 
-    let p_usr_go = PathBuf::from("/usr/local/bin/agy-pool-go");
-    if let Ok(real_p) = std::fs::canonicalize(&p_usr_go) {
-        paths.insert(real_p);
-    }
-    paths.insert(p_usr_go);
-
     if let Ok(prefix) = std::env::var("PREFIX") {
         if !prefix.is_empty() {
             let p_pre = PathBuf::from(&prefix).join("bin/agy-pool");
@@ -150,12 +138,6 @@ fn get_self_paths() -> HashSet<PathBuf> {
                 paths.insert(real_p);
             }
             paths.insert(p_pre);
-
-            let p_pre_go = PathBuf::from(&prefix).join("bin/agy-pool-go");
-            if let Ok(real_p) = std::fs::canonicalize(&p_pre_go) {
-                paths.insert(real_p);
-            }
-            paths.insert(p_pre_go);
         }
     }
 
@@ -174,7 +156,7 @@ fn get_self_paths() -> HashSet<PathBuf> {
 
 /// Reports whether path is the agy-pool binary itself, an agy/agy-raw/agy-orig shim,
 /// a hard link to one of them, or a symlink resolving to one.
-/// Treats both Go and Rust agy-pool binaries as self.
+/// The Go and Rust builds are both installed as `agy-pool`, so one name covers both.
 pub fn is_shim_or_self(path: impl AsRef<Path>) -> bool {
     let path = path.as_ref();
     if path.as_os_str().is_empty() {
@@ -200,7 +182,7 @@ pub fn is_shim_or_self(path: impl AsRef<Path>) -> bool {
         return true;
     }
     if let Some(name) = real_path.file_name().and_then(|s| s.to_str()) {
-        if name == "agy-pool" || name == "agy_pool" || name == "agy-pool-go" {
+        if name == "agy-pool" {
             return true;
         }
     }
@@ -235,8 +217,6 @@ pub fn is_shim_or_self(path: impl AsRef<Path>) -> bool {
                     || header.contains("# >>> agy-pool integration >>>")
                     || header.contains("exec agy-pool run")
                     || header.contains("exec agy-pool raw")
-                    || header.contains("exec agy-pool-go run")
-                    || header.contains("exec agy-pool-go raw")
                 {
                     return true;
                 }
@@ -450,17 +430,42 @@ pub fn installed_agy_version() -> String {
         return provider();
     }
 
-    if let Some(agy_bin) = find_real_agy_binary() {
-        let output = std::process::Command::new(agy_bin).arg("--version").output();
-        if let Ok(out) = output {
-            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !v.is_empty() && v.contains('.') {
-                return v;
-            }
-        }
+    if let Some(agy_bin) = find_real_agy_binary()
+        && let Some(v) = agy_version_output(&agy_bin, Duration::from_secs(2))
+    {
+        return v;
     }
 
     "1.2.2".to_string()
+}
+
+/// Runs `<bin> --version`, killing it after `timeout` like Go's exec.CommandContext, so a hung agy cannot hang doctor.
+fn agy_version_output(bin: &Path, timeout: Duration) -> Option<String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(bin)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(Some(_)) => return None,
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    let v = out.trim().to_string();
+    (!v.is_empty() && v.contains('.')).then_some(v)
 }
 
 pub fn get_installed_agy_version() -> String {
@@ -472,21 +477,29 @@ fn default_tls_probe(host: &str, timeout: Duration) -> Result<(), String> {
         return Err("network probe disabled in test mode".to_string());
     }
 
-    // Connect to host:443 via std::net::TcpStream with timeout
-    let target = format!("{}:443", host);
+    tls_probe(host, 443, timeout)
+}
+
+/// Completes a verified TLS handshake like Go's tls.DialWithDialer; a bare TCP connect would pass behind a
+/// TLS-intercepting proxy or with a broken trust store.
+fn tls_probe(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
     use std::net::ToSocketAddrs;
-    let addr = target
+    use tokio_rustls::rustls;
+    let addr = (host, port)
         .to_socket_addrs()
-        .map_err(|e| format!("resolve error: {}", e))?
+        .map_err(|e| format!("resolve error: {e}"))?
         .next()
-        .ok_or_else(|| "no address found".to_string())?;
-
-    let stream =
-        std::net::TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("connection failed: {}", e))?;
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
-
-    // Basic TLS handshake check via pooled client or rustls
+        .ok_or_else(|| format!("no address found for {host}"))?;
+    let mut tcp =
+        std::net::TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("connection failed: {e}"))?;
+    tcp.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    tcp.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
+    let mut conn = rustls::ClientConnection::new(crate::upstream::client_config(), name).map_err(|e| e.to_string())?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp)
+            .map_err(|e| format!("tls handshake failed: {e}"))?;
+    }
     Ok(())
 }
 
@@ -1936,5 +1949,89 @@ mod tests {
                 want
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tls_probe_requires_a_real_handshake() {
+        use tokio::io::AsyncWriteExt;
+        use tokio_rustls::rustls;
+        let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+        crate::upstream::add_test_root_certificate(certified.cert.der().clone());
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into());
+        let server_config =
+            rustls::ServerConfig::builder_with_provider(rustls::crypto::ring::default_provider().into())
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![certified.cert.der().clone()], key)
+                .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
+        let tls_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tls_port = tls_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = tls_listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let _ = acceptor.accept(sock).await;
+                });
+            }
+        });
+        let plain_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let plain_port = plain_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = plain_listener.accept().await {
+                let _ = sock.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await;
+            }
+        });
+
+        let ok = tokio::task::spawn_blocking(move || tls_probe("127.0.0.1", tls_port, Duration::from_secs(5)))
+            .await
+            .unwrap();
+        assert_eq!(ok, Ok(()));
+        let plain = tokio::task::spawn_blocking(move || tls_probe("127.0.0.1", plain_port, Duration::from_secs(5)))
+            .await
+            .unwrap();
+        assert!(
+            plain.is_err(),
+            "a listener that accepts TCP but does not speak TLS must fail the probe"
+        );
+    }
+
+    #[test]
+    fn agy_version_output_times_out_and_requires_success() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = |name: &str, body: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            p
+        };
+        let good = script("good", "echo 1.4.0");
+        let hung = script("hung", "sleep 30");
+        let failing = script("failing", "echo 1.4.0; exit 3");
+
+        assert_eq!(
+            agy_version_output(&good, Duration::from_secs(5)),
+            Some("1.4.0".to_string())
+        );
+        let start = std::time::Instant::now();
+        assert_eq!(agy_version_output(&hung, Duration::from_millis(300)), None);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "hung agy must be killed at the timeout"
+        );
+        assert_eq!(agy_version_output(&failing, Duration::from_secs(5)), None);
+    }
+
+    #[test]
+    fn is_shim_or_self_matches_go_name_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = dir.path().join("agy-pool-go");
+        std::fs::write(&other, "#!/bin/sh\nexec /opt/agy/bin/agy \"$@\"\n").unwrap();
+        assert!(!is_shim_or_self(&other), "Go only treats the name agy-pool as self");
+        let named = dir.path().join("agy-pool");
+        std::fs::write(&named, "binary").unwrap();
+        assert!(is_shim_or_self(&named));
     }
 }
