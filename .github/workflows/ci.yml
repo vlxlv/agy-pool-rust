@@ -42,10 +42,17 @@ jobs:
       - run: cargo test -- --test-threads=16
       - name: Fail if tests wrote to live state paths
         run: for p in ~/.local/share/agy-pool ~/.config/agy-pool ~/.gemini; do test ! -e "$p" || { echo "tests wrote to $p"; find "$p" | head; exit 1; }; done
+      - name: Build release binary and verify CLI
+        run: |
+          cargo build --release
+          ./target/release/agy-pool --version
+          ./target/release/agy-pool --help
 
   # Shared-state races in tests only show up under some schedules; repeat the suite at several
-  # thread counts so a 1-in-N flake fails here instead of on a later unrelated push.
+  # thread counts on scheduled weekly runs and manual triggers.
   stress:
+    name: Concurrency Stress (${{ matrix.threads }} threads)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
