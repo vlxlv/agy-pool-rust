@@ -1,15 +1,14 @@
 name: Release
 
-# A `v*` tag builds, verifies and publishes a GitHub release. Pushes to main and manual runs
-# do the same build and verification as a dry run, so the release path is tested before a tag.
+# A `v*` tag runs the security audit and CI gate, builds all platform binaries and
+# Debian packages, generates checksums, and publishes the GitHub release.
 on:
   push:
-    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version for the dry run'
+        description: 'Version for manual run'
         required: false
         default: '0.0.0-dryrun'
         type: string
@@ -45,6 +44,7 @@ jobs:
             [ "$v" = "$cargo_v" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_v"; exit 1; }
           else
             v="${INPUT_VERSION:-0.0.0-dryrun}"
+            v="${v#v}"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Version: $v"
@@ -65,9 +65,24 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test -- --test-threads=16
 
+  audit:
+    name: Security Audit
+    needs: prepare
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      checks: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   linux:
     name: Build Linux (${{ matrix.deb }})
-    needs: prepare
+    needs: [prepare, audit]
     runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -128,7 +143,7 @@ jobs:
 
   darwin:
     name: Build Darwin
-    needs: prepare
+    needs: [prepare, audit]
     runs-on: macos-15
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -236,7 +251,8 @@ jobs:
       - name: Publish
         uses: softprops/action-gh-release@v3
         with:
-          name: ${{ github.ref_name }}
+          name: ${{ needs.prepare.outputs.version }}
+          tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           generate_release_notes: true

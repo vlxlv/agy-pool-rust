@@ -154,11 +154,11 @@ scripts/test.sh clippy --all-targets -- -D warnings
 
 `scripts/test.sh` runs cargo in a user, mount and PID namespace in which the real state (`~/.local/share/agy-pool`, `~/.config/agy-pool`, `~/.gemini`, `~/.local/bin`, `~/.local/libexec/agy-pool`, shell rc files) is read-only, the running gateway is invisible, and `systemctl` is stubbed out. It refuses to run if any of that does not hold.
 
-CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clippy -D warnings` and the test suite on every push and pull request to `main`, plus a stress job that repeats the suite at 4, 16 and 64 threads to catch races. [`release.yml`](.github/workflows/release.yml) builds and verifies all release assets (4 binaries, 2 `.deb` packages, `SHA256SUMS`) on every push to `main` as a dry run, on the same pinned Rust version (`rust-version` in `Cargo.toml`) as the tests. [`audit.yml`](.github/workflows/audit.yml) checks the locked dependencies against the RustSec advisory database weekly and whenever `Cargo.lock` changes.
+CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clippy -D warnings`, the test suite, a concurrency race stress job, and dependency security audit (`rustsec/audit-check`) on every push to `main` and pull request, plus weekly on schedule.
 
 ### Releasing
 
-Bump `version` in `Cargo.toml` (and `Cargo.lock`, via `cargo update --workspace`) in the change commit, wait for CI on `main`, then tag that commit `v<version>` and push the tag. `release.yml` refuses a tag that doesn't match `Cargo.toml`, runs the CI gate on the tagged commit, builds and verifies every asset, and publishes the GitHub release (`-alpha`, `-beta` and `-rc` tags become prereleases).
+Bump `version` in `Cargo.toml` (and `Cargo.lock`) in the change commit, wait for CI on `main`, then tag that commit `v<version>` (e.g. `v0.2.2`) and push the tag. [`release.yml`](.github/workflows/release.yml) triggers only on `v*` tags, verifies that the tag matches `Cargo.toml`, gates on the test suite and security audit before starting builds, packages and verifies all assets, and publishes the GitHub release titled with the version number (without leading `v`).
 
 ## License
 
