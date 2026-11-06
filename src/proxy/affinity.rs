@@ -441,10 +441,12 @@ mod tests {
         SystemTime::UNIX_EPOCH + Duration::from_secs(TEST_NOW_SECS.load(Ordering::SeqCst))
     }
 
+    // Fields drop in declaration order: restore the clock before releasing the lock,
+    // or the next test can read this test's fake time.
     struct TestEnv {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        _dir: tempfile::TempDir,
         _cg: crate::clock::ClockGuard,
+        _dir: tempfile::TempDir,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl Drop for TestEnv {
