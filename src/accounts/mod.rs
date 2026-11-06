@@ -931,42 +931,52 @@ pub struct LoginOptions {
 }
 
 pub fn default_browser_opener(target_url: &str) -> Result<(), AccountsError> {
-    for opener in &["termux-open-url", "termux-open", "xdg-open", "open"] {
-        if *opener == "xdg-open" || *opener == "open" {
-            if cfg!(target_os = "linux")
-                && std::env::var("DISPLAY").is_err()
-                && std::env::var("WAYLAND_DISPLAY").is_err()
-            {
-                continue;
-            }
+    #[cfg(test)]
+    {
+        if target_url.contains("example.test") {
+            return Err(AccountsError::Message("browser opener disabled in test".to_string()));
         }
-        if let Ok(mut child) = std::process::Command::new(opener)
-            .arg(target_url)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            let start = std::time::Instant::now();
-            loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        if status.success() {
-                            return Ok(());
+        panic!("default_browser_opener called in test");
+    }
+    #[cfg(not(test))]
+    {
+        for opener in &["termux-open-url", "termux-open", "xdg-open", "open"] {
+            if *opener == "xdg-open" || *opener == "open" {
+                if cfg!(target_os = "linux")
+                    && std::env::var("DISPLAY").is_err()
+                    && std::env::var("WAYLAND_DISPLAY").is_err()
+                {
+                    continue;
+                }
+            }
+            if let Ok(mut child) = std::process::Command::new(opener)
+                .arg(target_url)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                let start = std::time::Instant::now();
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            if status.success() {
+                                return Ok(());
+                            }
+                            break;
                         }
-                        break;
-                    }
-                    Ok(None) => {
-                        if start.elapsed() >= std::time::Duration::from_millis(100) {
-                            return Ok(());
+                        Ok(None) => {
+                            if start.elapsed() >= std::time::Duration::from_millis(100) {
+                                return Ok(());
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
             }
         }
+        Err(AccountsError::Message("no browser opener found".to_string()))
     }
-    Err(AccountsError::Message("no browser opener found".to_string()))
 }
 
 fn find_free_port(start: u16, end: u16) -> Result<u16, AccountsError> {
