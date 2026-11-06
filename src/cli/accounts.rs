@@ -262,7 +262,7 @@ pub async fn quota_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
         }
     }
 
-    let (_, rem) = match crate::cli::resolve_context_for_cmd(args) {
+    let (ctx, rem) = match crate::cli::resolve_context_for_cmd(args) {
         Ok(v) => v,
         Err(e) => {
             let _ = writeln!(
@@ -291,7 +291,7 @@ pub async fn quota_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
     }
 
     refresh_all_quotas(std::time::Duration::from_secs(10)).await;
-    list_accounts(target, io, show_email);
+    list_accounts_with_port(target, io, show_email, Some(ctx.listen_port));
     0
 }
 
@@ -348,12 +348,53 @@ pub fn resolve_next_candidate_id(pool: &crate::storage::Pool, now_ts: i64) -> St
     crate::daemon::next_candidate_id(Some(pool), now_ts as f64)
 }
 
-pub fn list_accounts(target: &str, io: &mut Io<'_>, show_email: bool) {
-    let width = terminal_width(io.stdout_fd);
-    list_accounts_with_width(target, width, io, show_email);
+pub fn resolve_configured_port(explicit_port: Option<u16>) -> u16 {
+    if let Some(p) = explicit_port
+        && p > 0
+    {
+        return p;
+    }
+    if let Ok(p_str) = std::env::var(crate::daemon::ENV_DAEMON_PORT)
+        && let Ok(p) = p_str.parse::<u16>()
+        && p > 0
+    {
+        return p;
+    }
+    if let Ok(cfg_path) = crate::config::resolve_default_config_file()
+        && !cfg_path.as_os_str().is_empty()
+        && cfg_path.exists()
+        && let Ok(cfg) = crate::config::load_config_file(&cfg_path)
+        && cfg.server.port > 0
+    {
+        return cfg.server.port as u16;
+    }
+    let sc = crate::config::get_static_config();
+    if sc.server.port > 0 {
+        return sc.server.port as u16;
+    }
+    crate::config::DEFAULT_PORT
 }
 
-pub fn list_accounts_with_width(target: &str, mut width: usize, io: &mut Io<'_>, show_email: bool) {
+pub fn list_accounts(target: &str, io: &mut Io<'_>, show_email: bool) {
+    list_accounts_with_port(target, io, show_email, None);
+}
+
+pub fn list_accounts_with_port(target: &str, io: &mut Io<'_>, show_email: bool, explicit_port: Option<u16>) {
+    let width = terminal_width(io.stdout_fd);
+    list_accounts_with_width_and_port(target, width, io, show_email, explicit_port);
+}
+
+pub fn list_accounts_with_width(target: &str, width: usize, io: &mut Io<'_>, show_email: bool) {
+    list_accounts_with_width_and_port(target, width, io, show_email, None);
+}
+
+pub fn list_accounts_with_width_and_port(
+    target: &str,
+    mut width: usize,
+    io: &mut Io<'_>,
+    show_email: bool,
+    explicit_port: Option<u16>,
+) {
     if width == 0 {
         width = 100;
     }
@@ -412,42 +453,38 @@ pub fn list_accounts_with_width(target: &str, mut width: usize, io: &mut Io<'_>,
         pool.accounts.iter().collect()
     };
 
-    let daemon_running = crate::daemon::is_port_listening(crate::config::DEFAULT_PORT);
-    let gateway_status = if daemon_running {
-        format!(
-            "{}RUNNING (127.0.0.1:{}){}",
-            CLR_GREEN,
-            crate::config::DEFAULT_PORT,
-            CLR_RESET
-        )
-    } else {
-        format!("{}STOPPED{}", CLR_DIM, CLR_RESET)
-    };
-
+    let port = resolve_configured_port(explicit_port);
     let now_ts = crate::clock::now_unix() as i64;
 
     if width >= 60 {
-        render_wide_quota_dashboard(&acc_list, &pool, &gateway_status, now_ts, width, show_email, io);
+        render_wide_quota_dashboard(&acc_list, &pool, port, now_ts, width, show_email, io);
         return;
     }
 
     if width >= 40 {
-        render_mobile_quota_dashboard(&acc_list, &pool, daemon_running, now_ts, width, show_email, io);
+        render_mobile_quota_dashboard(&acc_list, &pool, port, now_ts, width, show_email, io);
         return;
     }
 
     render_very_narrow_quota_dashboard(&acc_list, &pool, now_ts, width, show_email, io);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_wide_quota_dashboard(
     acc_list: &[&crate::storage::Account],
     pool: &crate::storage::Pool,
-    gateway_status: &str,
+    port: u16,
     now_ts: i64,
     width: usize,
     show_email: bool,
     io: &mut Io<'_>,
 ) {
+    let daemon_running = crate::daemon::is_port_listening(port);
+    let gateway_status = if daemon_running {
+        format!("{}RUNNING (127.0.0.1:{}){}", CLR_GREEN, port, CLR_RESET)
+    } else {
+        format!("{}STOPPED{}", CLR_DIM, CLR_RESET)
+    };
     let mut border_width = 68;
     if width < 68 {
         border_width = width;
@@ -699,8 +736,8 @@ fn render_wide_quota_dashboard(
             " {}[Protected]{} {}Low Quota Reserve{}  {}[Disabled] Excluded{}",
             CLR_YELLOW, CLR_RESET, CLR_DIM, CLR_RESET, CLR_DIM, CLR_RESET
         );
-        let short_status = if crate::daemon::is_port_listening(crate::config::DEFAULT_PORT) {
-            format!("{}RUNNING (:8899){}", CLR_GREEN, CLR_RESET)
+        let short_status = if crate::daemon::is_port_listening(port) {
+            format!("{}RUNNING (:{port}){}", CLR_GREEN, CLR_RESET)
         } else {
             format!("{}STOPPED{}", CLR_DIM, CLR_RESET)
         };
@@ -715,15 +752,17 @@ fn render_wide_quota_dashboard(
     let _ = writeln!(io.stdout, "{sep}\n");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_mobile_quota_dashboard(
     acc_list: &[&crate::storage::Account],
     pool: &crate::storage::Pool,
-    daemon_running: bool,
+    port: u16,
     now_ts: i64,
     width: usize,
     show_email: bool,
     io: &mut Io<'_>,
 ) {
+    let daemon_running = crate::daemon::is_port_listening(port);
     let _ = writeln!(io.stdout);
     let next_id = resolve_next_candidate_id(pool, now_ts);
     for (i, acc) in acc_list.iter().enumerate() {
@@ -878,7 +917,7 @@ fn render_mobile_quota_dashboard(
     };
     let _ = writeln!(io.stdout);
     if daemon_running {
-        let _ = writeln!(io.stdout, "{} · proxy up · :{}\n", strat, crate::config::DEFAULT_PORT);
+        let _ = writeln!(io.stdout, "{} · proxy up · :{port}\n", strat);
     } else {
         let _ = writeln!(io.stdout, "{strat} · proxy down\n");
     }
@@ -3315,5 +3354,80 @@ mod tests {
         assert!(clean_q.contains("AccountThree · Ready              hits 30 · quota age unknown"));
         assert!(clean_q.contains("5H  ████░░░░░░░░░░░░░░░░  20%   N/A"));
         assert!(clean_q.contains("Strategy: smart | Gateway Proxy:"));
+    }
+
+    #[tokio::test]
+    async fn test_quota_footer_dynamic_port() {
+        let _env = crate::cli::test_support::cli_test_env();
+        let pool = crate::storage::Pool {
+            version: 1,
+            strategy: "smart".to_string(),
+            accounts: vec![crate::storage::Account {
+                id: "acc_1".to_string(),
+                name: "TestAcc".to_string(),
+                status: "ready".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        crate::storage::save_pool(&pool).unwrap();
+
+        // 1. Bind an ephemeral port so is_port_listening returns true for custom_port
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let custom_port = listener.local_addr().unwrap().port();
+
+        let render_output = |width: usize| -> String {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let mut stdin = std::io::Cursor::new(Vec::new());
+            let mut io = Io {
+                stdin: &mut stdin,
+                stdout: &mut out,
+                stderr: &mut err,
+                stdout_fd: None,
+                stdin_fd: None,
+            };
+            list_accounts_with_width_and_port("", width, &mut io, false, Some(custom_port));
+            strip_ansi(&String::from_utf8_lossy(&out))
+        };
+
+        // Wide layout (width 100) with explicit port
+        let text_wide = render_output(100);
+        assert!(
+            text_wide.contains(&format!("RUNNING (127.0.0.1:{custom_port})")),
+            "wide layout must display running custom port: {text_wide}"
+        );
+
+        // Medium narrow layout (width 62)
+        let text_med = render_output(62);
+        assert!(
+            text_med.contains(&format!("RUNNING (:{custom_port})")),
+            "medium layout must display short running custom port: {text_med}"
+        );
+
+        // Mobile layout (width 45)
+        let text_mobile = render_output(45);
+        assert!(
+            text_mobile.contains(&format!("proxy up · :{custom_port}")),
+            "mobile layout must display custom port: {text_mobile}"
+        );
+
+        // When custom_port is dropped / not listening
+        drop(listener);
+        let text_stopped = render_output(100);
+        assert!(
+            text_stopped.contains("Gateway Proxy: STOPPED"),
+            "wide layout must display STOPPED when port is not listening: {text_stopped}"
+        );
+
+        // 2. Integration via run_cli with -p flag
+        let l2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let p2 = l2.local_addr().unwrap().port();
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["quota", "-p", &p2.to_string()], "").await;
+        assert_eq!(code, 0);
+        let text_cli = strip_ansi(&stdout);
+        assert!(
+            text_cli.contains(&format!("RUNNING (127.0.0.1:{p2})")),
+            "run_cli quota -p must resolve custom port: {text_cli}"
+        );
     }
 }
