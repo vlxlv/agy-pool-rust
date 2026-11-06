@@ -1,0 +1,45 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      AGY_TEST_MODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install 1.99 --profile minimal -c rustfmt,clippy && rustup default 1.99
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: Fail if live state paths exist before tests
+        run: for p in ~/.local/share/agy-pool ~/.config/agy-pool ~/.gemini; do test ! -e "$p" || { echo "unexpected $p"; exit 1; }; done
+      - run: cargo test -- --test-threads=16
+      - name: Fail if tests wrote to live state paths
+        run: for p in ~/.local/share/agy-pool ~/.config/agy-pool ~/.gemini; do test ! -e "$p" || { echo "tests wrote to $p"; find "$p" | head; exit 1; }; done
+  # Shared-state races in tests only show up under some schedules; repeat the suite at several
+  # thread counts so a 1-in-N flake fails here instead of on a later unrelated push.
+  stress:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        threads: [4, 16, 64]
+    env:
+      AGY_TEST_MODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install 1.99 --profile minimal && rustup default 1.99
+      - run: cargo test --no-run
+      - name: Run the suite 5 times
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "::group::run $i (threads=${{ matrix.threads }})"
+            cargo test -- --test-threads=${{ matrix.threads }} || { echo "::error::run $i failed"; exit 1; }
+            echo "::endgroup::"
+          done
+      - name: Fail if tests wrote to live state paths
+        run: for p in ~/.local/share/agy-pool ~/.config/agy-pool ~/.gemini; do test ! -e "$p" || { echo "tests wrote to $p"; find "$p" | head; exit 1; }; done

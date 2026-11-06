@@ -1,0 +1,153 @@
+name: Release Dry Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version for dry run'
+        required: false
+        default: '0.0.0-dryrun'
+        type: string
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ inputs.version || '0.0.0-dryrun' }}
+
+concurrency:
+  group: release-dry-run-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Build Linux (${{ matrix.deb }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            asset: agy-pool-linux-amd64
+            deb: amd64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: agy-pool-linux-arm64
+            deb: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install musl-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build release binary
+        run: |
+          mkdir -p dist
+          AGY_POOL_VERSION=${VERSION} cargo build --release --locked --target ${{ matrix.target }}
+          cp "target/${{ matrix.target }}/release/agy-pool" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+
+      - name: Verify binary and build Debian package
+        run: |
+          # x86_64 musl builds are static-pie; both forms have no dynamic loader.
+          file "dist/${{ matrix.asset }}"
+          file "dist/${{ matrix.asset }}" | grep -Eq 'statically linked|static-pie linked'
+          VERSION_OUT=$("dist/${{ matrix.asset }}" --version)
+          echo "$VERSION_OUT"
+          [ "$VERSION_OUT" = "agy-pool ${VERSION}" ]
+          "dist/${{ matrix.asset }}" --help
+          ./scripts/build-deb.sh "${{ matrix.deb }}" "${VERSION}" "dist/${{ matrix.asset }}" dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.deb }}
+          path: dist/
+
+  darwin:
+    name: Build Darwin
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Add Rust targets
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+
+      - name: Build release binaries
+        run: |
+          mkdir -p dist
+          AGY_POOL_VERSION=${VERSION} cargo build --release --locked --target aarch64-apple-darwin
+          AGY_POOL_VERSION=${VERSION} cargo build --release --locked --target x86_64-apple-darwin
+          cp target/aarch64-apple-darwin/release/agy-pool dist/agy-pool-darwin-arm64
+          cp target/x86_64-apple-darwin/release/agy-pool dist/agy-pool-darwin-amd64
+          chmod +x dist/agy-pool-darwin-arm64 dist/agy-pool-darwin-amd64
+
+      - name: Verify arm64 binary
+        run: |
+          VERSION_OUT=$(dist/agy-pool-darwin-arm64 --version)
+          echo "$VERSION_OUT"
+          [ "$VERSION_OUT" = "agy-pool ${VERSION}" ]
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: darwin
+          path: dist/
+
+  sums:
+    name: Checksums and Package Verification
+    needs: [linux, darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate and verify checksums and file list
+        run: |
+          cd dist
+          sha256sum agy-pool-linux-amd64 agy-pool-linux-arm64 agy-pool-darwin-amd64 agy-pool-darwin-arm64 agy-pool_*_amd64.deb agy-pool_*_arm64.deb > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+          # Assert the release asset list (7 assets, same names `agy-pool update` looks up)
+          COUNT=$(ls -1 | wc -l)
+          if [ "$COUNT" -ne 7 ]; then
+            echo "Expected exactly 7 assets in dist, found $COUNT"
+            ls -la
+            exit 1
+          fi
+
+          for F in \
+            agy-pool-linux-amd64 \
+            agy-pool-linux-arm64 \
+            agy-pool-darwin-amd64 \
+            agy-pool-darwin-arm64 \
+            "agy-pool_${VERSION}_amd64.deb" \
+            "agy-pool_${VERSION}_arm64.deb" \
+            SHA256SUMS; do
+            if [ ! -f "$F" ]; then
+              echo "Missing expected asset: $F"
+              exit 1
+            fi
+          done
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-release-dist
+          path: dist/

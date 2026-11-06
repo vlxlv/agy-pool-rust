@@ -1,0 +1,22 @@
+[Unit]
+Description=Antigravity Multi-Account Quota Pool & Reverse Proxy Gateway
+Documentation=https://github.com/vlxlv/agy-pool-go
+After=network.target
+# Give up instead of retrying forever, e.g. while a gateway started outside systemd holds the PID lock.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=AGY_POOL_DAEMON_CHILD=1
+# %h is the home directory; the .deb points ExecStart at /usr/bin/agy-pool instead.
+ExecStart=%h/.local/bin/agy-pool
+# on-failure, not always: `agy-pool stop` exits cleanly and must stay stopped.
+# The gateway logs to stderr (inherits stdout); keep it in the data-dir log that `agy-pool logs` and rotation use.
+StandardOutput=append:%h/.local/share/agy-pool/agy-pool.log
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "strategy": "max_quota",
+  "active_account_id": null,
+  "accounts": []
+}

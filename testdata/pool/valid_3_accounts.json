@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "strategy": "max_quota",
+  "active_account_id": "acc_1",
+  "accounts": [
+    {
+      "id": "acc_1",
+      "name": "Alpha Work",
+      "email": "user1@example.com",
+      "access_token": "token-1",
+      "refresh_token": "refresh-1",
+      "id_token": "idtoken-1",
+      "token_expiry": 1789563600.0,
+      "updated_at": 1789559970,
+      "status": "ready",
+      "rate_limited_until": 0.0,
+      "request_count": 100,
+      "gen_count": 30,
+      "error_count": 0,
+      "last_used_at": 1789559900,
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.8,
+          "reset_time": "2026-09-16T15:00:00Z"
+        },
+        "gemini_weekly": {
+          "fraction": 0.9,
+          "reset_time": "2026-09-23T04:00:00Z"
+        },
+        "remaining_fraction": 0.8,
+        "reset_time": "2026-09-16T15:00:00Z",
+        "updated_at": 1789559970
+      }
+    },
+    {
+      "id": "acc_2",
+      "name": "Beta Personal",
+      "email": "user2@example.com",
+      "access_token": "token-2",
+      "refresh_token": "refresh-2",
+      "id_token": "idtoken-2",
+      "token_expiry": 1789563600.0,
+      "updated_at": 1789559990,
+      "status": "ready",
+      "rate_limited_until": 0.0,
+      "request_count": 50,
+      "gen_count": 15,
+      "error_count": 0,
+      "last_used_at": 1789559800,
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.95,
+          "reset_time": "2026-09-16T16:00:00Z"
+        },
+        "gemini_weekly": {
+          "fraction": 0.85,
+          "reset_time": "2026-09-23T05:00:00Z"
+        },
+        "remaining_fraction": 0.85,
+        "reset_time": "2026-09-23T05:00:00Z",
+        "updated_at": 1789559990
+      }
+    },
+    {
+      "id": "acc_3",
+      "name": "Gamma Backup",
+      "email": "user3@example.com",
+      "access_token": "token-3",
+      "refresh_token": "refresh-3",
+      "id_token": "idtoken-3",
+      "token_expiry": 1789563600.0,
+      "updated_at": 1789559950,
+      "status": "ready",
+      "rate_limited_until": 0.0,
+      "request_count": 10,
+      "gen_count": 2,
+      "error_count": 0,
+      "last_used_at": 1789559500,
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.4,
+          "reset_time": "2026-09-16T14:30:00Z"
+        },
+        "gemini_weekly": {
+          "fraction": 0.7,
+          "reset_time": "2026-09-23T06:00:00Z"
+        },
+        "remaining_fraction": 0.4,
+        "reset_time": "2026-09-16T14:30:00Z",
+        "updated_at": 1789559950
+      }
+    }
+  ]
+}

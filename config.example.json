@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "server": {
+    "listen": "127.0.0.1",
+    "port": 8899
+  },
+  "scheduler": {
+    "strategy": "max_quota"
+  },
+  "native_agy": {
+    "binary": null
+  },
+  "logging": {
+    "max_size_bytes": 5242880,
+    "backup_count": 1
+  }
+}

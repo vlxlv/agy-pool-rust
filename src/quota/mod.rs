@@ -741,7 +741,7 @@ mod tests {
     fn test_quota_capacity_golden_cases() {
         let data = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../testdata/quota/capacity_cases.json"
+            "/testdata/quota/capacity_cases.json"
         ));
         let cases: Vec<FixtureCapacityCase> = serde_json::from_str(data).expect("failed to parse capacity_cases.json");
         assert_eq!(cases.len(), 6, "expected 6 golden cases");

@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn runway_summary_matches_go() {
-        let pool_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../testdata/pool/valid_3_accounts.json");
+        let pool_path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/pool/valid_3_accounts.json");
         let pool_data = std::fs::read_to_string(pool_path).unwrap();
         let pool: crate::storage::Pool = serde_json::from_str(&pool_data).unwrap();
 

@@ -1871,7 +1871,7 @@ fi
             token_path
         );
 
-        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
         fn walk_dir(dir: &Path, prohibited: &str) {
             if let Ok(entries) = fs::read_dir(dir) {
@@ -1885,11 +1885,11 @@ fi
                         }
                         walk_dir(&path, prohibited);
                     } else if path.is_file() {
-                        if name_str.ends_with("uninstall_safety_test.go") || name_str == "mod.rs" {
+                        if name_str == "mod.rs" {
                             continue;
                         }
                         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                        if ext == "go" || ext == "sh" || ext == "py" || ext == "rs" {
+                        if ext == "sh" || ext == "py" || ext == "rs" {
                             if let Ok(data) = fs::read(&path) {
                                 let s = String::from_utf8_lossy(&data);
                                 assert!(

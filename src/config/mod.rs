@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn config_example_json_validation() {
-        let example_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../config.example.json"));
+        let example_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/config.example.json"));
         let cfg = load_config_file(example_path).unwrap();
 
         assert_eq!(cfg.version, 1);

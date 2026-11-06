@@ -1,0 +1,238 @@
+[
+  {
+    "test_id": "dual_window_healthy",
+    "account": {
+      "id": "acc_dual",
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.75,
+          "reset_time": "2026-09-16T16:00:00Z"
+        },
+        "gemini_weekly": {
+          "fraction": 0.9,
+          "reset_time": "2026-09-23T12:00:00Z"
+        },
+        "updated_at": 1789559980
+      }
+    },
+    "now": 1789560000.0,
+    "expected_capacity": {
+      "q5": 0.75,
+      "q7": 0.9,
+      "r5": 0.8,
+      "r7": 1.0,
+      "pace5": -0.050000000000000044,
+      "pace7": -0.09999999999999998,
+      "worst_pace": -0.09999999999999998,
+      "total_pace": -0.15000000000000002,
+      "raw_floor": 0.75,
+      "q5_known": true,
+      "q7_known": true,
+      "known_window_count": 2,
+      "legacy_fraction_known": false,
+      "is_depleted": false
+    },
+    "expected_freshness": {
+      "class": "fresh",
+      "rank": 3,
+      "age": 20.0
+    },
+    "expected_rank": 2,
+    "expected_refresh_needed": false
+  },
+  {
+    "test_id": "single_window_5h",
+    "account": {
+      "id": "acc_5h_only",
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.5,
+          "reset_time": "2026-09-16T15:30:00Z"
+        },
+        "updated_at": 1789559960
+      }
+    },
+    "now": 1789560000.0,
+    "expected_capacity": {
+      "q5": 0.5,
+      "q7": null,
+      "r5": 0.7,
+      "r7": 1.0,
+      "pace5": -0.19999999999999996,
+      "pace7": null,
+      "worst_pace": -0.19999999999999996,
+      "total_pace": -0.19999999999999996,
+      "raw_floor": 0.5,
+      "q5_known": true,
+      "q7_known": false,
+      "known_window_count": 1,
+      "legacy_fraction_known": false,
+      "is_depleted": false
+    },
+    "expected_freshness": {
+      "class": "fresh",
+      "rank": 3,
+      "age": 40.0
+    },
+    "expected_rank": 2,
+    "expected_refresh_needed": false
+  },
+  {
+    "test_id": "depleted_below_threshold",
+    "account": {
+      "id": "acc_depleted",
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.004,
+          "reset_time": "2026-09-16T15:00:00Z"
+        },
+        "gemini_weekly": {
+          "fraction": 0.5,
+          "reset_time": "2026-09-23T12:00:00Z"
+        },
+        "updated_at": 1789559990
+      }
+    },
+    "now": 1789560000.0,
+    "expected_capacity": {
+      "q5": 0.004,
+      "q7": 0.5,
+      "r5": 0.6,
+      "r7": 1.0,
+      "pace5": -0.596,
+      "pace7": -0.5,
+      "worst_pace": -0.596,
+      "total_pace": -1.096,
+      "raw_floor": 0.004,
+      "q5_known": true,
+      "q7_known": true,
+      "known_window_count": 2,
+      "legacy_fraction_known": false,
+      "is_depleted": true
+    },
+    "expected_freshness": {
+      "class": "fresh",
+      "rank": 3,
+      "age": 10.0
+    },
+    "expected_rank": 2,
+    "expected_refresh_needed": false
+  },
+  {
+    "test_id": "depleted_boundary_exact",
+    "account": {
+      "id": "acc_boundary",
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.005,
+          "reset_time": "2026-09-16T15:00:00Z"
+        },
+        "gemini_weekly": {
+          "fraction": 0.5,
+          "reset_time": "2026-09-23T12:00:00Z"
+        },
+        "updated_at": 1789559990
+      }
+    },
+    "now": 1789560000.0,
+    "expected_capacity": {
+      "q5": 0.005,
+      "q7": 0.5,
+      "r5": 0.6,
+      "r7": 1.0,
+      "pace5": -0.595,
+      "pace7": -0.5,
+      "worst_pace": -0.595,
+      "total_pace": -1.095,
+      "raw_floor": 0.005,
+      "q5_known": true,
+      "q7_known": true,
+      "known_window_count": 2,
+      "legacy_fraction_known": false,
+      "is_depleted": true
+    },
+    "expected_freshness": {
+      "class": "fresh",
+      "rank": 3,
+      "age": 10.0
+    },
+    "expected_rank": 2,
+    "expected_refresh_needed": false
+  },
+  {
+    "test_id": "expired_reset_time",
+    "account": {
+      "id": "acc_expired_reset",
+      "last_quota": {
+        "gemini_5h": {
+          "fraction": 0.8,
+          "reset_time": "2026-09-16T10:00:00Z"
+        },
+        "gemini_weekly": {
+          "fraction": 0.9,
+          "reset_time": "2026-09-23T12:00:00Z"
+        },
+        "updated_at": 1789559990
+      }
+    },
+    "now": 1789560000.0,
+    "expected_capacity": {
+      "q5": 0.8,
+      "q7": 0.9,
+      "r5": 1.0,
+      "r7": 1.0,
+      "pace5": -0.19999999999999996,
+      "pace7": -0.09999999999999998,
+      "worst_pace": -0.19999999999999996,
+      "total_pace": -0.29999999999999993,
+      "raw_floor": 0.8,
+      "q5_known": true,
+      "q7_known": true,
+      "known_window_count": 2,
+      "legacy_fraction_known": false,
+      "is_depleted": false
+    },
+    "expected_freshness": {
+      "class": "fresh",
+      "rank": 3,
+      "age": 10.0
+    },
+    "expected_rank": 2,
+    "expected_refresh_needed": false
+  },
+  {
+    "test_id": "legacy_quota_state",
+    "account": {
+      "id": "acc_legacy",
+      "last_quota": {
+        "remaining_fraction": 0.6,
+        "reset_time": "2026-09-16T16:00:00Z",
+        "updated_at": 1789559950
+      }
+    },
+    "now": 1789560000.0,
+    "expected_capacity": {
+      "q5": 0.6,
+      "q7": 0.6,
+      "r5": 0.8,
+      "r7": 0.023809523809523808,
+      "pace5": -0.20000000000000007,
+      "pace7": 0.5761904761904761,
+      "worst_pace": -0.20000000000000007,
+      "total_pace": 0.3761904761904761,
+      "raw_floor": 0.6,
+      "q5_known": false,
+      "q7_known": false,
+      "known_window_count": 1,
+      "legacy_fraction_known": true,
+      "is_depleted": false
+    },
+    "expected_freshness": {
+      "class": "fresh",
+      "rank": 3,
+      "age": 50.0
+    },
+    "expected_rank": 2,
+    "expected_refresh_needed": false
+  }
+]

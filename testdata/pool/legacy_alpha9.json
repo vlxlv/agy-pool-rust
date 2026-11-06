@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "strategy": "max_quota",
+  "active_account_id": "acc_legacy",
+  "accounts": [
+    {
+      "id": "acc_legacy",
+      "name": "Legacy Alpha Account",
+      "email": "legacy@example.com",
+      "access_token": "tok-legacy",
+      "refresh_token": "ref-legacy",
+      "token_expiry": 1789563600.0,
+      "updated_at": 1789559880,
+      "status": "ready",
+      "request_count": 25,
+      "gen_count": 8,
+      "error_count": 0,
+      "last_quota": {
+        "remaining_fraction": 0.65,
+        "reset_time": "2026-09-16T15:30:00Z",
+        "updated_at": 1789559880
+      }
+    }
+  ]
+}

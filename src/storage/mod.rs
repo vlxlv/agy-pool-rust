@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_load_golden_pool_fixtures() {
-        let testdata_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../testdata/pool/"));
+        let testdata_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/pool/"));
 
         // 1. Empty pool
         let empty_bytes = std::fs::read(testdata_dir.join("empty.json")).unwrap();

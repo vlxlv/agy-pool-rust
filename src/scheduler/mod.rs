@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn scheduler_ordering_golden_cases() {
         let _l = lock_in_flight();
-        let fixture_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../testdata/scheduler/ordering_cases.json");
+        let fixture_path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/scheduler/ordering_cases.json");
         let data = std::fs::read_to_string(fixture_path).expect("read ordering_cases.json");
         let cases: Vec<FixtureOrderingCase> = serde_json::from_str(&data).expect("parse ordering_cases.json");
 
