@@ -397,8 +397,9 @@ impl StateDb {
         match self.mode {
             DbMode::Direct(ref inner) => Ok(inner.clone()),
             DbMode::Global => {
-                let mut lock = ACTIVE_GLOBAL.lock().unwrap();
+                // Resolve the path before locking: a panic while holding the lock would poison it for every later caller.
                 let current_path = crate::config::state_db_file();
+                let mut lock = ACTIVE_GLOBAL.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some((ref p, ref inner)) = *lock
                     && p == &current_path
                 {

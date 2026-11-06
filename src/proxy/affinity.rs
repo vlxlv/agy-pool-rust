@@ -451,6 +451,7 @@ mod tests {
         fn drop(&mut self) {
             set_persist_affinity(false);
             affinity_manager().clear();
+            crate::proxy::model_cooldown::reset_model_cooldowns();
             crate::config::reset_data_dir();
             crate::config::set_test_mode(false);
         }
