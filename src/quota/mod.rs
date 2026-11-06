@@ -946,6 +946,8 @@ mod tests {
 
     #[test]
     fn test_freshness_reset_passed_only_after_snapshot_is_stale() {
+        // Other tests override crate::clock while holding TEST_LOCK; this one reads the real time.
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let now = crate::clock::now_unix();
         let at = |offset: f64| -> String {
             let ts = jiff::Timestamp::from_second((now + offset) as i64).unwrap();

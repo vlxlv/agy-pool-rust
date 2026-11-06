@@ -1921,6 +1921,8 @@ mod tests {
 
     #[test]
     fn test_weekly_unknown_label() {
+        // Other tests override crate::clock while holding TEST_LOCK; this one reads the real time.
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let updated = crate::clock::now_unix() as i64;
         let not_renewed = Account {
             last_quota: Some(QuotaState {

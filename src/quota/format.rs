@@ -342,6 +342,8 @@ mod tests {
 
     #[test]
     fn test_format_compact_remaining_time() {
+        // Other tests override crate::clock while holding TEST_LOCK; this one reads the real time.
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let now = crate::clock::now_unix() as i64;
 
         let at = |offset: i64| -> String {

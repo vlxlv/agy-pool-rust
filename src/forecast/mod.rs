@@ -112,6 +112,8 @@ mod tests {
 
     #[test]
     fn simulate_quota_runway_healthy() {
+        // Other tests override crate::clock while holding TEST_LOCK; this one reads the real time.
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let now = crate::clock::now_unix();
         let frac = 0.8;
         let pool = Pool {

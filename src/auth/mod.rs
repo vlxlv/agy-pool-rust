@@ -1083,6 +1083,8 @@ mod tests {
 
     #[test]
     fn test_token_expiring_soon() {
+        // Other tests override crate::clock while holding TEST_LOCK; this one reads the real time.
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let now = crate::clock::now_unix();
 
         assert!(

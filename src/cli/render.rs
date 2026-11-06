@@ -180,6 +180,8 @@ mod tests {
 
     #[test]
     fn test_get_account_state_protected() {
+        // Other tests override crate::clock while holding TEST_LOCK; this one reads the real time.
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let qw = 0.08;
         let q5 = 0.40;
         let acc = crate::storage::Account {
