@@ -683,14 +683,7 @@ async fn quota_429_fails_over() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capacity_503_fails_over_and_pauses_model() {
-    let behaviors = vec![
-        UpstreamBehavior::Respond(
-            b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 42\r\nConnection: close\r\n\r\n{\"error\":{\"message\":\"service unavailable\"}}".to_vec(),
-        ),
-        UpstreamBehavior::Respond(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"status\":\"ok_2\"}".to_vec(),
-        ),
-    ];
+    let behaviors = behaviors_503();
     let path = "/v1/models/gemini-2.5-flash:generateContent";
     let headers = [("Content-Type", "application/json")];
     let body = br#"{"model":"gemini-2.5-flash","contents":[]}"#;
@@ -707,6 +700,33 @@ async fn capacity_503_fails_over_and_pauses_model() {
     assert_eq!(rust_res.affinity.as_deref(), Some("failover"));
     assert_eq!(rust_res.upstream_accounts, vec!["token-acc_1", "token-acc_2"]);
     assert_eq!(rust_res.upstream_connection_count, 2);
+
+    // The pause: a second request for the same model on the same gateway must skip the paused acc_1.
+    let mut paused_behaviors = behaviors_503();
+    paused_behaviors.push(UpstreamBehavior::Respond(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"status\":\"ok_3\"}".to_vec(),
+    ));
+    let (go_r1, go_r2) = run_two_requests(GatewayTarget::Go, paused_behaviors.clone(), body).await;
+    let (rust_r1, rust_r2) = run_two_requests(GatewayTarget::Rust, paused_behaviors, body).await;
+    assert_differential_match(&go_r1, &rust_r1);
+    assert_differential_match(&go_r2, &rust_r2);
+    assert_eq!(rust_r2.status, 200);
+    assert_eq!(rust_r2.upstream_accounts.len(), 3, "{:?}", rust_r2.upstream_accounts);
+    assert_ne!(
+        rust_r2.upstream_accounts[2], "token-acc_1",
+        "paused account must not get the next request for that model"
+    );
+}
+
+fn behaviors_503() -> Vec<UpstreamBehavior> {
+    vec![
+        UpstreamBehavior::Respond(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 42\r\nConnection: close\r\n\r\n{\"error\":{\"message\":\"service unavailable\"}}".to_vec(),
+        ),
+        UpstreamBehavior::Respond(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"status\":\"ok_2\"}".to_vec(),
+        ),
+    ]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -825,15 +845,11 @@ async fn sse_truncated_mid_stream() {
     assert_eq!(rust_res.upstream_connection_count, 1);
 }
 
-async fn run_affinity_two_requests(target: GatewayTarget) -> (ScenarioRunResult, ScenarioRunResult) {
-    let behaviors = vec![
-        UpstreamBehavior::Respond(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"status\":\"resp_1\"}".to_vec(),
-        ),
-        UpstreamBehavior::Respond(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"status\":\"resp_2\"}".to_vec(),
-        ),
-    ];
+async fn run_two_requests(
+    target: GatewayTarget,
+    behaviors: Vec<UpstreamBehavior>,
+    body: &[u8],
+) -> (ScenarioRunResult, ScenarioRunResult) {
     let upstream = FakeUpstream::start(behaviors).await;
     let backend_url = format!("http://127.0.0.1:{}", upstream.port);
 
@@ -850,8 +866,6 @@ async fn run_affinity_two_requests(target: GatewayTarget) -> (ScenarioRunResult,
     let path = "/v1/models/gemini-2.5-flash:generateContent";
     let (guard, server_port) = spawn_proxy_test_server(bin_path, &state_dir, &backend_url);
     let headers = [("Content-Type", "application/json")];
-    let body = br#"{"model":"gemini-2.5-flash","request":{"labels":{"cascade_id":"cascade-diff-test"}}}"#;
-
     let res1 = send_http_request(server_port, path, &headers, body)
         .await
         .expect("client request 1 failed");
@@ -893,8 +907,17 @@ async fn run_affinity_two_requests(target: GatewayTarget) -> (ScenarioRunResult,
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_affinity_sticks_across_two_requests() {
-    let (go_r1, go_r2) = run_affinity_two_requests(GatewayTarget::Go).await;
-    let (rust_r1, rust_r2) = run_affinity_two_requests(GatewayTarget::Rust).await;
+    let behaviors = vec![
+        UpstreamBehavior::Respond(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"status\":\"resp_1\"}".to_vec(),
+        ),
+        UpstreamBehavior::Respond(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"status\":\"resp_2\"}".to_vec(),
+        ),
+    ];
+    let body = br#"{"model":"gemini-2.5-flash","request":{"labels":{"cascade_id":"cascade-diff-test"}}}"#;
+    let (go_r1, go_r2) = run_two_requests(GatewayTarget::Go, behaviors.clone(), body).await;
+    let (rust_r1, rust_r2) = run_two_requests(GatewayTarget::Rust, behaviors, body).await;
 
     // Both gateways succeed on request 1 with same account and affinity "none"
     assert_eq!(go_r1.status, rust_r1.status);
