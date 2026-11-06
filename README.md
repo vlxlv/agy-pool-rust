@@ -29,23 +29,25 @@ xychart-beta
     title "Throughput in QPS (Higher is Better)"
     x-axis ["Go", "Rust"]
     y-axis "Requests per Second" 0 --> 20000
-    bar [15776, 17981]
+    line "Throughput" [15776, 17981]
 ```
 
 ```mermaid
 xychart-beta
-    title "Latency & Cold Start in ms (Lower is Better)"
-    x-axis ["Cold Start: Go", "Cold Start: Rust", "P50: Go", "P50: Rust", "P95: Go", "P95: Rust", "P99: Go", "P99: Rust"]
+    title "Latency & Cold Start Curve in ms (Lower is Better: Go vs Rust)"
+    x-axis ["Cold Start", "Median (P50)", "P95", "P99"]
     y-axis "Milliseconds (ms)" 0 --> 5
-    bar [2.00, 0.72, 0.99, 0.86, 2.87, 2.49, 3.95, 3.45]
+    line "Go" [2.00, 0.99, 2.87, 3.95]
+    line "Rust" [0.72, 0.86, 2.49, 3.45]
 ```
 
 ```mermaid
 xychart-beta
-    title "Memory & Binary Footprint in MiB (Lower is Better)"
-    x-axis ["Idle RSS: Go", "Idle RSS: Rust", "Binary Size: Go", "Binary Size: Rust"]
+    title "Memory & Binary Footprint in MiB (Lower is Better: Go vs Rust)"
+    x-axis ["Idle VmRSS", "Binary Size"]
     y-axis "Megabytes (MiB)" 0 --> 15
-    bar [12.58, 5.78, 11.85, 7.78]
+    line "Go" [12.58, 11.85]
+    line "Rust" [5.78, 7.78]
 ```
 
 ```mermaid
@@ -53,7 +55,7 @@ xychart-beta
     title "Runtime OS Threads (Lower is Better)"
     x-axis ["Go", "Rust"]
     y-axis "Threads" 0 --> 10
-    bar [9, 5]
+    line "OS Threads" [9, 5]
 ```
 
 ## Install
