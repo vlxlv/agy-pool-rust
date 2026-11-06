@@ -26,37 +26,14 @@ Automated side-by-side benchmark from GitHub Actions ([Run #42256839654](https:/
 
 ```mermaid
 xychart-beta
-    title "Throughput in QPS (Higher is Better)"
-    x-axis ["Go", "Rust"]
-    y-axis "Requests per Second" 0 --> 20000
-    line "Throughput" [15776, 17981]
+    title "Rust vs Go Performance Profile (Go Baseline = 100%)"
+    x-axis ["Cold Start", "Idle RSS", "OS Threads", "Binary Size", "P50 Latency", "P95 Latency", "P99 Latency", "Throughput"]
+    y-axis "Relative to Go (%)" 0 --> 130
+    line "Go Baseline" [100, 100, 100, 100, 100, 100, 100, 100]
+    line "Rust" [36, 46, 56, 66, 87, 87, 87, 114]
 ```
 
-```mermaid
-xychart-beta
-    title "Latency & Cold Start Curve in ms (Lower is Better: Go vs Rust)"
-    x-axis ["Cold Start", "Median (P50)", "P95", "P99"]
-    y-axis "Milliseconds (ms)" 0 --> 5
-    line "Go" [2.00, 0.99, 2.87, 3.95]
-    line "Rust" [0.72, 0.86, 2.49, 3.45]
-```
-
-```mermaid
-xychart-beta
-    title "Memory & Binary Footprint in MiB (Lower is Better: Go vs Rust)"
-    x-axis ["Idle VmRSS", "Binary Size"]
-    y-axis "Megabytes (MiB)" 0 --> 15
-    line "Go" [12.58, 11.85]
-    line "Rust" [5.78, 7.78]
-```
-
-```mermaid
-xychart-beta
-    title "Runtime OS Threads (Lower is Better)"
-    x-axis ["Go", "Rust"]
-    y-axis "Threads" 0 --> 10
-    line "OS Threads" [9, 5]
-```
+> **Note:** For Cold Start, Idle RSS, Threads, Binary Size, and Tail Latency (P50/P95/P99), lower is better (Rust consumes only 36%–87% of Go). For Throughput, higher is better (Rust achieves 114% of Go / +14.0% QPS).
 
 ## Install
 
