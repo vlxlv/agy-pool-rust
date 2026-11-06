@@ -485,9 +485,20 @@ pub fn set_backend_url_for_test(backend_url: &str) -> BackendUrlGuard {
     BackendUrlGuard(old_url, old_host)
 }
 
+static USER_AGENT_PROVIDER: std::sync::OnceLock<fn() -> String> = std::sync::OnceLock::new();
+static PROVIDED_USER_AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Installs Go's proxy.UserAgentProvider; like Go's sync.OnceValue it is evaluated once, on first use.
+pub fn set_user_agent_provider(f: fn() -> String) {
+    let _ = USER_AGENT_PROVIDER.set(f);
+}
+
 pub fn get_user_agent() -> String {
     if let Some(ua) = USER_AGENT_OVERRIDE.read().unwrap().as_ref() {
         return ua.clone();
+    }
+    if let Some(f) = USER_AGENT_PROVIDER.get() {
+        return PROVIDED_USER_AGENT.get_or_init(f).clone();
     }
     crate::quota::DEFAULT_UA.to_string()
 }

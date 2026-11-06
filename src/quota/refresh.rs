@@ -85,6 +85,11 @@ pub fn set_user_agent_provider_for_test(f: Option<UserAgentProviderFunc>) -> Use
     UserAgentGuard(old)
 }
 
+/// Installs the process-wide User-Agent provider (Go's quota.UserAgentProvider); called each refresh.
+pub fn set_user_agent_provider(f: UserAgentProviderFunc) {
+    *USER_AGENT_PROVIDER.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(f));
+}
+
 pub fn get_user_agent() -> String {
     let hook = USER_AGENT_PROVIDER.read().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(f) = hook {
