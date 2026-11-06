@@ -22,23 +22,11 @@ Release binaries and `.deb` packages are on the [releases page](https://github.c
 
 ## Performance Benchmark (Rust vs. Go)
 
-A side-by-side automated benchmark is run on every change in GitHub Actions ([Run #42256839654](https://github.com/vlxlv/agy-pool-rust/actions/runs/42256839654)), testing cold start, resource footprint, and HTTP proxy throughput under high concurrency (5,000 requests, concurrency = 20) on Ubuntu Linux (`x86_64`):
-
-| Metric | Go Implementation | Rust Implementation | Delta (Rust vs Go) | Winner |
-| :--- | :---: | :---: | :---: | :---: |
-| **Binary Size** | 11.85 MiB | 7.78 MiB | **-34.4%** | 🦀 Rust |
-| **Cold Start (Median)** | 2.00 ms | 0.72 ms | **-63.9%** | 🦀 Rust |
-| **Idle Memory (VmRSS)** | 12.58 MiB | 5.78 MiB | **-54.0%** | 🦀 Rust |
-| **Virtual Memory (VmSize)** | 1242.9 MiB | 16.4 MiB | **-98.7%** | 🦀 Rust |
-| **OS Threads** | 9 threads | 5 threads | **-44.4%** | 🦀 Rust |
-| **Throughput (QPS)** | 15,775.6 req/s | 17,980.5 req/s | **+14.0%** | 🦀 Rust |
-| **Latency (Median / P50)** | 0.99 ms | 0.86 ms | **-13.4%** | 🦀 Rust |
-| **Latency (P95)** | 2.87 ms | 2.49 ms | **-13.2%** | 🦀 Rust |
-| **Latency (P99)** | 3.95 ms | 3.45 ms | **-12.7%** | 🦀 Rust |
+Automated side-by-side benchmark from GitHub Actions ([Run #42256839654](https://github.com/vlxlv/agy-pool-rust/actions/runs/42256839654)), testing cold start, resource footprint, and HTTP proxy throughput under high concurrency (5,000 requests, concurrency = 20) on Ubuntu Linux (`x86_64`):
 
 ```mermaid
 xychart-beta
-    title "Throughput (QPS - Higher is Better)"
+    title "Throughput in QPS (Higher is Better)"
     x-axis ["Go", "Rust"]
     y-axis "Requests per Second" 0 --> 20000
     bar [15776, 17981]
@@ -46,18 +34,26 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "Latency Comparison in ms (Lower is Better)"
-    x-axis ["P50: Go", "P50: Rust", "P95: Go", "P95: Rust", "P99: Go", "P99: Rust"]
-    y-axis "Latency (ms)" 0 --> 5
-    bar [0.99, 0.86, 2.87, 2.49, 3.95, 3.45]
+    title "Latency & Cold Start in ms (Lower is Better)"
+    x-axis ["Cold Start: Go", "Cold Start: Rust", "P50: Go", "P50: Rust", "P95: Go", "P95: Rust", "P99: Go", "P99: Rust"]
+    y-axis "Milliseconds (ms)" 0 --> 5
+    bar [2.00, 0.72, 0.99, 0.86, 2.87, 2.49, 3.95, 3.45]
 ```
 
 ```mermaid
 xychart-beta
-    title "Resource Footprint in MiB (Lower is Better)"
-    x-axis ["Idle RSS: Go", "Idle RSS: Rust", "Binary: Go", "Binary: Rust"]
+    title "Memory & Binary Footprint in MiB (Lower is Better)"
+    x-axis ["Idle RSS: Go", "Idle RSS: Rust", "Binary Size: Go", "Binary Size: Rust"]
     y-axis "Megabytes (MiB)" 0 --> 15
     bar [12.58, 5.78, 11.85, 7.78]
+```
+
+```mermaid
+xychart-beta
+    title "Runtime OS Threads (Lower is Better)"
+    x-axis ["Go", "Rust"]
+    y-axis "Threads" 0 --> 10
+    bar [9, 5]
 ```
 
 ## Install
