@@ -1,30 +1,73 @@
-name: Release Dry Run
+name: Release
 
+# A `v*` tag builds, verifies and publishes a GitHub release. Pushes to main and manual runs
+# do the same build and verification as a dry run, so the release path is tested before a tag.
 on:
+  push:
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version for dry run'
+        description: 'Version for the dry run'
         required: false
         default: '0.0.0-dryrun'
         type: string
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
-env:
-  VERSION: ${{ inputs.version || '0.0.0-dryrun' }}
-
 concurrency:
-  group: release-dry-run-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  prepare:
+    name: Resolve version (and gate a tag)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+            cargo_v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+            [ "$v" = "$cargo_v" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_v"; exit 1; }
+          else
+            v="${INPUT_VERSION:-0.0.0-dryrun}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
+      # A tag publishes; run the CI gate on exactly the tagged commit first.
+      - name: Install the Rust version pinned by Cargo.toml (rust-version)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal -c rustfmt,clippy && rustup default "$v"
+      - name: Gate (fmt, clippy, tests)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          AGY_TEST_MODE: '1'
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test -- --test-threads=16
+
   linux:
     name: Build Linux (${{ matrix.deb }})
+    needs: prepare
     runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -82,7 +125,10 @@ jobs:
 
   darwin:
     name: Build Darwin
+    needs: prepare
     runs-on: macos-15
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -122,8 +168,10 @@ jobs:
 
   sums:
     name: Checksums and Package Verification
-    needs: [linux, darwin]
+    needs: [prepare, linux, darwin]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     timeout-minutes: 10
     steps:
       - name: Download all artifacts
@@ -166,3 +214,34 @@ jobs:
         with:
           name: rust-release-dist
           path: dist/
+
+  publish:
+    name: Publish GitHub Release
+    needs: sums
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-release-dist
+          path: dist
+
+      - name: Publish
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/agy-pool-linux-amd64
+            dist/agy-pool-linux-arm64
+            dist/agy-pool-darwin-amd64
+            dist/agy-pool-darwin-arm64
+            dist/*.deb
+            dist/SHA256SUMS

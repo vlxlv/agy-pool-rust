@@ -7,7 +7,7 @@ A local gateway that pools several Google accounts behind the **Antigravity CLI 
 
 This is the Rust rewrite of [agy-pool-go](https://github.com/vlxlv/agy-pool-go) and a drop-in replacement for it: same `state.db`, `config.json`, environment variables, command line and port. Replacing the binary is the whole migration, and putting the Go binary back is the whole rollback (see [Migrating from agy-pool-go](#migrating-from-agy-pool-go)). Known behaviour differences are listed in [`PORTING_NOTES.md`](PORTING_NOTES.md).
 
-> **Releases:** this repository has not published a release yet. Until it does, release binaries, `.deb` packages and `agy-pool update` still come from [agy-pool-go releases](https://github.com/vlxlv/agy-pool-go/releases). To run the Rust version now, [build it from source](#from-source).
+Release binaries and `.deb` packages are on the [releases page](https://github.com/vlxlv/agy-pool-rust/releases) from v0.2.0 on, and `agy-pool update` installs them. agy-pool-go installs keep updating from agy-pool-go until you switch them over (see [Migrating from agy-pool-go](#migrating-from-agy-pool-go)).
 
 ## Features
 
@@ -21,6 +21,16 @@ This is the Rust rewrite of [agy-pool-go](https://github.com/vlxlv/agy-pool-go) 
 - **Encrypted backups.** `export` / `import` move the account pool between machines, optionally encrypted (PBKDF2-HMAC-SHA256).
 
 ## Install
+
+### Release binary
+
+Download the binary for your platform from the [releases page](https://github.com/vlxlv/agy-pool-rust/releases) (`agy-pool-linux-amd64`, `agy-pool-linux-arm64`, `agy-pool-darwin-amd64`, `agy-pool-darwin-arm64`), check it against `SHA256SUMS`, then run `install` as below:
+
+```bash
+sha256sum --ignore-missing -c SHA256SUMS
+chmod +x agy-pool-linux-amd64
+./agy-pool-linux-amd64 install
+```
 
 ### From source
 
@@ -38,7 +48,7 @@ sudo ./target/release/agy-pool install --system
 
 ### Debian / Ubuntu package
 
-Download `agy-pool_<version>_<arch>.deb` from the [releases](https://github.com/vlxlv/agy-pool-go/releases) and install it:
+Download `agy-pool_<version>_<arch>.deb` from the [releases page](https://github.com/vlxlv/agy-pool-rust/releases) and install it:
 
 ```bash
 sudo dpkg -i agy-pool_<version>_amd64.deb
@@ -116,16 +126,16 @@ A failed download or checksum mismatch leaves the installed binary untouched. If
 
 ## Migrating from agy-pool-go
 
-State, config and the systemd unit are shared, so only the binary changes:
+State, config and the systemd unit are shared, so only the binary changes. Use a release binary or `target/release/agy-pool` from a source build:
 
 ```bash
 cp ~/.local/bin/agy-pool ~/.local/bin/agy-pool.go-backup
-install -m 755 target/release/agy-pool ~/.local/bin/agy-pool.new
+install -m 755 agy-pool-linux-amd64 ~/.local/bin/agy-pool.new
 mv -f ~/.local/bin/agy-pool.new ~/.local/bin/agy-pool
 systemctl --user restart agy-pool          # or: agy-pool restart
 ```
 
-Roll back the same way:
+From then on `agy-pool update` follows this repository's releases. Roll back the same way:
 
 ```bash
 cp ~/.local/bin/agy-pool.go-backup ~/.local/bin/agy-pool
@@ -144,7 +154,11 @@ scripts/test.sh clippy --all-targets -- -D warnings
 
 `scripts/test.sh` runs cargo in a user, mount and PID namespace in which the real state (`~/.local/share/agy-pool`, `~/.config/agy-pool`, `~/.gemini`, `~/.local/bin`, `~/.local/libexec/agy-pool`, shell rc files) is read-only, the running gateway is invisible, and `systemctl` is stubbed out. It refuses to run if any of that does not hold.
 
-CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clippy -D warnings` and the test suite on every push and pull request to `main`, plus a stress job that repeats the suite at 4, 16 and 64 threads to catch races. [`release-dry-run.yml`](.github/workflows/release-dry-run.yml) builds and verifies all release assets (4 binaries, 2 `.deb` packages, `SHA256SUMS`) without publishing, on the same pinned Rust version (`rust-version` in `Cargo.toml`) as the tests. [`audit.yml`](.github/workflows/audit.yml) checks the locked dependencies against the RustSec advisory database weekly and whenever `Cargo.lock` changes.
+CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clippy -D warnings` and the test suite on every push and pull request to `main`, plus a stress job that repeats the suite at 4, 16 and 64 threads to catch races. [`release.yml`](.github/workflows/release.yml) builds and verifies all release assets (4 binaries, 2 `.deb` packages, `SHA256SUMS`) on every push to `main` as a dry run, on the same pinned Rust version (`rust-version` in `Cargo.toml`) as the tests. [`audit.yml`](.github/workflows/audit.yml) checks the locked dependencies against the RustSec advisory database weekly and whenever `Cargo.lock` changes.
+
+### Releasing
+
+Bump `version` in `Cargo.toml` (and `Cargo.lock`, via `cargo update --workspace`) in the change commit, wait for CI on `main`, then tag that commit `v<version>` and push the tag. `release.yml` refuses a tag that doesn't match `Cargo.toml`, runs the CI gate on the tagged commit, builds and verifies every asset, and publishes the GitHub release (`-alpha`, `-beta` and `-rc` tags become prereleases).
 
 ## License
 

@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const DEFAULT_RELEASES_API: &str = "https://api.github.com/repos/vlxlv/agy-pool-go/releases?per_page=1";
+const DEFAULT_RELEASES_API: &str = "https://api.github.com/repos/vlxlv/agy-pool-rust/releases?per_page=1";
 const DEFAULT_DPKG_FILE_LIST: &str = "/var/lib/dpkg/info/agy-pool.list";
 
 static RELEASES_API: Mutex<Option<String>> = Mutex::new(None);
