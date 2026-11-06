@@ -23,7 +23,7 @@ env:
 
 jobs:
   test:
-    name: Code Hygiene & Test Suite
+    name: Smoke Test & Code Hygiene
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
@@ -44,8 +44,21 @@ jobs:
       - name: Fail if tests wrote to live state paths
         run: for p in ~/.local/share/agy-pool ~/.config/agy-pool ~/.gemini; do test ! -e "$p" || { echo "tests wrote to $p"; find "$p" | head; exit 1; }; done
 
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    # Scheduled runs also fire on forks with Actions enabled; don't file issues there.
+    if: github.event.repository.fork == false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   build:
-    name: Build & Smoke Test (${{ matrix.deb }})
+    name: Build & Package (${{ matrix.deb }})
+    needs: [test, audit]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -130,23 +143,12 @@ jobs:
           kill -TERM $DAEMON_PID 2>/dev/null || true
           rm -rf "$tmp_dir"
 
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    # Scheduled runs also fire on forks with Actions enabled; don't file issues there.
-    if: github.event.repository.fork == false
-    steps:
-      - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
   # Shared-state races in tests only show up under some schedules; repeat the suite at several
   # thread counts on scheduled weekly runs and manual triggers.
   stress:
     name: Concurrency Stress (${{ matrix.threads }} threads)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: test
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
