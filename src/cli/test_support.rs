@@ -56,6 +56,8 @@ pub fn cli_test_env() -> CliTestEnv {
         system_root: dir.path().join("test_system"),
     }));
     crate::daemon::set_entrypoint_provider(Some(|| PathBuf::from("/bin/true")));
+    // Go's verify calls the real browser opener; tests get a no-op (login tests install their own).
+    crate::cli::set_login_opener(Some(|_| Ok(())));
     crate::observability::reset_in_flight();
     crate::proxy::model_cooldown::reset_model_cooldowns();
     crate::proxy::affinity::affinity_manager().clear();

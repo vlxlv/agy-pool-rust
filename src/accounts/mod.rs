@@ -933,9 +933,7 @@ pub struct LoginOptions {
 pub fn default_browser_opener(target_url: &str) -> Result<(), AccountsError> {
     #[cfg(test)]
     {
-        if target_url.contains("example.test") {
-            return Err(AccountsError::Message("browser opener disabled in test".to_string()));
-        }
+        let _ = target_url;
         panic!("default_browser_opener called in test");
     }
     #[cfg(not(test))]
