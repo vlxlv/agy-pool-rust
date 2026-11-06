@@ -183,6 +183,10 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     // Restore per-model pauses and session affinities
     crate::proxy::load_model_cooldowns();
     crate::proxy::load_affinities();
+    // Rate-limited log rotation on proxied requests; without it the daemon log grows without bound.
+    crate::proxy::set_log_rotator(|| {
+        super::log::maybe_rotate_log();
+    });
 
     // 2. Open TCP listener
     let addr_str = format!("{}:{}", ctx_inst.listen_host, port);
@@ -407,6 +411,10 @@ mod tests {
 
         // 1. Verify port is listening
         assert!(is_port_listening(bound_port));
+        assert!(
+            crate::proxy::log_rotator_installed(),
+            "run_foreground must wire log rotation, as Go does"
+        );
 
         // 2. Verify PID file was written
         let info = super::super::pid::read_pid_file(&pid_file).unwrap();

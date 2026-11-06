@@ -264,6 +264,8 @@ mod tests {
 
     #[test]
     fn test_maybe_rotate_log_rate_limiting() {
+        // maybe_rotate_log resolves the default log path from the data dir; never let it see the live one.
+        let _env = crate::daemon::test_env();
         let _ = maybe_rotate_log();
 
         // Second immediate call must be rate-limited and return false

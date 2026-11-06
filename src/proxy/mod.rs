@@ -409,6 +409,17 @@ pub type QuotaRefresherFn = Arc<dyn Fn(&Account) + Send + Sync>;
 static QUOTA_REFRESHER: LazyLock<RwLock<Option<QuotaRefresherFn>>> = LazyLock::new(|| RwLock::new(None));
 
 static LOG_WRITER: LazyLock<Mutex<Option<Box<dyn std::io::Write + Send + Sync>>>> = LazyLock::new(|| Mutex::new(None));
+// Installed once by the daemon, like Go's wireLogRotator sync.Once: tests run several daemons in one process.
+static LOG_ROTATOR: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+pub fn set_log_rotator(f: fn()) {
+    let _ = LOG_ROTATOR.set(f);
+}
+
+#[cfg(test)]
+pub fn log_rotator_installed() -> bool {
+    LOG_ROTATOR.get().is_some()
+}
 
 pub fn get_backend_host() -> String {
     if let Some(h) = BACKEND_HOST_OVERRIDE.read().unwrap().as_ref() {
@@ -893,6 +904,10 @@ impl Handler {
         let is_generation = is_generation_request_path(&path);
         let accept = parts.headers.get(hyper::header::ACCEPT).and_then(|v| v.to_str().ok());
         let is_sse = is_stream_request_path(&path, accept);
+
+        if let Some(rotate) = LOG_ROTATOR.get() {
+            rotate();
+        }
 
         let pool = match crate::storage::load_pool() {
             Ok(p) if !p.accounts.is_empty() => p,
