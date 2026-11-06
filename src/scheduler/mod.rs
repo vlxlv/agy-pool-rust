@@ -602,6 +602,14 @@ mod tests {
     use super::*;
     use crate::storage::{Pool, QuotaState, QuotaWindow};
 
+    /// Ordering reads process-wide in-flight counts keyed by account id; proxy tests hold slots for
+    /// the same ids (acc_1, acc_2, ...) under TEST_LOCK, so ordering tests must hold it too.
+    fn lock_in_flight() -> std::sync::MutexGuard<'static, ()> {
+        let guard = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::observability::reset_in_flight();
+        guard
+    }
+
     fn make_account_with_windows(id: &str, q5: Option<f64>, qw: Option<f64>, now: f64) -> Account {
         let mut lq = QuotaState {
             updated_at: Some((now - 10.0) as i64),
@@ -641,6 +649,7 @@ mod tests {
 
     #[test]
     fn scheduler_ordering_golden_cases() {
+        let _l = lock_in_flight();
         let fixture_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../testdata/scheduler/ordering_cases.json");
         let data = std::fs::read_to_string(fixture_path).expect("read ordering_cases.json");
         let cases: Vec<FixtureOrderingCase> = serde_json::from_str(&data).expect("parse ordering_cases.json");
@@ -694,6 +703,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_healthy_beats_reserve() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         let main_acc = make_account_with_windows("Main", Some(0.10), Some(0.50), now);
@@ -708,6 +718,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_pace_ranking_preserved_among_healthy() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         let acc1 = make_account_with_windows("acc_1", Some(0.80), Some(0.90), now);
@@ -722,6 +733,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_reserve_fallback_works() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         let r1 = make_account_with_windows("res_1", Some(0.12), Some(0.80), now);
@@ -736,6 +748,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_depleted_never_wins_over_reserve() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         let dep_acc = make_account_with_windows("acc_depleted", Some(0.004), Some(0.50), now);
@@ -750,6 +763,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_weekly_protection() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         let acc_weekly_low = make_account_with_windows("weekly_low", Some(0.80), Some(0.08), now);
@@ -766,6 +780,7 @@ mod tests {
 
     #[test]
     fn max_quota_dynamic_weekly_reserve_floor_near_reset() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         let near_reset_time = now + 22.0 * 3600.0;
@@ -812,6 +827,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_five_hour_protection() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         let acc_5h_low = make_account_with_windows("5h_low", Some(0.12), Some(0.70), now);
@@ -863,6 +879,7 @@ mod tests {
 
     #[test]
     fn restricted_accounts_excluded_from_all_strategies() {
+        let _l = lock_in_flight();
         let now = 1000.0;
         let ready = Account {
             id: "ready".to_string(),
@@ -953,6 +970,7 @@ mod tests {
 
     #[test]
     fn reserve_headroom_healthy_preferred_over_reserve() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -972,6 +990,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_real_observed_snapshot() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -996,6 +1015,7 @@ mod tests {
 
     #[test]
     fn max_quota_reserve_headroom_legacy_fraction() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
         for source in ["remaining_fraction", "quota"] {
@@ -1035,6 +1055,7 @@ mod tests {
 
     #[test]
     fn max_quota_abundant_weekly_quota_no_cold_start_starvation() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1086,6 +1107,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_renewal_order() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1126,6 +1148,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_hour_truncation() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1168,6 +1191,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_hierarchical_windows() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1218,6 +1242,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_five_hour_only_vs_weekly() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1258,6 +1283,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_reserve_deprioritization() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1303,6 +1329,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_cooldown_sink() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1360,6 +1387,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_user_observed_single_account_drain_prevented() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1409,6 +1437,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_expiring_quota_harvesting() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1458,6 +1487,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_low_quota_account_protected_from_harvest() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1507,6 +1537,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_harvest_surplus_above_25_percent() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1556,6 +1587,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_balanced_cruising_load_distribution() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1607,6 +1639,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_strict_weak_ordering_transitivity() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -1952,6 +1985,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_over_weekly_pace_held_back() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -2183,6 +2217,7 @@ mod tests {
 
     #[test]
     fn order_candidates_smart_unknown_quota_sorts_after_known_quota() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -2285,6 +2320,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_mid_week_5h_not_stranded_by_weekly_tier() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -2336,6 +2372,7 @@ mod tests {
 
     #[test]
     fn rotate_top_tier_round_robin_cycle() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let frac90 = 0.90;
         let frac50 = 0.50;
@@ -2454,6 +2491,7 @@ mod tests {
 
     #[test]
     fn smart_strategy_harvest_15_min_bucket_avoids_clock_seam() {
+        let _l = lock_in_flight();
         let now = 1789560120.0;
         let pool = Pool::default();
 
@@ -2503,6 +2541,7 @@ mod tests {
 
     #[test]
     fn max_quota_smooth_weekly_transition_no_cliff_at_80_pct() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -2613,6 +2652,7 @@ mod tests {
 
     #[test]
     fn max_quota_total_pace_tie_breaker() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
@@ -2723,6 +2763,7 @@ mod tests {
 
     #[test]
     fn ordering_ties_match_go() {
+        let _l = lock_in_flight();
         let now = 1789560000.0;
         let pool = Pool::default();
 
