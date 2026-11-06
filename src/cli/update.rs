@@ -100,9 +100,11 @@ async fn download(url_str: &str, token: &str) -> Result<Vec<u8>, String> {
 
         let current_host = uri.host().unwrap_or("").to_string();
 
+        // GitHub's API rejects requests without a User-Agent (403).
         let mut req_builder = hyper::http::Request::builder()
             .method(hyper::http::Method::GET)
-            .uri(&uri);
+            .uri(&uri)
+            .header(hyper::header::USER_AGENT, format!("agy-pool/{}", crate::VERSION));
 
         if current_url.contains("/releases/assets/") {
             req_builder = req_builder.header(hyper::header::ACCEPT, "application/octet-stream");
@@ -419,6 +421,20 @@ mod tests {
     use super::*;
     use crate::cli::test_support::{cli_test_env, run_cli};
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn download_sends_user_agent() {
+        // api.github.com answers 403 to requests without a User-Agent; Go's client always sent one.
+        let seen = Arc::new(Mutex::new(None));
+        let seen_c = seen.clone();
+        let server = crate::testutil::TestServer::start(move |req| {
+            *seen_c.lock().unwrap() = req.header("user-agent").map(str::to_string);
+            (200, vec![], b"[]".to_vec())
+        });
+        download(&format!("{}/releases", server.url()), "").await.unwrap();
+        let ua = seen.lock().unwrap().clone();
+        assert_eq!(ua.as_deref(), Some(format!("agy-pool/{}", crate::VERSION).as_str()));
+    }
 
     struct ResetUpdate;
     impl Drop for ResetUpdate {
