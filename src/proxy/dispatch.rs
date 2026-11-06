@@ -9,9 +9,9 @@ use crate::proxy::body::{ProxyBody, StreamBody, StreamBodyParams, send_buffered,
 use crate::proxy::usage::UsageTap;
 use crate::proxy::{
     RoutingEvent, attach_debug_headers, do_refresh_token, filepath_base, filter_request_headers, fmt_dur,
-    get_backend_host, get_backend_url, is_location_error, log_message, notify_audit, record_auth_error,
-    record_model_capacity_error, record_model_latency, record_quota_error, record_soft_cooldown, record_success,
-    record_validation_error, upstream_error_reason,
+    get_backend_url, is_location_error, log_message, notify_audit, record_auth_error, record_model_capacity_error,
+    record_model_latency, record_quota_error, record_soft_cooldown, record_success, record_validation_error,
+    upstream_error_reason,
 };
 use crate::storage::{Account, LeaseGuard, STATUS_VERIFICATION_PENDING};
 
@@ -139,7 +139,6 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         for (k, v) in filtered_headers.iter() {
             up_req = up_req.header(k, v);
         }
-        up_req = up_req.header(hyper::header::HOST, get_backend_host());
         up_req = up_req.header(hyper::header::CONNECTION, "close");
 
         let body_full = http_body_util::Full::new(Bytes::copy_from_slice(params.body));
@@ -184,7 +183,6 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         for (k, v) in filtered_headers.iter() {
             up_req = up_req.header(k, v);
         }
-        up_req = up_req.header(hyper::header::HOST, get_backend_host());
 
         let body_full = http_body_util::Full::new(Bytes::copy_from_slice(params.body));
         let start = Instant::now();

@@ -80,10 +80,14 @@ impl TestServer {
                                         let mut headers = HashMap::new();
                                         for (name, val) in req.headers() {
                                             if let Ok(v) = val.to_str() {
-                                                headers.insert(
-                                                    name.as_str().to_ascii_lowercase(),
-                                                    v.to_string(),
-                                                );
+                                                // Join repeats like HTTP does so duplicate headers stay visible to tests.
+                                                headers
+                                                    .entry(name.as_str().to_ascii_lowercase())
+                                                    .and_modify(|e: &mut String| {
+                                                        e.push_str(", ");
+                                                        e.push_str(v);
+                                                    })
+                                                    .or_insert_with(|| v.to_string());
                                             }
                                         }
                                         let body_bytes = match http_body_util::BodyExt::collect(

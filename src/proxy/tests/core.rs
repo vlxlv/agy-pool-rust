@@ -239,6 +239,63 @@ async fn test_buffered_response_success_and_counters() {
 }
 
 #[tokio::test]
+async fn test_upstream_request_sends_exactly_one_host_header() {
+    // Google's front end answers a duplicate Host with an HTML 400 (seen on loadCodeAssist).
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    let _dir = setup_isolated_test_dir();
+
+    let hosts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hosts_c = hosts.clone();
+    let server = TestServer::start(move |req| {
+        hosts_c
+            .lock()
+            .unwrap()
+            .push((req.path.clone(), req.header("host").map(str::to_string)));
+        (
+            200,
+            vec![("content-type".to_string(), "application/json".to_string())],
+            b"{}".to_vec(),
+        )
+    });
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|_| Ok("tok".to_string()));
+
+    let acc = Account {
+        id: "acc_1".to_string(),
+        email: "dev@example.com".to_string(),
+        ..Default::default()
+    };
+    let pool = Pool {
+        accounts: vec![acc.clone()],
+        active_account_id: Some(acc.id.clone()),
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    for path in ["/v1internal:loadCodeAssist", "/v1/models/gemini:generateContent"] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            hyper::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(hyper::header::HOST, HeaderValue::from_static("127.0.0.1:8899"));
+        let (status, _, _) = serve_once(handler.clone(), Method::POST, path, headers, Bytes::from_static(b"{}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+    }
+
+    let hosts = hosts.lock().unwrap();
+    assert_eq!(hosts.len(), 2, "{hosts:?}");
+    for (path, host) in hosts.iter() {
+        let host = host.as_deref().unwrap_or_else(|| panic!("{path}: no Host header"));
+        assert!(!host.contains(','), "{path}: duplicate Host header: {host}");
+        assert_eq!(host, crate::proxy::get_backend_host(), "{path}");
+    }
+}
+
+#[tokio::test]
 async fn test_proxy_generation_triggers_async_quota_refresh_for_stale_candidate() {
     let _lock = TEST_LOCK.lock().await;
     reset_in_flight();
