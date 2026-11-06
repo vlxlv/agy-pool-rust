@@ -30,12 +30,17 @@ fn get_rust_bin() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_agy-pool"))
 }
 
+/// Ports already handed out in this test process; the port is released before a daemon binds it.
+static HANDED_OUT_PORTS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+
 fn get_ephemeral_port() -> u16 {
     loop {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        if port != 8899 && port != 8901 && port > 1024 {
+        let mut used = HANDED_OUT_PORTS.lock().unwrap();
+        if port != 8899 && port != 8901 && port > 1024 && !used.contains(&port) {
+            used.push(port);
             return port;
         }
     }

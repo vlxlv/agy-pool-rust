@@ -80,12 +80,18 @@ impl Drop for ServerGuard {
     }
 }
 
+/// Ports already handed to a server in this test process. The port is released before the server binds it,
+/// so without this two parallel tests can be given the same port.
+static HANDED_OUT_PORTS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+
 fn get_ephemeral_port() -> u16 {
     loop {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        if port != 8899 && port != 8901 {
+        let mut used = HANDED_OUT_PORTS.lock().unwrap();
+        if port != 8899 && port != 8901 && !used.contains(&port) {
+            used.push(port);
             return port;
         }
     }
@@ -152,7 +158,22 @@ fn spawn_proxy_test_server(bin: &Path, state_dir: &Path, backend_url: &str) -> (
 
         match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(line) if line.trim() == "READY" => {
-                return (guard, port);
+                // Go's proxy-test-server prints READY before it binds; a server that lost the port exits
+                // right away, and requests would reach another test's server.
+                std::thread::sleep(Duration::from_millis(200));
+                let mut guard = guard;
+                let exited = guard
+                    .child
+                    .as_mut()
+                    .is_some_and(|c| matches!(c.try_wait(), Ok(Some(_))));
+                if !exited {
+                    return (guard, port);
+                }
+                if attempt < 4 {
+                    drop(guard);
+                    continue;
+                }
+                panic!("server exited right after READY (attempt {attempt})");
             }
             other => {
                 if attempt < 4 {
