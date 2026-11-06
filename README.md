@@ -24,7 +24,7 @@ Release binaries and `.deb` packages are on the [releases page](https://github.c
 
 ### Release binary
 
-Download the binary for your platform from the [releases page](https://github.com/vlxlv/agy-pool-rust/releases) (`agy-pool-linux-amd64`, `agy-pool-linux-arm64`, `agy-pool-darwin-amd64`, `agy-pool-darwin-arm64`), check it against `SHA256SUMS`, then run `install` as below:
+Download the binary for your platform from the [releases page](https://github.com/vlxlv/agy-pool-rust/releases) (`agy-pool-linux-amd64`, `agy-pool-linux-arm64`), check it against `SHA256SUMS`, then run `install` as below:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
