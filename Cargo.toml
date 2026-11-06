@@ -33,8 +33,13 @@ pbkdf2 = "0.13.0"
 hmac = "0.13.0"
 getrandom = "0.4.3"
 
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["logging", "tls12", "ring"] }
+rustls-native-certs = "0.8.5"
+tower-service = "0.3.3"
+
 [dev-dependencies]
 tempfile = "3.27.0"
+rcgen = "0.14.10"
 
 [profile.release]
 strip = true

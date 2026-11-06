@@ -1,26 +1,13 @@
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client as HyperClient;
-use hyper_util::client::legacy::connect::HttpConnector;
 
-pub type Client = HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>;
-
-static CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    let https = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_native_roots()
-        .expect("failed to load native root certs")
-        .https_or_http()
-        .enable_http1()
-        .build();
-    HyperClient::builder(hyper_util::rt::TokioExecutor::new()).build(https)
-});
+pub type Client = HyperClient<crate::upstream::ProxyConnector, Full<Bytes>>;
 
 pub fn client() -> &'static Client {
-    &CLIENT
+    crate::upstream::pooled_client()
 }
 
 #[derive(Debug)]

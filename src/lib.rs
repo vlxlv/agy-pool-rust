@@ -11,6 +11,7 @@ pub mod observability;
 pub mod quota;
 pub mod scheduler;
 pub mod storage;
+pub mod upstream;
 
 #[cfg(test)]
 pub mod testutil;
