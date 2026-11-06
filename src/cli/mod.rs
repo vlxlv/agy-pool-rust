@@ -229,6 +229,43 @@ fn print_help(out: &mut dyn Write) {
     );
 }
 
+/// Commands with no help of their own; `-h`/`--help` used to be ignored and the command ran
+/// (`switch --help` switched accounts), so these print the global help instead.
+const COMMANDS_USING_GLOBAL_HELP: &[&str] = &[
+    "doctor",
+    "check",
+    "health",
+    "login",
+    "add",
+    "import-current",
+    "list",
+    "ls",
+    "quota",
+    "top",
+    "watch",
+    "monitor",
+    "strategy",
+    "strat",
+    "rename",
+    "remove",
+    "rm",
+    "disable",
+    "enable",
+    "switch",
+    "export",
+    "backup",
+    "import",
+    "restore",
+    "verify",
+    "log",
+    "logs",
+    "start",
+    "stop",
+    "restart",
+    "status",
+    "migrate-legacy",
+];
+
 pub async fn main(args: &[String], io: &mut Io<'_>) -> i32 {
     if std::env::var("AGY_POOL_DAEMON_CHILD").as_deref() == Ok("1") {
         return crate::daemon::run_daemon_child(&mut io.stderr);
@@ -239,6 +276,16 @@ pub async fn main(args: &[String], io: &mut Io<'_>) -> i32 {
     }
 
     let cmd = &args[0];
+
+    if COMMANDS_USING_GLOBAL_HELP.contains(&cmd.as_str())
+        && args[1..]
+            .iter()
+            .take_while(|a| *a != "--")
+            .any(|a| a == "-h" || a == "--help")
+    {
+        print_help(io.stdout);
+        return 0;
+    }
 
     match cmd.as_str() {
         "-v" | "--version" | "version" => {
@@ -505,6 +552,25 @@ mod tests {
                 "{h_flag:?} expected usage text, got {stdout:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn help_flag_on_command_without_own_help_prints_help_instead_of_running() {
+        let _env = crate::cli::test_support::cli_test_env();
+
+        for cmd in COMMANDS_USING_GLOBAL_HELP {
+            for flag in ["--help", "-h"] {
+                let (code, stdout, stderr) = crate::cli::test_support::run_cli(&[cmd, "1", flag], "").await;
+                assert_eq!(code, 0, "{cmd} {flag}: exit {code}, stderr: {stderr}");
+                assert!(
+                    stdout.contains("usage: agy-pool"),
+                    "{cmd} {flag}: no usage text, got {stdout:?}"
+                );
+            }
+        }
+        // After `--` the flag is an argument, not a help request.
+        let (_code, stdout, _stderr) = crate::cli::test_support::run_cli(&["rename", "--", "--help"], "").await;
+        assert!(!stdout.contains("usage: agy-pool ["), "got {stdout:?}");
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ Go test names refer to agy-pool-go as of the split (commit `0d9e320` on its `rus
 
 - **installer**: the "not a regular file or symlink" refusal prints the file mode in octal; Go prints `os.FileMode` (e.g. `drwxr-xr-x`).
 - **update**: in test builds `github_token()` never runs `gh auth token` (Go does), so tests never pick up a real token.
+- **`-h` / `--help` after a command**: commands without their own help (`switch`, `remove`, `start`, `list`, …) print the global help and exit 0. Go ignored the flag and ran the command, so `agy-pool switch 2 --help` switched accounts.
 - **quota footer**: hardcodes the default port 8899 like Go, so an instance on another port shows the wrong address there.
 
 ## internal/proxy/transport_test.go
