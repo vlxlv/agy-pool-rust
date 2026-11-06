@@ -2804,7 +2804,17 @@ mod tests {
             };
 
             let args = vec!["-D".to_string(), data_dir.display().to_string()];
-            let _ = top_cmd(&mut io, &args).await;
+            let code = tokio::time::timeout(Duration::from_secs(10), top_cmd(&mut io, &args))
+                .await
+                .unwrap_or_else(|_| panic!("top did not exit for action {action}"));
+            drop(io);
+            let want = if action == "render_error" { 1 } else { 0 };
+            assert_eq!(code, want, "exit code for action {action}");
+            // The alternate screen is only entered when the raw-mode guard was taken, so the restore check is not vacuous.
+            assert!(
+                String::from_utf8_lossy(&out_buf).contains("\x1b[?1049h"),
+                "raw mode was never entered for action {action}"
+            );
 
             // Check slave termios after exit
             let mut after_termios: libc::termios = unsafe { std::mem::zeroed() };
