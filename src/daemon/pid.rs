@@ -47,6 +47,22 @@ impl PidLock {
     }
 }
 
+static ENTRYPOINT_PROVIDER: std::sync::RwLock<Option<fn() -> PathBuf>> = std::sync::RwLock::new(None);
+
+pub fn set_entrypoint_provider(f: Option<fn() -> PathBuf>) {
+    let mut lock = ENTRYPOINT_PROVIDER.write().unwrap_or_else(|e| e.into_inner());
+    *lock = f;
+}
+
+pub fn entrypoint() -> PathBuf {
+    let lock = ENTRYPOINT_PROVIDER.read().unwrap_or_else(|e| e.into_inner());
+    if let Some(f) = *lock {
+        f()
+    } else {
+        get_entrypoint_path()
+    }
+}
+
 /// Returns the canonical path of the agy-pool binary.
 pub fn get_entrypoint_path() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {

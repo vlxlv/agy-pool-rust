@@ -263,7 +263,7 @@ pub fn resolve_instance_context(
         config_hash: cfg_hash,
         listen_host: final_listen_host,
         listen_port: final_port,
-        binary_path: super::pid::get_entrypoint_path(),
+        binary_path: super::pid::entrypoint(),
         version: crate::VERSION.to_string(),
     })
 }

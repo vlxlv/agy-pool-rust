@@ -1,7 +1,10 @@
 fn main() {
     if std::env::var("AGY_POOL_DAEMON_CHILD").as_deref() == Ok("1") {
         let code = agy_pool::daemon::run_daemon_child(&mut std::io::stderr());
-        std::process::exit(code);
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return;
     }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -13,78 +16,30 @@ fn main() {
 
 async fn async_main() {
     let args: Vec<String> = std::env::args().collect();
+    let stdin = std::io::stdin();
+    let mut stdin_lock = stdin.lock();
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
+    let mut io = agy_pool::cli::Io {
+        stdin: &mut stdin_lock,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+        stdout_fd: Some(1),
+        stdin_fd: Some(0),
+    };
+
     if args.len() > 1 {
-        match args[1].as_str() {
-            "-v" | "--version" | "version" => {
-                println!("agy-pool {}", agy_pool::VERSION);
-                return;
-            }
-            "proxy-test-server" => {
-                if args.len() < 5 {
-                    eprintln!("usage: agy-pool proxy-test-server <port> <state-dir> <backend-url>");
-                    std::process::exit(1);
-                }
-                let port = &args[2];
-                let state_dir = &args[3];
-                let backend_url = &args[4];
-
-                if let Err(e) = agy_pool::config::configure_state_dir(std::path::Path::new(state_dir)) {
-                    eprintln!("config error: {e}");
-                    std::process::exit(1);
-                }
-                let u = match url::Url::parse(backend_url) {
-                    Ok(u) => u,
-                    Err(e) => {
-                        eprintln!("invalid backend-url: {e}");
-                        std::process::exit(1);
-                    }
-                };
-                let host = u.host_str().unwrap_or("").to_string();
-                let port_suffix = u.port().map(|p| format!(":{p}")).unwrap_or_default();
-                let host_port = format!("{host}{port_suffix}");
-                agy_pool::proxy::set_backend_host(&host_port);
-                agy_pool::proxy::set_backend_url(backend_url);
-                agy_pool::proxy::set_token_refresher(|acc| Ok(format!("token-{}", acc.id)));
-
-                let addr: std::net::SocketAddr = match format!("127.0.0.1:{port}").parse() {
-                    Ok(a) => a,
-                    Err(e) => {
-                        eprintln!("invalid listen address: {e}");
-                        std::process::exit(1);
-                    }
-                };
-                let listener = match tokio::net::TcpListener::bind(addr).await {
-                    Ok(l) => l,
-                    Err(e) => {
-                        eprintln!("bind error: {e}");
-                        std::process::exit(1);
-                    }
-                };
-                println!("READY");
-
-                let handler = std::sync::Arc::new(agy_pool::proxy::Handler::new());
-                loop {
-                    let (stream, _) = match listener.accept().await {
-                        Ok(res) => res,
-                        Err(_) => break,
-                    };
-                    let io = hyper_util::rt::TokioIo::new(stream);
-                    let h = handler.clone();
-                    tokio::spawn(async move {
-                        let service = hyper::service::service_fn(move |req| {
-                            let h = h.clone();
-                            async move { Ok::<_, std::convert::Infallible>(h.serve(req).await) }
-                        });
-                        let _ = hyper::server::conn::http1::Builder::new()
-                            .serve_connection(io, service)
-                            .await;
-                    });
-                }
-                return;
-            }
-            _ => {}
+        let cmd = &args[1];
+        if (cmd.starts_with("eval-") || cmd == "proxy-test-server")
+            && agy_pool::cli::eval::handle_eval(cmd, &args[1..], &mut io).await
+        {
+            return;
         }
     }
-    eprintln!("agy-pool (rust): only --version and proxy-test-server are implemented yet");
-    std::process::exit(2);
+
+    let cli_args = if args.len() > 1 { &args[1..] } else { &[] };
+    let code = agy_pool::cli::main(cli_args, &mut io).await;
+    if code != 0 {
+        std::process::exit(code);
+    }
 }

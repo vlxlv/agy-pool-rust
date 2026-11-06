@@ -88,10 +88,7 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
         };
     }
 
-    let entrypoint = opts
-        .entrypoint_path
-        .clone()
-        .unwrap_or_else(super::pid::get_entrypoint_path);
+    let entrypoint = opts.entrypoint_path.clone().unwrap_or_else(super::pid::entrypoint);
 
     // 1. Check current instance status
     let mut was_restarted = false;
