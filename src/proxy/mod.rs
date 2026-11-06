@@ -602,7 +602,8 @@ pub fn set_log_writer_for_test(w: Box<dyn std::io::Write + Send + Sync>) -> LogW
 }
 
 pub fn log_message(prefix: &str, msg: &str) {
-    let now_str = jiff::Timestamp::now().strftime("%Y-%m-%d %H:%M:%S");
+    // Local time, like Go's time.Now().Format.
+    let now_str = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S");
     let line = format!("[{now_str}] [{prefix}] {msg}\n");
     let mut guard = LOG_WRITER.lock().unwrap();
     if let Some(w) = guard.as_mut() {

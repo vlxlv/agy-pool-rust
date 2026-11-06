@@ -258,7 +258,10 @@ pub fn export_pool(file_path: &str, encrypt: bool, password: &str, no_stats: boo
         let ext = if is_encrypt { ".enc" } else { ".json" };
         let now_sec = crate::clock::now_unix() as i64;
         let dt = jiff::Timestamp::from_second(now_sec).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
-        let date_str = dt.strftime("%Y%m%d_%H%M%S").to_string();
+        let date_str = dt
+            .to_zoned(jiff::tz::TimeZone::system())
+            .strftime("%Y%m%d_%H%M%S")
+            .to_string();
         format!("agy-pool-backup-{}{}", date_str, ext)
     } else {
         file_path.to_string()
