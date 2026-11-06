@@ -25,6 +25,7 @@ jobs:
   linux:
     name: Build Linux (${{ matrix.deb }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +46,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
+
+      - name: Install the Rust version pinned by Cargo.toml (rust-version)
+        run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal && rustup default "$v"
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
@@ -76,9 +83,16 @@ jobs:
   darwin:
     name: Build Darwin
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Install the Rust version pinned by Cargo.toml (rust-version)
+        run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$v"
+          rustup toolchain install "$v" --profile minimal && rustup default "$v"
 
       - name: Add Rust targets
         run: |
@@ -110,6 +124,7 @@ jobs:
     name: Checksums and Package Verification
     needs: [linux, darwin]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v8

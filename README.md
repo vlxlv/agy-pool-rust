@@ -144,7 +144,7 @@ scripts/test.sh clippy --all-targets -- -D warnings
 
 `scripts/test.sh` runs cargo in a user, mount and PID namespace in which the real state (`~/.local/share/agy-pool`, `~/.config/agy-pool`, `~/.gemini`, `~/.local/bin`, `~/.local/libexec/agy-pool`, shell rc files) is read-only, the running gateway is invisible, and `systemctl` is stubbed out. It refuses to run if any of that does not hold.
 
-CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clippy -D warnings` and the test suite on every push and pull request to `main`, plus a stress job that repeats the suite at 4, 16 and 64 threads to catch races. [`release-dry-run.yml`](.github/workflows/release-dry-run.yml) builds and verifies all release assets (4 binaries, 2 `.deb` packages, `SHA256SUMS`) without publishing.
+CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clippy -D warnings` and the test suite on every push and pull request to `main`, plus a stress job that repeats the suite at 4, 16 and 64 threads to catch races. [`release-dry-run.yml`](.github/workflows/release-dry-run.yml) builds and verifies all release assets (4 binaries, 2 `.deb` packages, `SHA256SUMS`) without publishing, on the same pinned Rust version (`rust-version` in `Cargo.toml`) as the tests. [`audit.yml`](.github/workflows/audit.yml) checks the locked dependencies against the RustSec advisory database weekly and whenever `Cargo.lock` changes.
 
 ## License
 
