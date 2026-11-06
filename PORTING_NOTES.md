@@ -6,7 +6,7 @@ agy-pool-rust is a port of [agy-pool-go](https://github.com/vlxlv/agy-pool-go). 
 - which Go test each Rust test replaces, so a Go test name can be traced to its Rust counterpart;
 - Go tests that were not ported 1:1, why, and what covers them instead.
 
-Go test names refer to agy-pool-go as of the split (commit `0d9e320` on its `rust-rewrite` branch). That branch also keeps the Go-parity suites that ran both binaries side by side (`differential`, `interop`, `cli_golden`, `eval_differential`, `lifecycle_differential`); they were dropped here at the split because they need the Go tree.
+Go test names refer to agy-pool-go `main` as of the split (commit `3e8d49e`; its Go code is what the port was checked against). The Go-parity suites that ran both binaries side by side (`differential`, `interop`, `cli_golden`, `eval_differential`, `lifecycle_differential`) need the Go tree, so they were dropped at the split; they are in this repository's history up to the parent of commit `3d3cac5`. The design and phase plans of the rewrite are in [`docs/rewrite/`](docs/rewrite/).
 
 ## Known deviations
 
@@ -333,4 +333,4 @@ Go test names refer to agy-pool-go as of the split (commit `0d9e320` on its `rus
 
 ### `eval` subcommands
 
-The `eval-*` subcommands were checked against Go by `tests/eval_differential.rs`, which needs the Go binary and stays on agy-pool-go's `rust-rewrite` branch. The unit tests of each module they call (scheduler, quota, accounts, auth, crypto, daemon, conversation) cover them here.
+The `eval-*` subcommands were checked against Go by `tests/eval_differential.rs`, which needs the Go binary and was dropped at the split (see the top of this file). The unit tests of each module they call (scheduler, quota, accounts, auth, crypto, daemon, conversation) cover them here.
