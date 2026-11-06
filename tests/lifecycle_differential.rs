@@ -673,3 +673,43 @@ fn run_with_daemon_down_and_agy_missing_matches_go() {
         go_norm, rust_norm
     );
 }
+
+/// The daemon child must get the same AGY_* environment from Go and Rust `start`; an extra
+/// AGY_GEMINI_DIR would move the gateway's native agy root away from ~/.gemini.
+#[test]
+fn daemon_env_matches_go() {
+    let mut agy_keys = Vec::new();
+    for bin in [get_go_bin(), get_rust_bin()] {
+        let inst = TestInstance::new();
+        let out = inst
+            .command(bin)
+            .env_remove("AGY_GEMINI_DIR")
+            .args([
+                "start",
+                "-c",
+                inst.config_file.to_str().unwrap(),
+                "-D",
+                inst.data_dir.to_str().unwrap(),
+            ])
+            .output()
+            .expect("execute start");
+        assert!(
+            out.status.success(),
+            "start failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let pid = inst.record_pid_from_file().expect("PID file must exist");
+        let environ = std::fs::read(format!("/proc/{pid}/environ")).expect("read daemon environ");
+        let mut keys: Vec<String> = environ
+            .split(|b| *b == 0)
+            .filter_map(|kv| String::from_utf8_lossy(kv).split_once('=').map(|(k, _)| k.to_string()))
+            .filter(|k| k.starts_with("AGY_"))
+            .collect();
+        keys.sort();
+        agy_keys.push(keys);
+    }
+    assert_eq!(
+        agy_keys[0], agy_keys[1],
+        "daemon AGY_* env keys: Go (left) vs Rust (right)"
+    );
+}

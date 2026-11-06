@@ -154,13 +154,9 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
         }
     };
 
-    let gemini_dir = ctx.data_dir.join("gemini");
-    let _ = std::fs::create_dir_all(&gemini_dir);
-
     cmd.env(ENV_DAEMON_CHILD, "1");
     cmd.env("AGY_DATA_DIR", &ctx.data_dir);
     cmd.env("AGY_CONFIG_FILE", &config_path);
-    cmd.env("AGY_GEMINI_DIR", &gemini_dir);
     if ctx.listen_port > 0 {
         cmd.env(ENV_DAEMON_PORT, ctx.listen_port.to_string());
     }

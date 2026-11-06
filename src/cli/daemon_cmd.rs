@@ -161,16 +161,8 @@ pub async fn start_daemon_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
             return 1;
         }
     };
-    let opts = crate::daemon::LaunchOptions {
-        port: ctx.listen_port,
-        state_dir: Some(ctx.data_dir.clone()),
-        config_file: ctx.config_path.clone(),
-        pid_file: Some(ctx.pid_file()),
-        log_file: Some(ctx.log_file()),
-        entrypoint_path: None,
-        foreground: false,
-        custom_args: Vec::new(),
-    };
+    // As Go: empty options; start/restart fill them from the instance context.
+    let opts = crate::daemon::LaunchOptions::default();
     match crate::daemon::start_instance(&ctx, opts) {
         Ok(res) => {
             if res.already_run {
@@ -245,16 +237,8 @@ pub async fn restart_daemon_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
             return 1;
         }
     };
-    let opts = crate::daemon::LaunchOptions {
-        port: ctx.listen_port,
-        state_dir: Some(ctx.data_dir.clone()),
-        config_file: ctx.config_path.clone(),
-        pid_file: Some(ctx.pid_file()),
-        log_file: Some(ctx.log_file()),
-        entrypoint_path: None,
-        foreground: false,
-        custom_args: Vec::new(),
-    };
+    // As Go: empty options; start/restart fill them from the instance context.
+    let opts = crate::daemon::LaunchOptions::default();
     match crate::daemon::restart_instance(&ctx, opts) {
         Ok(res) => {
             let _ = writeln!(

@@ -122,16 +122,8 @@ pub async fn run_agy_with_lb(io: &mut Io<'_>, extra: &[String]) -> i32 {
                 "{}[agy-pool] Outdated daemon detected; reloading...{}",
                 CLR_YELLOW, CLR_RESET
             );
-            let opts = crate::daemon::LaunchOptions {
-                port: ctx.listen_port,
-                state_dir: Some(ctx.data_dir.clone()),
-                config_file: ctx.config_path.clone(),
-                pid_file: Some(ctx.pid_file()),
-                log_file: Some(ctx.log_file()),
-                entrypoint_path: None,
-                foreground: false,
-                custom_args: Vec::new(),
-            };
+            // As Go: empty options; start/restart fill them from the instance context.
+            let opts = crate::daemon::LaunchOptions::default();
             if let Err(e) = crate::daemon::restart_instance(&ctx, opts) {
                 let _ = writeln!(
                     io.stderr,
@@ -171,16 +163,8 @@ pub async fn run_agy_with_lb(io: &mut Io<'_>, extra: &[String]) -> i32 {
         // As Go: a daemon with legacy metadata is running, so leave it alone.
         crate::daemon::InstanceStatus::LegacyPID => {}
         crate::daemon::InstanceStatus::Stopped | crate::daemon::InstanceStatus::StalePID => {
-            let opts = crate::daemon::LaunchOptions {
-                port: ctx.listen_port,
-                state_dir: Some(ctx.data_dir.clone()),
-                config_file: ctx.config_path.clone(),
-                pid_file: Some(ctx.pid_file()),
-                log_file: Some(ctx.log_file()),
-                entrypoint_path: None,
-                foreground: false,
-                custom_args: Vec::new(),
-            };
+            // As Go: empty options; start/restart fill them from the instance context.
+            let opts = crate::daemon::LaunchOptions::default();
             if let Err(e) = crate::daemon::start_instance(&ctx, opts)
                 && !crate::config::is_test_mode()
             {
