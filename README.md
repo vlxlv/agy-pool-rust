@@ -22,7 +22,7 @@ Release binaries and `.deb` packages are on the [releases page](https://github.c
 
 ## Performance Benchmark (Rust vs. Go)
 
-Automated side-by-side benchmark from GitHub Actions ([Run #42256839654](https://github.com/vlxlv/agy-pool-rust/actions/runs/42256839654)), testing cold start, resource footprint, and HTTP proxy throughput under high concurrency (5,000 requests, concurrency = 20) on Ubuntu Linux (`x86_64`):
+Automated side-by-side benchmark from GitHub Actions ([Benchmark Suite](https://github.com/vlxlv/agy-pool-rust/actions/workflows/benchmark.yml)), testing cold start, resource footprint, and HTTP proxy throughput under high concurrency (5,000 requests, concurrency = 20) on Ubuntu Linux (`x86_64`):
 
 ```mermaid
 xychart-beta
@@ -39,7 +39,7 @@ xychart-beta
     line "Throughput" [100, 114.0]
 ```
 
-> **指标说明（以 Go 100% 为基准，实测数据源自 [Run #42256839654](https://github.com/vlxlv/agy-pool-rust/actions/runs/42256839654)）：**
+> **指标说明（以 Go 100% 为基准，实测数据源自 [Benchmark Suite](https://github.com/vlxlv/agy-pool-rust/actions/workflows/benchmark.yml) / [scripts/benchmark-compare.py](scripts/benchmark-compare.py)）：**
 > - **Cold Start（冷启动耗时）：** `0.72 ms` vs `2.00 ms`（**-64.0%**，仅占 Go 的 36.0%）
 > - **Idle RSS（空闲常驻内存）：** `5.78 MiB` vs `12.58 MiB`（**-54.0%**，仅占 Go 的 46.0%）
 > - **OS Threads（运行时系统线程）：** `5` vs `9`（**-44.4%**，仅占 Go 的 55.6%）
