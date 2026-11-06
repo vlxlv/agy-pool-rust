@@ -195,31 +195,34 @@ pub fn redact_user_url(raw: &str) -> (String, bool) {
 fn print_help(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "usage: agy-pool [-h] [-v] {{login,add,import-current,list,ls,quota,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,forecast,runway,predict,top,watch,monitor,update,version,run}} ...\n\n\
-Antigravity Multi-Account Pool & Load Balancer for Termux & Linux\n\n\
-Examples:\n\
-  agy-pool login            Add/login a new Google account\n\
-  agy-pool list [-e]        List accounts in rotation pool (-e to show email)\n\
-  agy-pool quota [-e]       Display per-account quota progress bars (-e to show email)\n\
-  agy-pool top [-e]         Interactive real-time quota & activity dashboard (-e to show email)\n\
-  agy-pool stats [--json]   Track and evaluate algorithm routing and rotation effectiveness\n\
-  agy-pool forecast         Predict quota endurance and runway based on usage\n\
-  agy-pool status           Show gateway process and runtime summary\n\
-  agy-pool update [--check] Update agy-pool to the latest GitHub release\n\
-  agy-pool strategy         View or change load balancing strategy\n\
-  agy-pool rename 1 \"Work\"  Set friendly label for an account\n\
-  agy-pool move 2 top       Move account to a specific position\n\
-  agy-pool swap 1 2         Swap positions of two accounts\n\
-  agy-pool sort smart       Sort accounts by smart (renewal priority), quota, hits, name, email, or status\n\
-  agy-pool reorder 3 1 2    Batch reorder accounts in custom order\n\
-  agy-pool disable 4        Disable an account in rotation pool\n\
-  agy-pool enable 4         Enable a previously disabled account\n\
-  agy-pool doctor           Run comprehensive system diagnostic check\n\
-  agy-pool switch auto      Switch CLI base account to the one with highest quota\n\
-  agy-pool export           Export accounts pool to a backup JSON file\n\
-  agy-pool import file.json Restore accounts pool from a backup file\n\
-  agy-pool start            Start the load balancing reverse proxy daemon\n\
-  agy-pool run              Launch agy with automated quota load balancing\n"
+        "{}",
+        concat!(
+            "usage: agy-pool [-h] [-v] {login,add,import-current,list,ls,quota,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,forecast,runway,predict,top,watch,monitor,update,version,run} ...\n\n",
+            "Antigravity Multi-Account Pool & Load Balancer for Termux & Linux\n\n",
+            "Examples:\n",
+            "  agy-pool login            Add/login a new Google account\n",
+            "  agy-pool list [-e]        List accounts in rotation pool (-e to show email)\n",
+            "  agy-pool quota [-e]       Display per-account quota progress bars (-e to show email)\n",
+            "  agy-pool top [-e]         Interactive real-time quota & activity dashboard (-e to show email)\n",
+            "  agy-pool stats [--json]   Track and evaluate algorithm routing and rotation effectiveness\n",
+            "  agy-pool forecast         Predict quota endurance and runway based on usage\n",
+            "  agy-pool status           Show gateway process and runtime summary\n",
+            "  agy-pool update [--check] Update agy-pool to the latest GitHub release\n",
+            "  agy-pool strategy         View or change load balancing strategy\n",
+            "  agy-pool rename 1 \"Work\"  Set friendly label for an account\n",
+            "  agy-pool move 2 top       Move account to a specific position\n",
+            "  agy-pool swap 1 2         Swap positions of two accounts\n",
+            "  agy-pool sort smart       Sort accounts by smart (renewal priority), quota, hits, name, email, or status\n",
+            "  agy-pool reorder 3 1 2    Batch reorder accounts in custom order\n",
+            "  agy-pool disable 4        Disable an account in rotation pool\n",
+            "  agy-pool enable 4         Enable a previously disabled account\n",
+            "  agy-pool doctor           Run comprehensive system diagnostic check\n",
+            "  agy-pool switch auto      Switch CLI base account to the one with highest quota\n",
+            "  agy-pool export           Export accounts pool to a backup JSON file\n",
+            "  agy-pool import file.json Restore accounts pool from a backup file\n",
+            "  agy-pool start            Start the load balancing reverse proxy daemon\n",
+            "  agy-pool run              Launch agy with automated quota load balancing\n",
+        )
     );
 }
 
