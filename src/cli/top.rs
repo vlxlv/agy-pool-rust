@@ -2807,7 +2807,6 @@ mod tests {
             let code = tokio::time::timeout(Duration::from_secs(10), top_cmd(&mut io, &args))
                 .await
                 .unwrap_or_else(|_| panic!("top did not exit for action {action}"));
-            drop(io);
             let want = if action == "render_error" { 1 } else { 0 };
             assert_eq!(code, want, "exit code for action {action}");
             // The alternate screen is only entered when the raw-mode guard was taken, so the restore check is not vacuous.
