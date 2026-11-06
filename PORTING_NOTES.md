@@ -1,6 +1,18 @@
 # Porting Notes
 
-This document records Go tests and internals that are not ported 1:1 into the Rust codebase, explaining why each does not directly apply to Rust and documenting the covering Rust test.
+agy-pool-rust is a port of [agy-pool-go](https://github.com/vlxlv/agy-pool-go). This file records:
+
+- where the Rust behaviour knowingly differs from Go (**Known deviations**, below);
+- which Go test each Rust test replaces, so a Go test name can be traced to its Rust counterpart;
+- Go tests that were not ported 1:1, why, and what covers them instead.
+
+Go test names refer to agy-pool-go as of the split (commit `0d9e320` on its `rust-rewrite` branch). That branch also keeps the Go-parity suites that ran both binaries side by side (`differential`, `interop`, `cli_golden`, `eval_differential`, `lifecycle_differential`); they were dropped here at the split because they need the Go tree.
+
+## Known deviations
+
+- **installer**: the "not a regular file or symlink" refusal prints the file mode in octal; Go prints `os.FileMode` (e.g. `drwxr-xr-x`).
+- **update**: in test builds `github_token()` never runs `gh auth token` (Go does), so tests never pick up a real token.
+- **quota footer**: hardcodes the default port 8899 like Go, so an instance on another port shows the wrong address there.
 
 ## internal/proxy/transport_test.go
 
@@ -48,11 +60,11 @@ This document records Go tests and internals that are not ported 1:1 into the Ru
 
 1. **TestMain**
    - **Reason**: Go test runner hook (`testing.M`) for global test process initialization and cleanup. Not applicable in Rust, which uses cargo's test harness with scoped `TestEnvGuard` / `crate::config::TEST_LOCK` isolation per test.
-   - **Covering Rust mechanism**: `crate::daemon::test_env` RAII guard and `scripts/rust-test.sh` unshare sandbox.
+   - **Covering Rust mechanism**: `crate::daemon::test_env` RAII guard and `scripts/test.sh` namespace sandbox.
 
 2. **TestHelperMultiProcess**
    - **Reason**: Go sub-process trampoline (`GO_WANT_HELPER_PROCESS=1`) called via `os.Args` to simulate separate daemon binaries in Go's single-binary test runner. In Rust, multi-process tests either invoke real background binaries or run in dedicated integration test targets (`tests/daemon_child.rs`).
-   - **Covering Rust test**: `rust/tests/daemon_child.rs:test_daemon_child_production_lifecycle` and `lifecycle::tests::test_multi_instance_subprocess_lifecycle`.
+   - **Covering Rust test**: `tests/daemon_child.rs::test_daemon_child_production_lifecycle` and `lifecycle::tests::test_multi_instance_subprocess_lifecycle`.
 
 ### 50 Ported Tests (Go -> Rust Mapping)
 
@@ -112,7 +124,6 @@ This document records Go tests and internals that are not ported 1:1 into the Ru
 ### Additional Safety and Integration Tests
 - `daemon::lifecycle::tests::send_signal_refuses_live_gateway_pid` (refuses signal delivery to live host gateway PID)
 - `daemon::systemd::tests::systemctl_refused_in_tests` (panics unconditionally in test builds)
-- `tests/daemon_child.rs::second_rust_gateway_refused_while_go_runs` (cross-runtime binary port-collision detection)
 - `daemon::server::tests::test_run_foreground_refuses_production_port_in_test_mode` (prevents binding production port 8899 in tests)
 
 ## internal/diagnostics (System Doctor, Effectiveness, Routing Audit)
@@ -161,160 +172,164 @@ This document records Go tests and internals that are not ported 1:1 into the Ru
 | `TestTemporalAudit_J_PrivacyNoSensitiveData` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_j_privacy_no_sensitive_data` |
 | `TestTemporalAudit_K_LegacySemanticsIntact` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_k_legacy_semantics_intact` |
 
+## CLI (`internal/cli`, `internal/installer`)
 
-## Phase 4 (CLI)
+### CLI core: help, doctor, verify, text width, QR code, bars
 
-### Task 17
-TestVersionAndHelp -> crate::cli::tests::test_version_and_help
-TestUnknownCommandAndInvalidChoice -> crate::cli::tests::test_unknown_command_and_invalid_choice
-TestDoctorCommand -> crate::cli::tests::test_doctor_command
-TestDoctorCmd_BehaviorUnchanged -> crate::cli::tests::test_doctor_cmd_behavior_unchanged
-TestVerifyCmd_SuccessClearsRestriction -> crate::cli::tests::test_verify_cmd_success_clears_restriction
-TestVerifyCmd_PersistenceFailureExitsNonZero -> crate::cli::tests::test_verify_cmd_persistence_failure_exits_non_zero
-TestWidth_RuneWidth -> crate::cli::width::tests::test_rune_width
-TestWidth_VisibleWidth -> crate::cli::width::tests::test_visible_width
-TestWidth_TruncateVisible -> crate::cli::width::tests::test_truncate_visible
-TestWidth_StripANSI -> crate::cli::width::tests::test_strip_ansi
-TestRenderTerminalQRCode_SkipsOnEmpty -> crate::cli::qrcode::tests::test_render_terminal_qr_code_skips_on_empty
-TestRenderTerminalQRCode_ForcedViaEnv -> crate::cli::qrcode::tests::test_render_terminal_qr_code_forced_via_env
-TestRenderTerminalQRCode_SkipsOnNonTTYByDefault -> crate::cli::qrcode::tests::test_render_terminal_qr_code_skips_on_non_tty_by_default
-TestRedactUserURL -> crate::cli::tests::test_redact_user_url
-TestCP1DVerifyRedactsSensitiveURL -> crate::cli::tests::test_cp1d_verify_redacts_sensitive_url
-TestCP1DRequiredCommandFailures -> crate::cli::tests::test_cp1d_required_command_failures
-TestChooseBarWidth -> crate::cli::render::tests::test_choose_bar_width
-TestGetAccountState_Protected -> crate::cli::render::tests::test_get_account_state_protected
-TestWeeklyBlockedDimsOtherBars -> crate::cli::render::tests::test_weekly_blocked_dims_other_bars
+| Go test | Rust test |
+| --- | --- |
+| `TestVersionAndHelp` | `cli::tests::test_version_and_help` |
+| `TestUnknownCommandAndInvalidChoice` | `cli::tests::test_unknown_command_and_invalid_choice` |
+| `TestDoctorCommand` | `cli::tests::test_doctor_command` |
+| `TestDoctorCmd_BehaviorUnchanged` | `cli::tests::test_doctor_cmd_behavior_unchanged` |
+| `TestVerifyCmd_SuccessClearsRestriction` | `cli::tests::test_verify_cmd_success_clears_restriction` |
+| `TestVerifyCmd_PersistenceFailureExitsNonZero` | `cli::tests::test_verify_cmd_persistence_failure_exits_non_zero` |
+| `TestWidth_RuneWidth` | `cli::width::tests::test_rune_width` |
+| `TestWidth_VisibleWidth` | `cli::width::tests::test_visible_width` |
+| `TestWidth_TruncateVisible` | `cli::width::tests::test_truncate_visible` |
+| `TestWidth_StripANSI` | `cli::width::tests::test_strip_ansi` |
+| `TestRenderTerminalQRCode_SkipsOnEmpty` | `cli::qrcode::tests::test_render_terminal_qr_code_skips_on_empty` |
+| `TestRenderTerminalQRCode_ForcedViaEnv` | `cli::qrcode::tests::test_render_terminal_qr_code_forced_via_env` |
+| `TestRenderTerminalQRCode_SkipsOnNonTTYByDefault` | `cli::qrcode::tests::test_render_terminal_qr_code_skips_on_non_tty_by_default` |
+| `TestRedactUserURL` | `cli::tests::test_redact_user_url` |
+| `TestCP1DVerifyRedactsSensitiveURL` | `cli::tests::test_cp1d_verify_redacts_sensitive_url` |
+| `TestCP1DRequiredCommandFailures` | `cli::tests::test_cp1d_required_command_failures` |
+| `TestChooseBarWidth` | `cli::render::tests::test_choose_bar_width` |
+| `TestGetAccountState_Protected` | `cli::render::tests::test_get_account_state_protected` |
+| `TestWeeklyBlockedDimsOtherBars` | `cli::render::tests::test_weekly_blocked_dims_other_bars` |
 
-### Task 18
-TestRenameCommand -> crate::cli::accounts::tests::test_rename_command
-TestDisableAndEnableCommand -> crate::cli::accounts::tests::test_disable_and_enable_command
-TestDisabledAccount_QuotaAndListRendering -> crate::cli::accounts::tests::test_disabled_account_quota_and_list_rendering
-TestListAccounts_EmptyAndPopulated -> crate::cli::accounts::tests::test_list_accounts_empty_and_populated
-TestMigrateLegacyCommand -> crate::cli::accounts::tests::test_migrate_legacy_command
-TestTerminalWidth_NonTTY -> crate::cli::accounts::tests::test_terminal_width_non_tty
-TestListAccounts_ResponsiveWidths -> crate::cli::accounts::tests::test_list_accounts_responsive_widths
-TestLogin_BrowserOpenerSucceeds_HTTPCallbackSucceeds -> crate::cli::accounts::tests::test_login_browser_opener_succeeds_http_callback_succeeds
-TestLogin_BrowserOpenerFails_ManualRawCodeSucceeds -> crate::cli::accounts::tests::test_login_browser_opener_fails_manual_raw_code_succeeds
-TestLogin_BrowserOpenerFails_PastedCallbackURLSucceeds -> crate::cli::accounts::tests::test_login_browser_opener_fails_pasted_callback_url_succeeds
-TestLogin_Timeout -> crate::cli::accounts::tests::test_login_timeout
-TestLogin_OAuthCallbackError -> crate::cli::accounts::tests::test_login_oauth_callback_error
-TestLogin_NoTokenOrSecretLeakage -> crate::cli::accounts::tests::test_login_no_token_or_secret_leakage
-TestLogin_ExistingAccountUpdate -> crate::cli::accounts::tests::test_login_existing_account_update
-TestQuotaDashboard_EdgeCasesAndLayouts -> crate::cli::accounts::tests::test_quota_dashboard_edge_cases_and_layouts
-TestRenderRepresentativeWidths -> crate::cli::accounts::tests::test_render_representative_widths
-TestListAccounts_NextCandidateTag -> crate::cli::accounts::tests::test_list_accounts_next_candidate_tag
-TestListCmd_CompactAndPrivacy -> crate::cli::accounts::tests::test_list_cmd_compact_and_privacy
-TestListCmd_ShowEmail -> crate::cli::accounts::tests::test_list_cmd_show_email
-TestQuotaUnknownIsExplicitAcrossLayouts -> crate::cli::accounts::tests::test_quota_unknown_is_explicit_across_layouts
-TestQuotaPartialWindowsDisplayIndependently -> crate::cli::accounts::tests::test_quota_partial_windows_display_independently
-TestQuotaCmd_ContainsProgressBars -> crate::cli::accounts::tests::test_quota_cmd_contains_progress_bars
-TestQuotaCmd_ShowEmail -> crate::cli::accounts::tests::test_quota_cmd_show_email
-TestQuotaCmd_AutoHidesUnusedThirdPartyWindows -> crate::cli::accounts::tests::test_quota_cmd_auto_hides_unused_third_party_windows
-TestQuotaCmd_SkipsLiveFetchForFreshSnapshots -> crate::cli::accounts::tests::test_quota_cmd_skips_live_fetch_for_fresh_snapshots
-TestResolveNextCandidateID_SkipsDaemonPausedAccounts -> crate::cli::accounts::tests::test_resolve_next_candidate_id_skips_daemon_paused_accounts
-TestResolveNextCandidateID_FollowsDaemonSmartRotation -> crate::cli::accounts::tests::test_resolve_next_candidate_id_follows_daemon_smart_rotation
-list_and_quota_on_non_tty_use_go_default_width -> crate::cli::accounts::tests::list_and_quota_on_non_tty_use_go_default_width
+### Accounts: list, quota, rename, enable/disable, login
 
-### Task 19
-TestStrategyCommand -> crate::cli::status::tests::test_strategy_command
-TestStatusCmd_NoQuotaBarsAndDashboard -> crate::cli::status::tests::test_status_cmd_no_quota_bars_and_dashboard
-TestStatusCmd_RunningDaemonWithRuntimeStats -> crate::cli::status::tests::test_status_cmd_running_daemon_with_runtime_stats
-TestStatusCmd_RunningDaemonStatsFromDaemonNotCLI -> crate::cli::status::tests::test_status_cmd_running_daemon_stats_from_daemon_not_cli
-TestStatusCmd_RunningDaemonStatsUnavailable -> crate::cli::status::tests::test_status_cmd_running_daemon_stats_unavailable
-TestAuditRouting_RemovedFromCLI -> crate::cli::status::tests::test_audit_routing_removed_from_cli
-TestCLI_Status_MultiInstance -> crate::cli::status::tests::test_cli_status_multi_instance
-TestCLI_Stop_CrossInstanceRejection -> crate::cli::daemon_cmd::tests::test_cli_stop_cross_instance_rejection
-TestObservability_CaseO_StatusVerboseAndPrivacy -> crate::cli::status::tests::test_observability_case_o_status_verbose_and_privacy
-TestLogsCommand -> crate::cli::daemon_cmd::tests::test_logs_command
-TestDaemonRun_RemovedFromCLI -> crate::cli::daemon_cmd::tests::test_daemon_run_removed_from_cli
-TestRunWrapperAndAgyDirect -> crate::cli::run::tests::test_run_wrapper_and_agy_direct
-TestParseRunArgs -> crate::cli::run::tests::test_parse_run_args
-TestRunArgumentScopingAndDelimiter -> crate::cli::run::tests::test_run_argument_scoping_and_delimiter
-TestRunTopLevelOptionsRejected -> crate::cli::run::tests::test_run_top_level_options_rejected
-TestRunBareContinueResolvesConversation -> crate::cli::run::tests::test_run_bare_continue_resolves_conversation
-TestFindRealAgyBinaryExcludesShims -> crate::cli::run::tests::test_find_real_agy_binary_excludes_shims
-TestRunAgyWithLB_ArgumentPreservation -> crate::cli::run::tests::test_run_agy_with_lb_argument_preservation
-TestRunAgyWithLB_ResolvesManagedNativeBinary -> crate::cli::run::tests::test_run_agy_with_lb_resolves_managed_native_binary
-TestRunAgyDirect_ResolvesManagedNativeBinary -> crate::cli::run::tests::test_run_agy_direct_resolves_managed_native_binary
-TestRunAgyWithLB_ValidSyncExecutesAgy -> crate::cli::run::tests::test_run_agy_with_lb_valid_sync_executes_agy
-TestRunAgyWithLB_SyncFailureAborts -> crate::cli::run::tests::test_run_agy_with_lb_sync_failure_aborts
-TestUpdateCmd -> crate::cli::update::tests::test_update_cmd
-TestCP1DRunSyncFailureDoesNotExec -> crate::cli::run::tests::test_cp1d_run_sync_failure_does_not_exec
-update_checksum_mismatch_leaves_binary_untouched -> crate::cli::update::tests::update_checksum_mismatch_leaves_binary_untouched
-update_download_failure_leaves_binary_untouched -> crate::cli::update::tests::update_download_failure_leaves_binary_untouched
+| Go test | Rust test |
+| --- | --- |
+| `TestRenameCommand` | `cli::accounts::tests::test_rename_command` |
+| `TestDisableAndEnableCommand` | `cli::accounts::tests::test_disable_and_enable_command` |
+| `TestDisabledAccount_QuotaAndListRendering` | `cli::accounts::tests::test_disabled_account_quota_and_list_rendering` |
+| `TestListAccounts_EmptyAndPopulated` | `cli::accounts::tests::test_list_accounts_empty_and_populated` |
+| `TestMigrateLegacyCommand` | `cli::accounts::tests::test_migrate_legacy_command` |
+| `TestTerminalWidth_NonTTY` | `cli::accounts::tests::test_terminal_width_non_tty` |
+| `TestListAccounts_ResponsiveWidths` | `cli::accounts::tests::test_list_accounts_responsive_widths` |
+| `TestLogin_BrowserOpenerSucceeds_HTTPCallbackSucceeds` | `cli::accounts::tests::test_login_browser_opener_succeeds_http_callback_succeeds` |
+| `TestLogin_BrowserOpenerFails_ManualRawCodeSucceeds` | `cli::accounts::tests::test_login_browser_opener_fails_manual_raw_code_succeeds` |
+| `TestLogin_BrowserOpenerFails_PastedCallbackURLSucceeds` | `cli::accounts::tests::test_login_browser_opener_fails_pasted_callback_url_succeeds` |
+| `TestLogin_Timeout` | `cli::accounts::tests::test_login_timeout` |
+| `TestLogin_OAuthCallbackError` | `cli::accounts::tests::test_login_oauth_callback_error` |
+| `TestLogin_NoTokenOrSecretLeakage` | `cli::accounts::tests::test_login_no_token_or_secret_leakage` |
+| `TestLogin_ExistingAccountUpdate` | `cli::accounts::tests::test_login_existing_account_update` |
+| `TestQuotaDashboard_EdgeCasesAndLayouts` | `cli::accounts::tests::test_quota_dashboard_edge_cases_and_layouts` |
+| `TestRenderRepresentativeWidths` | `cli::accounts::tests::test_render_representative_widths` |
+| `TestListAccounts_NextCandidateTag` | `cli::accounts::tests::test_list_accounts_next_candidate_tag` |
+| `TestListCmd_CompactAndPrivacy` | `cli::accounts::tests::test_list_cmd_compact_and_privacy` |
+| `TestListCmd_ShowEmail` | `cli::accounts::tests::test_list_cmd_show_email` |
+| `TestQuotaUnknownIsExplicitAcrossLayouts` | `cli::accounts::tests::test_quota_unknown_is_explicit_across_layouts` |
+| `TestQuotaPartialWindowsDisplayIndependently` | `cli::accounts::tests::test_quota_partial_windows_display_independently` |
+| `TestQuotaCmd_ContainsProgressBars` | `cli::accounts::tests::test_quota_cmd_contains_progress_bars` |
+| `TestQuotaCmd_ShowEmail` | `cli::accounts::tests::test_quota_cmd_show_email` |
+| `TestQuotaCmd_AutoHidesUnusedThirdPartyWindows` | `cli::accounts::tests::test_quota_cmd_auto_hides_unused_third_party_windows` |
+| `TestQuotaCmd_SkipsLiveFetchForFreshSnapshots` | `cli::accounts::tests::test_quota_cmd_skips_live_fetch_for_fresh_snapshots` |
+| `TestResolveNextCandidateID_SkipsDaemonPausedAccounts` | `cli::accounts::tests::test_resolve_next_candidate_id_skips_daemon_paused_accounts` |
+| `TestResolveNextCandidateID_FollowsDaemonSmartRotation` | `cli::accounts::tests::test_resolve_next_candidate_id_follows_daemon_smart_rotation` |
+| `list_and_quota_on_non_tty_use_go_default_width` | `cli::accounts::tests::list_and_quota_on_non_tty_use_go_default_width` |
 
-### Task 20
-TestMoveCmd -> crate::cli::order::tests::test_move_cmd
-TestSwapCmd -> crate::cli::order::tests::test_swap_cmd
-TestSortCmd -> crate::cli::order::tests::test_sort_cmd
-TestReorderCmd -> crate::cli::order::tests::test_reorder_cmd
-TestMain_OrderSubcommands -> crate::cli::order::tests::test_main_order_subcommands
-TestConfigCmd -> crate::cli::order::tests::test_config_cmd
-TestForecastCmd_EmptyPool -> crate::cli::forecast::tests::test_forecast_cmd_empty_pool
-TestForecastCmd_AllRestricted -> crate::cli::forecast::tests::test_forecast_cmd_all_restricted
-TestForecastCmd_NormalAccountsAndPace -> crate::cli::forecast::tests::test_forecast_cmd_normal_accounts_and_pace
-TestRunCLI_ForecastAliases -> crate::cli::forecast::tests::test_run_cli_forecast_aliases
-TestStatsCmd_TerminalOutput -> crate::cli::stats::tests::test_stats_cmd_terminal_output
-TestStatsCmd_JSONOutput -> crate::cli::stats::tests::test_stats_cmd_json_output
+### Status, strategy, logs, run, update
 
-### Task 21
-TestTop_ResponsiveLayouts -> crate::cli::top::tests::test_top_responsive_layouts
-TestTop_AccountStates -> crate::cli::top::tests::test_top_account_states
-TestTop_UnknownQuota -> crate::cli::top::tests::test_top_unknown_quota
-TestTop_LongFriendlyNames_And_CJK -> crate::cli::top::tests::test_top_long_friendly_names_and_cjk
-TestTop_InFlight_ZeroOneN -> crate::cli::top::tests::test_top_in_flight_zero_one_n
-TestTop_IntervalBounds -> crate::cli::top::tests::test_top_interval_bounds
-TestTop_KeyHandling_Q_Plus_Minus_R -> crate::cli::top::tests::test_top_key_handling_q_plus_minus_r
-TestTop_RawMode_AlternateScreenAndCRLF -> crate::cli::top::tests::test_top_raw_mode_alternate_screen_and_crlf
-TestTop_TerminalRestorationOnPanic -> crate::cli::top::tests::test_top_terminal_restoration_on_panic
-TestTop_Privacy -> crate::cli::top::tests::test_top_privacy
-TestTop_ShowEmail -> crate::cli::top::tests::test_top_show_email
-TestTop_AliasesAndFlags -> crate::cli::top::tests::test_top_aliases_and_flags
-TestTop_BoundedWidthsAssertion -> crate::cli::top::tests::test_top_bounded_widths_assertion
-TestTop_PrintRepresentativeWidths -> crate::cli::top::tests::test_top_print_representative_widths
-TestTop_TelemetryBlock -> crate::cli::top::tests::test_top_telemetry_block
-top_restores_terminal_mode_on_every_exit -> crate::cli::top::tests::top_restores_terminal_mode_on_every_exit
+| Go test | Rust test |
+| --- | --- |
+| `TestStrategyCommand` | `cli::status::tests::test_strategy_command` |
+| `TestStatusCmd_NoQuotaBarsAndDashboard` | `cli::status::tests::test_status_cmd_no_quota_bars_and_dashboard` |
+| `TestStatusCmd_RunningDaemonWithRuntimeStats` | `cli::status::tests::test_status_cmd_running_daemon_with_runtime_stats` |
+| `TestStatusCmd_RunningDaemonStatsFromDaemonNotCLI` | `cli::status::tests::test_status_cmd_running_daemon_stats_from_daemon_not_cli` |
+| `TestStatusCmd_RunningDaemonStatsUnavailable` | `cli::status::tests::test_status_cmd_running_daemon_stats_unavailable` |
+| `TestAuditRouting_RemovedFromCLI` | `cli::status::tests::test_audit_routing_removed_from_cli` |
+| `TestCLI_Status_MultiInstance` | `cli::status::tests::test_cli_status_multi_instance` |
+| `TestCLI_Stop_CrossInstanceRejection` | `cli::daemon_cmd::tests::test_cli_stop_cross_instance_rejection` |
+| `TestObservability_CaseO_StatusVerboseAndPrivacy` | `cli::status::tests::test_observability_case_o_status_verbose_and_privacy` |
+| `TestLogsCommand` | `cli::daemon_cmd::tests::test_logs_command` |
+| `TestDaemonRun_RemovedFromCLI` | `cli::daemon_cmd::tests::test_daemon_run_removed_from_cli` |
+| `TestRunWrapperAndAgyDirect` | `cli::run::tests::test_run_wrapper_and_agy_direct` |
+| `TestParseRunArgs` | `cli::run::tests::test_parse_run_args` |
+| `TestRunArgumentScopingAndDelimiter` | `cli::run::tests::test_run_argument_scoping_and_delimiter` |
+| `TestRunTopLevelOptionsRejected` | `cli::run::tests::test_run_top_level_options_rejected` |
+| `TestRunBareContinueResolvesConversation` | `cli::run::tests::test_run_bare_continue_resolves_conversation` |
+| `TestFindRealAgyBinaryExcludesShims` | `cli::run::tests::test_find_real_agy_binary_excludes_shims` |
+| `TestRunAgyWithLB_ArgumentPreservation` | `cli::run::tests::test_run_agy_with_lb_argument_preservation` |
+| `TestRunAgyWithLB_ResolvesManagedNativeBinary` | `cli::run::tests::test_run_agy_with_lb_resolves_managed_native_binary` |
+| `TestRunAgyDirect_ResolvesManagedNativeBinary` | `cli::run::tests::test_run_agy_direct_resolves_managed_native_binary` |
+| `TestRunAgyWithLB_ValidSyncExecutesAgy` | `cli::run::tests::test_run_agy_with_lb_valid_sync_executes_agy` |
+| `TestRunAgyWithLB_SyncFailureAborts` | `cli::run::tests::test_run_agy_with_lb_sync_failure_aborts` |
+| `TestUpdateCmd` | `cli::update::tests::test_update_cmd` |
+| `TestCP1DRunSyncFailureDoesNotExec` | `cli::run::tests::test_cp1d_run_sync_failure_does_not_exec` |
+| `update_checksum_mismatch_leaves_binary_untouched` | `cli::update::tests::update_checksum_mismatch_leaves_binary_untouched` |
+| `update_download_failure_leaves_binary_untouched` | `cli::update::tests::update_download_failure_leaves_binary_untouched` |
 
-### Task 22
-TestDetermineTargetDir_Precedence -> crate::installer::tests::test_determine_target_dir_precedence
-TestInstall_IdempotenceAndUninstallation -> crate::installer::tests::test_install_idempotence_and_uninstallation
-TestInstall_PreconditionFailsWhenNativeAgyMissing -> crate::installer::tests::test_install_precondition_fails_when_native_agy_missing
-TestInstall_SystemModeSyntheticRoot -> crate::installer::tests::test_install_system_mode_synthetic_root
-TestAssertSafeInstallTarget_FailClosed -> crate::installer::tests::test_assert_safe_install_target_fail_closed
-TestInstallAndUninstall_NoShellRCModification -> crate::installer::tests::test_install_and_uninstall_no_shell_rc_modification
-TestUninstall_LegacyRCOptInCleanup -> crate::installer::tests::test_uninstall_legacy_rc_opt_in_cleanup
-TestInstall_NativePreservationBeforeShimPublication -> crate::installer::tests::test_install_native_preservation_before_shim_publication
-TestInstall_ReinstallAndOfficialUpgradeRefresh -> crate::installer::tests::test_install_reinstall_and_official_upgrade_refresh
-TestUninstall_RemovesManagedNativeWithoutDeletingExternalBinary -> crate::installer::tests::test_uninstall_removes_managed_native_without_deleting_external_binary
-TestIntegration_AgyManagedShimAndRawBypass -> crate::installer::tests::test_integration_agy_managed_shim_and_raw_bypass
-TestInstallerIsolation_UserModeHermeticRoots -> crate::installer::tests::test_installer_isolation_user_mode_hermetic_roots
-TestInstallerIsolation_SystemModeSyntheticRoot -> crate::installer::tests::test_installer_isolation_system_mode_synthetic_root
-TestInstallerIsolation_CleanupNeverResolvesToRealUserHome -> crate::installer::tests::test_installer_isolation_cleanup_never_resolves_to_real_user_home
-TestUninstall_OwnershipEnforcement -> crate::installer::tests::test_uninstall_ownership_enforcement
-TestUninstall_TOCTOUHardening_SymlinkSwapped -> crate::installer::tests::test_uninstall_toctou_hardening_symlink_swapped
-TestUninstall_TOCTOUHardening_HardLinkSwapped -> crate::installer::tests::test_uninstall_toctou_hardening_hard_link_swapped
-TestNativeAgyUpgradeAndMovement -> crate::installer::tests::test_native_agy_upgrade_and_movement
-TestTokenPath_NoFictitiousPathRegression -> crate::installer::tests::test_token_path_no_fictitious_path_regression
-TestInstall_NoGoStateInGemini -> crate::installer::tests::test_install_no_go_state_in_gemini
-TestUpgrade_ModelA_InPlaceManagedNativeSelfUpdate -> crate::installer::tests::test_upgrade_model_a_in_place_managed_native_self_update
-TestUpgrade_ModelB_OfficialUpdaterOverwritesShimAndRepairFlow -> crate::installer::tests::test_upgrade_model_b_official_updater_overwrites_shim_and_repair_flow
-TestInstallCommand_PreconditionFailure -> crate::cli::install::tests::test_install_command_precondition_failure
-TestInstallAndUninstallCommand_UserMode -> crate::cli::install::tests::test_install_and_uninstall_command_user_mode
-TestInstallAndUninstall_InvalidArgs -> crate::cli::install::tests::test_install_and_uninstall_invalid_args
+### Ordering, config, forecast, stats
 
-### Task 23
-eval-scheduler -> tests::eval_differential::test_eval_scheduler
-eval-capacity -> tests::eval_differential::test_eval_capacity
-eval-account-target -> tests::eval_differential::test_eval_account_target
-eval-display-name -> tests::eval_differential::test_eval_display_name
-eval-jwt -> tests::eval_differential::test_eval_jwt
-eval-error-classifier -> tests::eval_differential::test_eval_error_classifier
-eval-crypto -> tests::eval_differential::test_eval_crypto
-eval-daemon -> tests::eval_differential::test_eval_daemon
-eval-conversation -> tests::eval_differential::test_eval_conversation
-eval-resolve-continue -> tests::eval_differential::test_eval_resolve_continue
+| Go test | Rust test |
+| --- | --- |
+| `TestMoveCmd` | `cli::order::tests::test_move_cmd` |
+| `TestSwapCmd` | `cli::order::tests::test_swap_cmd` |
+| `TestSortCmd` | `cli::order::tests::test_sort_cmd` |
+| `TestReorderCmd` | `cli::order::tests::test_reorder_cmd` |
+| `TestMain_OrderSubcommands` | `cli::order::tests::test_main_order_subcommands` |
+| `TestConfigCmd` | `cli::order::tests::test_config_cmd` |
+| `TestForecastCmd_EmptyPool` | `cli::forecast::tests::test_forecast_cmd_empty_pool` |
+| `TestForecastCmd_AllRestricted` | `cli::forecast::tests::test_forecast_cmd_all_restricted` |
+| `TestForecastCmd_NormalAccountsAndPace` | `cli::forecast::tests::test_forecast_cmd_normal_accounts_and_pace` |
+| `TestRunCLI_ForecastAliases` | `cli::forecast::tests::test_run_cli_forecast_aliases` |
+| `TestStatsCmd_TerminalOutput` | `cli::stats::tests::test_stats_cmd_terminal_output` |
+| `TestStatsCmd_JSONOutput` | `cli::stats::tests::test_stats_cmd_json_output` |
 
-### Known deviations
-- installer: the "not a regular file or symlink" refusal prints the mode in octal; Go prints os.FileMode (e.g. drwxr-xr-x).
-- update: under cfg(test) github_token() never runs `gh auth token`.
-- cli_golden: testdata/cli/golden_cases.json is stale for rename_not_found, remove_not_found, switch_not_found since Go commit 16d8e34; cli_golden.rs pins them to current Go output.
+### `top` dashboard
+
+| Go test | Rust test |
+| --- | --- |
+| `TestTop_ResponsiveLayouts` | `cli::top::tests::test_top_responsive_layouts` |
+| `TestTop_AccountStates` | `cli::top::tests::test_top_account_states` |
+| `TestTop_UnknownQuota` | `cli::top::tests::test_top_unknown_quota` |
+| `TestTop_LongFriendlyNames_And_CJK` | `cli::top::tests::test_top_long_friendly_names_and_cjk` |
+| `TestTop_InFlight_ZeroOneN` | `cli::top::tests::test_top_in_flight_zero_one_n` |
+| `TestTop_IntervalBounds` | `cli::top::tests::test_top_interval_bounds` |
+| `TestTop_KeyHandling_Q_Plus_Minus_R` | `cli::top::tests::test_top_key_handling_q_plus_minus_r` |
+| `TestTop_RawMode_AlternateScreenAndCRLF` | `cli::top::tests::test_top_raw_mode_alternate_screen_and_crlf` |
+| `TestTop_TerminalRestorationOnPanic` | `cli::top::tests::test_top_terminal_restoration_on_panic` |
+| `TestTop_Privacy` | `cli::top::tests::test_top_privacy` |
+| `TestTop_ShowEmail` | `cli::top::tests::test_top_show_email` |
+| `TestTop_AliasesAndFlags` | `cli::top::tests::test_top_aliases_and_flags` |
+| `TestTop_BoundedWidthsAssertion` | `cli::top::tests::test_top_bounded_widths_assertion` |
+| `TestTop_PrintRepresentativeWidths` | `cli::top::tests::test_top_print_representative_widths` |
+| `TestTop_TelemetryBlock` | `cli::top::tests::test_top_telemetry_block` |
+| `top_restores_terminal_mode_on_every_exit` | `cli::top::tests::top_restores_terminal_mode_on_every_exit` |
+
+### Installer: install, uninstall, native `agy` upgrades
+
+| Go test | Rust test |
+| --- | --- |
+| `TestDetermineTargetDir_Precedence` | `installer::tests::test_determine_target_dir_precedence` |
+| `TestInstall_IdempotenceAndUninstallation` | `installer::tests::test_install_idempotence_and_uninstallation` |
+| `TestInstall_PreconditionFailsWhenNativeAgyMissing` | `installer::tests::test_install_precondition_fails_when_native_agy_missing` |
+| `TestInstall_SystemModeSyntheticRoot` | `installer::tests::test_install_system_mode_synthetic_root` |
+| `TestAssertSafeInstallTarget_FailClosed` | `installer::tests::test_assert_safe_install_target_fail_closed` |
+| `TestInstallAndUninstall_NoShellRCModification` | `installer::tests::test_install_and_uninstall_no_shell_rc_modification` |
+| `TestUninstall_LegacyRCOptInCleanup` | `installer::tests::test_uninstall_legacy_rc_opt_in_cleanup` |
+| `TestInstall_NativePreservationBeforeShimPublication` | `installer::tests::test_install_native_preservation_before_shim_publication` |
+| `TestInstall_ReinstallAndOfficialUpgradeRefresh` | `installer::tests::test_install_reinstall_and_official_upgrade_refresh` |
+| `TestUninstall_RemovesManagedNativeWithoutDeletingExternalBinary` | `installer::tests::test_uninstall_removes_managed_native_without_deleting_external_binary` |
+| `TestIntegration_AgyManagedShimAndRawBypass` | `installer::tests::test_integration_agy_managed_shim_and_raw_bypass` |
+| `TestInstallerIsolation_UserModeHermeticRoots` | `installer::tests::test_installer_isolation_user_mode_hermetic_roots` |
+| `TestInstallerIsolation_SystemModeSyntheticRoot` | `installer::tests::test_installer_isolation_system_mode_synthetic_root` |
+| `TestInstallerIsolation_CleanupNeverResolvesToRealUserHome` | `installer::tests::test_installer_isolation_cleanup_never_resolves_to_real_user_home` |
+| `TestUninstall_OwnershipEnforcement` | `installer::tests::test_uninstall_ownership_enforcement` |
+| `TestUninstall_TOCTOUHardening_SymlinkSwapped` | `installer::tests::test_uninstall_toctou_hardening_symlink_swapped` |
+| `TestUninstall_TOCTOUHardening_HardLinkSwapped` | `installer::tests::test_uninstall_toctou_hardening_hard_link_swapped` |
+| `TestNativeAgyUpgradeAndMovement` | `installer::tests::test_native_agy_upgrade_and_movement` |
+| `TestTokenPath_NoFictitiousPathRegression` | `installer::tests::test_token_path_no_fictitious_path_regression` |
+| `TestInstall_NoGoStateInGemini` | `installer::tests::test_install_no_go_state_in_gemini` |
+| `TestUpgrade_ModelA_InPlaceManagedNativeSelfUpdate` | `installer::tests::test_upgrade_model_a_in_place_managed_native_self_update` |
+| `TestUpgrade_ModelB_OfficialUpdaterOverwritesShimAndRepairFlow` | `installer::tests::test_upgrade_model_b_official_updater_overwrites_shim_and_repair_flow` |
+| `TestInstallCommand_PreconditionFailure` | `cli::install::tests::test_install_command_precondition_failure` |
+| `TestInstallAndUninstallCommand_UserMode` | `cli::install::tests::test_install_and_uninstall_command_user_mode` |
+| `TestInstallAndUninstall_InvalidArgs` | `cli::install::tests::test_install_and_uninstall_invalid_args` |
+
+### `eval` subcommands
+
+The `eval-*` subcommands were checked against Go by `tests/eval_differential.rs`, which needs the Go binary and stays on agy-pool-go's `rust-rewrite` branch. The unit tests of each module they call (scheduler, quota, accounts, auth, crypto, daemon, conversation) cover them here.

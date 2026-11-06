@@ -1,137 +1,150 @@
-# agy-pool-rust: Antigravity Multi-Account Quota Pool & Reverse Proxy Gateway
+# agy-pool-rust
 
 [![CI](https://github.com/vlxlv/agy-pool-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/vlxlv/agy-pool-rust/actions/workflows/ci.yml)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Darwin%20%7C%20Termux-green.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Termux-green.svg)](#)
 
-A local reverse proxy gateway that pools Google Antigravity accounts for **Antigravity CLI (`agy`)** on Linux, Termux, and macOS.
+A local gateway that pools several Google accounts behind the **Antigravity CLI (`agy`)**. `agy` talks to `127.0.0.1:8899`; agy-pool forwards each request upstream on the account with the most usable quota and moves on to the next account when one runs out.
 
-This is the Rust rewrite of [agy-pool-go](https://github.com/vlxlv/agy-pool-go) and a drop-in replacement for it: same `state.db`, `config.json`, environment variables, CLI and port (`127.0.0.1:8899`). Swapping the binary is enough; the Go binary can be put back the same way. Behaviour differences found while porting are listed in [`PORTING_NOTES.md`](PORTING_NOTES.md).
+This is the Rust rewrite of [agy-pool-go](https://github.com/vlxlv/agy-pool-go) and a drop-in replacement for it: same `state.db`, `config.json`, environment variables, command line and port. Replacing the binary is the whole migration, and putting the Go binary back is the whole rollback (see [Migrating from agy-pool-go](#migrating-from-agy-pool-go)). Known behaviour differences are listed in [`PORTING_NOTES.md`](PORTING_NOTES.md).
 
-Releases are still published from agy-pool-go, so `agy-pool update` and the `.deb` links below point there until this repository publishes its first release.
+> **Releases:** this repository has not published a release yet. Until it does, release binaries, `.deb` packages and `agy-pool update` still come from [agy-pool-go releases](https://github.com/vlxlv/agy-pool-go/releases). To run the Rust version now, [build it from source](#from-source).
 
----
+## Features
 
-## Building
+- **Quota-aware routing.** The `smart` strategy (default) prefers accounts whose quota renews soonest and keeps a low-quota reserve for last; `max_quota` always picks the account with the most remaining quota.
+- **Automatic failover.** On HTTP 429 or exhausted quota the request moves to the next account, honouring upstream `Retry-After` and reset times. Model capacity errors (503) pause only that model, not the account.
+- **No duplicate generations.** A generation request is retried on another account only if it failed before any byte reached upstream (DNS, connect, TLS). Once a request may have reached Google, it is never replayed.
+- **Prompt-cache affinity.** A conversation stays on the same account while that account is healthy, so upstream prompt caching keeps working.
+- **Streaming.** Server-sent events are passed through as they arrive.
+- **Dashboards.** `quota` shows per-account quota bars and reset times, `top` is a live terminal dashboard, `stats` and `forecast` report routing effectiveness and quota runway.
+- **Static release binaries** for Linux (amd64, arm64; musl, so they also run on Termux and old glibc) and macOS (amd64, arm64), plus `.deb` packages with systemd units.
+- **Encrypted backups.** `export` / `import` move the account pool between machines, optionally encrypted (PBKDF2-HMAC-SHA256).
 
-Requires Rust 1.99+.
+## Install
+
+### From source
+
+Requires Rust 1.99 or newer.
 
 ```bash
 git clone https://github.com/vlxlv/agy-pool-rust.git
 cd agy-pool-rust
-cargo build --release --locked          # target/release/agy-pool
-```
-
-Release binaries for Linux are static musl builds (they run on Termux and old glibc); see [`.github/workflows/release-dry-run.yml`](.github/workflows/release-dry-run.yml) for the exact build of all four platform assets and the `.deb` packages.
-
-### Installation & Native `agy` Integration
-
-#### Via Debian/Ubuntu Package (.deb)
-Download the `.deb` package from [Releases](https://github.com/vlxlv/agy-pool-go/releases) and install:
-```bash
-sudo dpkg -i agy-pool_<version>_amd64.deb
-```
-The package automatically installs `/usr/bin/agy-pool` and systemd service files. Run the gateway per user with `systemctl --user enable --now agy-pool`, or system-wide with `sudo systemctl enable --now agy-pool` (runs as the `agy-pool` system user created by the package, state in `/var/lib/agy-pool`, optional config in `/etc/agy-pool/config.json`). Without the package, a user install can use the same unit: copy `contrib/systemd/user/agy-pool.service` to `~/.config/systemd/user/` and run `systemctl --user enable --now agy-pool` (it runs `~/.local/bin/agy-pool`). `agy-pool stop` and `agy-pool restart` act through `systemctl` when the gateway runs under one of these units. Upgrade with a newer `.deb`; `agy-pool update` refuses to replace a package-owned binary.
-
-If upgrading from an earlier beta package, install the official `v0.1.0` release package with `sudo apt install --allow-downgrades ./agy-pool_<version>_<arch>.deb` or `sudo dpkg -i agy-pool_<version>_<arch>.deb`.
-
-#### Via agy-pool installer
-To install `agy-pool` and set up transparent integration with native Antigravity CLI:
-
-```bash
-# User-mode installation (recommended)
-./target/release/agy-pool install
-
-# Or system-mode installation
+cargo build --release --locked
+./target/release/agy-pool install          # user mode: ~/.local/bin, recommended
 sudo ./target/release/agy-pool install --system
 ```
 
-#### Intended User Experience
+`install` puts `agy-pool` on your `PATH`, moves the native `agy` binary to `~/.local/libexec/agy-pool/agy-native`, and replaces `~/.local/bin/agy` with a small shim that runs `agy-pool run`. It never overwrites the only copy of native `agy`.
 
-Once installed, **normal operation requires zero special flags, aliases, or manual environment exports**:
+### Debian / Ubuntu package
+
+Download `agy-pool_<version>_<arch>.deb` from the [releases](https://github.com/vlxlv/agy-pool-go/releases) and install it:
 
 ```bash
-# Normal use: automatically routes through agy-pool quota load balancing
-agy -p "explain this code"
-agy -c
-agy --mode accept-edits --dangerously-skip-permissions
+sudo dpkg -i agy-pool_<version>_amd64.deb
+systemctl --user enable --now agy-pool     # per user
+# or system-wide, as the agy-pool system user (state in /var/lib/agy-pool, config in /etc/agy-pool/config.json):
+sudo systemctl enable --now agy-pool
 ```
 
-To bypass the pool and execute native Antigravity directly against upstream Google:
+Upgrade by installing a newer `.deb`; `agy-pool update` refuses to replace a package-owned binary.
+
+### systemd without the package
 
 ```bash
-# Explicit bypass: runs native Antigravity directly with its current native credentials
-# No CLI Base synchronization or agy-pool routing is performed.
-agy-raw -p "direct prompt"
-
-# Or using the agy-orig alias
-agy-orig -p "direct prompt"
+cp contrib/systemd/user/agy-pool.service ~/.config/systemd/user/
+systemctl --user enable --now agy-pool     # runs ~/.local/bin/agy-pool
 ```
 
-#### Managed Installation Layout
+When the gateway runs under one of these units, `agy-pool stop` and `agy-pool restart` go through `systemctl`.
 
-The installer establishes a deterministic, robust layout:
-
-| Path | Description |
-|------|-------------|
-| `~/.local/bin/agy-pool` | `agy-pool` binary |
-| `~/.local/bin/agy` | Thin POSIX managed shim (default entrypoint invoking `agy-pool run`) |
-| `~/.local/bin/agy-raw` | Managed shim executing direct native bypass via `agy-pool raw` |
-| `~/.local/bin/agy-orig` | Symlink alias to `agy-raw` |
-| `~/.local/libexec/agy-pool/agy-native` | Preserved real native Antigravity executable |
-| `~/.config/agy-pool/config.json` | Static configuration (see tracked [`config.example.json`](config.example.json)) |
-| `~/.local/share/agy-pool/state.db` | Authoritative dynamic account pool state database |
-
-The installer safely validates and preserves the native `agy` binary into `~/.local/libexec/agy-pool/agy-native` before publishing or updating the entrypoint shim. It never overwrites the only copy of native `agy`.
-
-#### Updating `agy-pool`
+## Quick start
 
 ```bash
-agy-pool update --check   # Report whether a newer release exists
-agy-pool update           # Download, verify, replace, and restart a running gateway
+agy-pool login             # add a Google account (repeat for each account)
+agy-pool list              # accounts in the pool
+agy-pool start             # start the gateway (agy-pool run also starts it on demand)
+agy -p "explain this code" # agy now goes through the pool
+agy-pool quota             # remaining quota per account
 ```
 
-`update` (alias `upgrade`) fetches the newest GitHub release (prereleases included), verifies the platform binary against the release `SHA256SUMS`, atomically replaces the installed `agy-pool` binary, and restarts the gateway if it was running. A failed download or checksum mismatch leaves the current binary untouched. The repository is private, so a token is required: `GH_TOKEN`, `GITHUB_TOKEN`, or an existing `gh auth login` session. System-mode installs (`/usr/local/bin`) need `sudo` with `GH_TOKEN` set.
+After `install`, plain `agy` goes through the pool with no flags or environment changes. To bypass the pool and run native `agy` with its own credentials, use `agy-raw` (or its alias `agy-orig`).
 
-#### Official `agy` Upgrades & Repair Workflow
+## Commands
 
-If an official Google Antigravity update overwrites `~/.local/bin/agy` with a new native ELF binary:
+| Command | What it does |
+|---|---|
+| `login`, `import-current` | Add an account by browser login, or import the account native `agy` is signed in with |
+| `list`, `quota`, `top` | Show the pool, quota bars, or a live dashboard (`-e` shows emails) |
+| `status`, `stats`, `forecast` | Gateway process summary, routing effectiveness, quota runway |
+| `start`, `stop`, `restart`, `logs` | Control the gateway and read its log |
+| `run [-- agy args]` | Start the gateway if needed and run native `agy` through it |
+| `strategy`, `switch` | Choose the routing strategy, or the account native `agy` uses directly |
+| `rename`, `enable`, `disable`, `remove`, `verify` | Manage single accounts |
+| `move`, `swap`, `sort`, `reorder` | Change account order |
+| `export`, `import` | Back up and restore the pool |
+| `doctor` | Check binaries, gateway, database and connectivity |
+| `install`, `uninstall`, `update` | Manage the installation |
 
-1. Running `agy-pool doctor` will detect that `~/.local/bin/agy` is a native binary bypassing the pool.
-2. Re-running `agy-pool install` repairs the integration:
-   - Detects the new native binary at `~/.local/bin/agy`.
-   - Atomically updates `~/.local/libexec/agy-pool/agy-native` with the upgraded binary.
-   - Restores the managed shim at `~/.local/bin/agy`.
+`agy-pool --help` lists every command with examples.
 
-#### Uninstallation
+## Configuration
 
-To remove `agy-pool` integration:
+| Path | Contents |
+|---|---|
+| `~/.config/agy-pool/config.json` | Static settings: listen address and port, strategy, native `agy` path, log size. See [`config.example.json`](config.example.json). |
+| `~/.local/share/agy-pool/state.db` | Account pool and runtime state (SQLite). Managed by agy-pool; don't edit it. |
+| `~/.local/share/agy-pool/agy-pool.log` | Gateway log. It and `quota-history.jsonl` rotate at `logging.max_size_bytes` (5 MB by default). |
+
+Environment variables:
+
+| Variable | Effect |
+|---|---|
+| `AGY_CONFIG_FILE`, `AGY_DATA_DIR` | Use another config file or data directory (same as `-c` / `-D`) |
+| `AGY_BIN` | Path of the native `agy` binary to run |
+| `AGY_SHOW_EMAIL=1`, `AGY_PRIVACY=0` | Show account emails instead of labels |
+| `GH_TOKEN`, `GITHUB_TOKEN` | Optional token for `agy-pool update` (raises GitHub API rate limits) |
+
+## Updating
 
 ```bash
-agy-pool uninstall
+agy-pool update --check    # is there a newer release?
+agy-pool update            # download, verify against SHA256SUMS, replace, restart the gateway
 ```
 
-Uninstall safely removes `agy-pool`-owned shims (`agy`, `agy-raw`, `agy-orig`), the `agy-pool` binary, and the managed native copy in `libexec/agy-pool`, while leaving any external native binaries completely untouched.
+A failed download or checksum mismatch leaves the installed binary untouched. If an official Antigravity update overwrites `~/.local/bin/agy`, `agy-pool doctor` reports it and `agy-pool install` repairs the integration, keeping the new native binary. `agy-pool uninstall` removes the shims, the binary and the managed native copy, and leaves any other `agy` binary alone.
 
+## Migrating from agy-pool-go
 
----
-
----
-
-## Testing
-
-Run tests only through the sandbox script, never bare `cargo test` on a machine with a live gateway:
+State, config and the systemd unit are shared, so only the binary changes:
 
 ```bash
-scripts/test.sh                          # cargo test
-scripts/test.sh test --lib storage::     # any cargo arguments
+cp ~/.local/bin/agy-pool ~/.local/bin/agy-pool.go-backup
+install -m 755 target/release/agy-pool ~/.local/bin/agy-pool.new
+mv -f ~/.local/bin/agy-pool.new ~/.local/bin/agy-pool
+systemctl --user restart agy-pool          # or: agy-pool restart
+```
+
+Roll back the same way:
+
+```bash
+cp ~/.local/bin/agy-pool.go-backup ~/.local/bin/agy-pool
+systemctl --user restart agy-pool
+```
+
+## Development
+
+Run tests only through the sandbox script, never with bare `cargo test` on a machine where agy-pool is in use:
+
+```bash
+scripts/test.sh                                      # cargo test
+scripts/test.sh test --lib storage::                 # any cargo arguments
 scripts/test.sh clippy --all-targets -- -D warnings
 ```
 
-`scripts/test.sh` runs cargo in a user, mount and PID namespace where the live state (`~/.local/share/agy-pool`, `~/.config/agy-pool`, `~/.gemini`, `~/.local/bin`, `~/.local/libexec/agy-pool`, shell rc files) is read-only, the live gateway is invisible, and `systemctl` is stubbed out. It refuses to run if any of that does not hold.
+`scripts/test.sh` runs cargo in a user, mount and PID namespace in which the real state (`~/.local/share/agy-pool`, `~/.config/agy-pool`, `~/.gemini`, `~/.local/bin`, `~/.local/libexec/agy-pool`, shell rc files) is read-only, the running gateway is invisible, and `systemctl` is stubbed out. It refuses to run if any of that does not hold.
 
-CI (`ci.yml`) runs `cargo fmt --check`, `cargo clippy -D warnings` and the suite on every push and pull request to `main`, plus a stress job that repeats the suite at 4, 16 and 64 threads. `release-dry-run.yml` builds and verifies every release asset without publishing.
-
----
+CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clippy -D warnings` and the test suite on every push and pull request to `main`, plus a stress job that repeats the suite at 4, 16 and 64 threads to catch races. [`release-dry-run.yml`](.github/workflows/release-dry-run.yml) builds and verifies all release assets (4 binaries, 2 `.deb` packages, `SHA256SUMS`) without publishing.
 
 ## License
 
