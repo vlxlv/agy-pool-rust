@@ -74,6 +74,10 @@ fn github_token() -> String {
             return v;
         }
     }
+    // Tests must not read the host's real GitHub credentials.
+    if cfg!(test) {
+        return String::new();
+    }
     if let Ok(output) = std::process::Command::new("gh").args(["auth", "token"]).output()
         && output.status.success()
     {

@@ -168,9 +168,9 @@ pub async fn run_agy_with_lb(io: &mut Io<'_>, extra: &[String]) -> i32 {
                 return 1;
             }
         }
-        crate::daemon::InstanceStatus::Stopped
-        | crate::daemon::InstanceStatus::StalePID
-        | crate::daemon::InstanceStatus::LegacyPID => {
+        // As Go: a daemon with legacy metadata is running, so leave it alone.
+        crate::daemon::InstanceStatus::LegacyPID => {}
+        crate::daemon::InstanceStatus::Stopped | crate::daemon::InstanceStatus::StalePID => {
             let opts = crate::daemon::LaunchOptions {
                 port: ctx.listen_port,
                 state_dir: Some(ctx.data_dir.clone()),
