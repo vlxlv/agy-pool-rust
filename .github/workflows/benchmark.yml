@@ -16,7 +16,7 @@ on:
       go_version:
         description: 'Go version/tag from vlxlv/agy-pool-go (leave empty for latest)'
         required: false
-        default: 'v0.1.0'
+        default: 'v0.1.1-alpha.2'
         type: string
   schedule:
     # Run weekly benchmark comparison on Monday 04:00 UTC

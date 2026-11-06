@@ -59,6 +59,7 @@ def read_proc_status(pid):
     }
 
 def start_daemon(bin_path, port):
+    bin_path = os.path.abspath(bin_path)
     tmp_dir = tempfile.mkdtemp(prefix="agy-bench-")
     cfg_dir = os.path.join(tmp_dir, "config")
     data_dir = os.path.join(tmp_dir, "data")
@@ -73,13 +74,23 @@ def start_daemon(bin_path, port):
     env["AGY_DATA_DIR"] = data_dir
     env["AGY_CONFIG_FILE"] = cfg_file
     env["AGY_POOL_DAEMON_CHILD"] = "1"
+    env["AGY_POOL_DAEMON_PORT"] = str(port)
 
-    proc = subprocess.Popen([bin_path], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen([bin_path], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     # Wait for daemon to respond on /healthz
-    deadline = time.perf_counter() + 5.0
+    deadline = time.perf_counter() + 8.0
     ready = False
+    last_err = ""
     while time.perf_counter() < deadline:
+        if proc.poll() is not None:
+            out, err = proc.communicate()
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise RuntimeError(
+                f"Daemon at {bin_path} exited prematurely with code {proc.returncode}.\n"
+                f"STDOUT: {out.decode('utf-8', 'replace')}\n"
+                f"STDERR: {err.decode('utf-8', 'replace')}"
+            )
         try:
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
             conn.request("GET", "/healthz")
@@ -88,16 +99,24 @@ def start_daemon(bin_path, port):
                 conn.close()
                 ready = True
                 break
+            last_err = f"HTTP {resp.status}"
             conn.close()
-        except Exception:
-            pass
-        time.sleep(0.05)
+        except Exception as e:
+            last_err = str(e)
+        time.sleep(0.1)
 
     if not ready:
         proc.terminate()
-        proc.wait()
+        try:
+            out, err = proc.communicate(timeout=2)
+        except Exception:
+            out, err = b"", b""
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise RuntimeError(f"Daemon at {bin_path} failed to start on port {port}")
+        raise RuntimeError(
+            f"Daemon at {bin_path} failed to respond on port {port} within timeout (last error: {last_err}).\n"
+            f"STDOUT: {out.decode('utf-8', 'replace')}\n"
+            f"STDERR: {err.decode('utf-8', 'replace')}"
+        )
 
     return proc, tmp_dir
 
