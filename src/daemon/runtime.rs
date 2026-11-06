@@ -916,6 +916,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_runtime_stats_writer_100_event_coalescence_and_final_zero() {
+        // In-flight counts and the change hook are process-wide; proxy tests use them under the same lock.
+        let _env = crate::daemon::test_env();
         crate::observability::reset_in_flight();
 
         let write_count = Arc::new(AtomicI64::new(0));
@@ -987,6 +989,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_runtime_stats_writer_multiple_accounts_stress_coalescence() {
+        // In-flight counts and the change hook are process-wide; proxy tests use them under the same lock.
+        let _env = crate::daemon::test_env();
         crate::observability::reset_in_flight();
 
         let write_count = Arc::new(AtomicI64::new(0));
