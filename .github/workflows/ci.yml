@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       AGY_TEST_MODE: '1'
@@ -33,7 +33,7 @@ jobs:
   # Shared-state races in tests only show up under some schedules; repeat the suite at several
   # thread counts so a 1-in-N flake fails here instead of on a later unrelated push.
   stress:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false

@@ -24,7 +24,7 @@ concurrency:
 jobs:
   prepare:
     name: Resolve version (and gate a tag)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -73,11 +73,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-26.04
             target: x86_64-unknown-linux-musl
             asset: agy-pool-linux-amd64
             deb: amd64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-musl
             asset: agy-pool-linux-arm64
             deb: arm64
@@ -169,7 +169,7 @@ jobs:
   sums:
     name: Checksums and Package Verification
     needs: [prepare, linux, darwin]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     timeout-minutes: 10
@@ -219,7 +219,7 @@ jobs:
     name: Publish GitHub Release
     needs: sums
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: write

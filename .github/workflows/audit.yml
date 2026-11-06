@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     # Scheduled runs also fire on forks with Actions enabled; don't file issues there.
     if: github.event.repository.fork == false
