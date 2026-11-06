@@ -114,3 +114,49 @@ This document records Go tests and internals that are not ported 1:1 into the Ru
 - `daemon::systemd::tests::systemctl_refused_in_tests` (panics unconditionally in test builds)
 - `tests/daemon_child.rs::second_rust_gateway_refused_while_go_runs` (cross-runtime binary port-collision detection)
 - `daemon::server::tests::test_run_foreground_refuses_production_port_in_test_mode` (prevents binding production port 8899 in tests)
+
+## internal/diagnostics (System Doctor, Effectiveness, Routing Audit)
+
+| Go Test | Rust Test Equivalent |
+| --- | --- |
+| `TestBinaryDiscoveryAndRecursionProtection` | `diagnostics::tests::test_binary_discovery_and_recursion_protection` |
+| `TestDiscovery_ExplicitOverrideFailure` | `diagnostics::tests::test_discovery_explicit_override_failure` |
+| `TestDiscovery_HardLinkProtection` | `diagnostics::tests::test_discovery_hard_link_protection` |
+| `TestDiscovery_LegitimateScriptContent` | `diagnostics::tests::test_discovery_legitimate_script_content` |
+| `TestDiscovery_ManagedNativePrecedence` | `diagnostics::tests::test_discovery_managed_native_precedence` |
+| `TestDiscovery_PrecedenceAndFallbacks` | `diagnostics::tests::test_discovery_precedence_and_fallbacks` |
+| `TestDiscovery_SymlinkChainProtection` | `diagnostics::tests::test_discovery_symlink_chain_protection` |
+| `TestDoctor_NativeIntegrationDiagnostics` | `diagnostics::tests::test_doctor_native_integration_diagnostics` |
+| `TestLeaseFallbackRateHigh` | `diagnostics::tests::test_lease_fallback_rate_high` |
+| `TestRunDoctor_EmptyEnvironment` | `diagnostics::tests::test_run_doctor_empty_environment` |
+| `TestRunDoctor_FatalErrorOnCorruptedPool` | `diagnostics::tests::test_run_doctor_fatal_error_on_corrupted_pool` |
+| `TestRunDoctor_NativeIdentityMissingAndMalformed` | `diagnostics::tests::test_run_doctor_native_identity_missing_and_malformed` |
+| `TestRunDoctor_NativeIdentityStates` | `diagnostics::tests::test_run_doctor_native_identity_states` |
+| `TestRunDoctor_PopulatedPoolAndPrivacy` | `diagnostics::tests::test_run_doctor_populated_pool_and_privacy` |
+| `TestRunDoctor_StateDBInspectionAndCorruption` | `diagnostics::tests::test_run_doctor_state_db_inspection_and_corruption` |
+| `TestRunDoctor_TLSFailureWarning` | `diagnostics::tests::test_run_doctor_tls_failure_warning` |
+| `TestComputeEffectivenessReport_BalancedDistribution` | `diagnostics::effectiveness::tests::test_compute_effectiveness_report_balanced_distribution` |
+| `TestComputeEffectivenessReport_EmptyPool` | `diagnostics::effectiveness::tests::test_compute_effectiveness_report_empty_pool` |
+| `TestComputeEffectivenessReport_SkewedDistribution` | `diagnostics::effectiveness::tests::test_compute_effectiveness_report_skewed_distribution` |
+| `TestAudit_A_HealthySelection_Pass` | `diagnostics::routing_audit_eval::tests::test_audit_a_healthy_selection_pass` |
+| `TestAudit_B_ReserveWhileHealthyExists_Violation` | `diagnostics::routing_audit_eval::tests::test_audit_b_reserve_while_healthy_exists_violation` |
+| `TestAudit_C_ReserveFallback_Pass` | `diagnostics::routing_audit_eval::tests::test_audit_c_reserve_fallback_pass` |
+| `TestAudit_D_DepletedWhileReserveExists_Violation` | `diagnostics::routing_audit_eval::tests::test_audit_d_depleted_while_reserve_exists_violation` |
+| `TestAudit_E_UnknownClassification_Warning` | `diagnostics::routing_audit_eval::tests::test_audit_e_unknown_classification_warning` |
+| `TestAudit_F_LegacyUnidentifiedWindows` | `diagnostics::routing_audit_eval::tests::test_audit_f_legacy_unidentified_windows` |
+| `TestAudit_G_Smart_ReserveViolations` | `diagnostics::routing_audit_eval::tests::test_audit_g_smart_reserve_violations` |
+| `TestAudit_H_OtherStrategy_NoReserveViolations` | `diagnostics::routing_audit_eval::tests::test_audit_h_other_strategy_no_reserve_violations` |
+| `TestAudit_I_FailoverTwoAttemptsWithoutFalseViolation` | `diagnostics::routing_audit_eval::tests::test_audit_i_failover_two_attempts_without_false_violation` |
+| `TestAudit_J_EventConsumerCannotBlockGenerationPath` | `diagnostics::routing_audit_eval::tests::test_audit_j_event_consumer_cannot_block_generation_path` |
+| `TestAudit_K_SensitiveDataNeverExposed` | `diagnostics::routing_audit_eval::tests::test_audit_k_sensitive_data_never_exposed` |
+| `TestAudit_L_JSONOutputValid` | `diagnostics::routing_audit_eval::tests::test_audit_l_json_output_valid` |
+| `TestFrozenResetTimestampsAndRankingInputs` | `diagnostics::routing_audit_eval::tests::test_frozen_reset_timestamps_and_ranking_inputs` |
+| `TestTemporalAudit_A_HealthySelectionRemainsPassAfterStateDegrades` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_a_healthy_selection_remains_pass_after_state_degrades` |
+| `TestTemporalAudit_B_ReserveViolationRemainsViolationAfterStateChanges` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_b_reserve_violation_remains_violation_after_state_changes` |
+| `TestTemporalAudit_C_PreSessionEventsNotReported` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_c_pre_session_events_not_reported` |
+| `TestTemporalAudit_D_NoActiveAuditorDoesNotFillQueue` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_d_no_active_auditor_does_not_fill_queue` |
+| `TestTemporalAudit_E_BlockedConsumerCannotDelayGeneration` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_e_blocked_consumer_cannot_delay_generation` |
+| `TestTemporalAudit_F_QueueOverflowIncrementsDroppedCountWithoutBlocking` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_f_queue_overflow_increments_dropped_count_without_blocking` |
+| `TestTemporalAudit_I_SessionStopUnregistersAndNoStaleLeak` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_i_session_stop_unregisters_and_no_stale_leak` |
+| `TestTemporalAudit_J_PrivacyNoSensitiveData` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_j_privacy_no_sensitive_data` |
+| `TestTemporalAudit_K_LegacySemanticsIntact` | `diagnostics::routing_audit_eval::tests::test_temporal_audit_k_legacy_semantics_intact` |
