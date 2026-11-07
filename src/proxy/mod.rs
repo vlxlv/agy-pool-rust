@@ -17,7 +17,7 @@ pub use smooth_rate::*;
 pub use usage::*;
 
 use std::collections::HashSet;
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
@@ -408,7 +408,6 @@ static TOKEN_REFRESHER: LazyLock<RwLock<Option<TokenRefresherFn>>> = LazyLock::n
 pub type QuotaRefresherFn = Arc<dyn Fn(&Account) + Send + Sync>;
 static QUOTA_REFRESHER: LazyLock<RwLock<Option<QuotaRefresherFn>>> = LazyLock::new(|| RwLock::new(None));
 
-static LOG_WRITER: LazyLock<Mutex<Option<Box<dyn std::io::Write + Send + Sync>>>> = LazyLock::new(|| Mutex::new(None));
 // Installed once by the daemon, like Go's wireLogRotator sync.Once: tests run several daemons in one process.
 static LOG_ROTATOR: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
@@ -589,30 +588,19 @@ pub fn do_schedule_quota_refresh(account: &Account) {
     crate::quota::schedule_quota_refresh_simple(account);
 }
 
-pub struct LogWriterGuard;
-impl Drop for LogWriterGuard {
-    fn drop(&mut self) {
-        *LOG_WRITER.lock().unwrap() = None;
-    }
-}
-
-pub fn set_log_writer_for_test(w: Box<dyn std::io::Write + Send + Sync>) -> LogWriterGuard {
-    *LOG_WRITER.lock().unwrap() = Some(w);
-    LogWriterGuard
-}
+pub use crate::observability::{LogWriterGuard, set_log_writer_for_test};
 
 pub fn log_message(prefix: &str, msg: &str) {
-    // Local time, like Go's time.Now().Format.
-    let now_str = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S");
-    let line = format!("[{now_str}] [{prefix}] {msg}\n");
-    let mut guard = LOG_WRITER.lock().unwrap();
-    if let Some(w) = guard.as_mut() {
-        let _ = w.write_all(line.as_bytes());
-        let _ = w.flush();
+    let level = if prefix.contains("ERROR") || prefix.contains("EXCEPTION") || prefix.contains("ALL EXHAUSTED") {
+        crate::observability::LogLevel::Error
+    } else if prefix.contains("WARN") || prefix.contains("FAILOVER") || prefix.contains("STREAM TRUNCATED") {
+        crate::observability::LogLevel::Warn
+    } else if prefix.contains("DEBUG") {
+        crate::observability::LogLevel::Debug
     } else {
-        let mut stderr = std::io::stderr();
-        let _ = std::io::Write::write_all(&mut stderr, line.as_bytes());
-    }
+        crate::observability::LogLevel::Info
+    };
+    crate::observability::log_message_level(level, prefix, msg);
 }
 
 pub fn fmt_dur(d: Duration) -> String {

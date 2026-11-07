@@ -4,6 +4,9 @@ use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
+pub mod logger;
+pub use logger::*;
+
 /// Low-overhead process-lifetime atomic counters for runtime observability.
 struct Metrics {
     generation_requests: AtomicU64,
