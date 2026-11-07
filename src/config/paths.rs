@@ -942,6 +942,10 @@ pub fn log_file() -> PathBuf {
     data_dir().join("agy-pool.log")
 }
 
+pub fn audit_file() -> PathBuf {
+    data_dir().join("audit-events.jsonl")
+}
+
 pub fn locks_dir() -> PathBuf {
     data_dir().join("locks")
 }
@@ -966,6 +970,12 @@ pub fn specific_lock_file(name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_audit_file_path() {
+        let p = audit_file();
+        assert!(p.ends_with("audit-events.jsonl"));
+    }
 
     #[test]
     fn refuse_production_state() {

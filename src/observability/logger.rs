@@ -23,18 +23,28 @@ impl LogLevel {
             LogLevel::Error => "ERROR",
         }
     }
+
+    pub fn parse_lossy(s: &str) -> Self {
+        let trimmed = s.trim().to_ascii_uppercase();
+        match trimmed.as_str() {
+            "DEBUG" => LogLevel::Debug,
+            "WARN" | "WARNING" => LogLevel::Warn,
+            "ERROR" => LogLevel::Error,
+            _ => LogLevel::Info,
+        }
+    }
+}
+
+impl From<&str> for LogLevel {
+    fn from(s: &str) -> Self {
+        Self::parse_lossy(s)
+    }
 }
 
 impl FromStr for LogLevel {
     type Err = std::convert::Infallible;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim().to_ascii_uppercase();
-        Ok(match trimmed.as_str() {
-            "DEBUG" => LogLevel::Debug,
-            "WARN" | "WARNING" => LogLevel::Warn,
-            "ERROR" => LogLevel::Error,
-            _ => LogLevel::Info,
-        })
+        Ok(Self::parse_lossy(s))
     }
 }
 
@@ -105,6 +115,11 @@ pub fn init_async_logger_with_writer(mut writer: Box<dyn Write + Send>, level: L
 }
 
 pub struct LoggerGuard;
+impl Drop for LoggerGuard {
+    fn drop(&mut self) {
+        set_log_level(LogLevel::Info);
+    }
+}
 
 fn run_logger_loop(rx: Receiver<LogCommand>, writer: &mut Box<dyn Write + Send>) {
     let mut batch = Vec::with_capacity(64);
@@ -172,9 +187,6 @@ fn flush_batch(batch: &mut Vec<String>, writer: &mut Box<dyn Write + Send>) {
 }
 
 pub fn log_message_level(level: LogLevel, prefix: &str, msg: &str) {
-    if level < get_log_level() {
-        return;
-    }
     let now_str = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S");
     let line = format!("[{now_str}] [{}] [{prefix}] {msg}\n", level.as_str());
 
@@ -186,6 +198,10 @@ pub fn log_message_level(level: LogLevel, prefix: &str, msg: &str) {
             let _ = w.flush();
             return;
         }
+    }
+
+    if level < get_log_level() {
+        return;
     }
 
     // 2. Otherwise route to async logger if active

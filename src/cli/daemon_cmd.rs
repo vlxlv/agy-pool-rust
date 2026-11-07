@@ -6,6 +6,7 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
     let mut follow = false;
     let mut clear = false;
     let mut rotate = false;
+    let mut audit = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -16,6 +17,8 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
             clear = true;
         } else if arg == "--rotate" {
             rotate = true;
+        } else if arg == "--audit" {
+            audit = true;
         } else if (arg == "-n" || arg == "--lines") && i + 1 < args.len() {
             if let Ok(n) = args[i + 1].parse::<usize>() {
                 lines = n;
@@ -25,34 +28,44 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
         i += 1;
     }
 
-    let log_file = crate::config::log_file();
-    let max_log_bytes = crate::config::DEFAULT_MAX_LOG_BYTES;
+    let target_file = if audit {
+        crate::config::audit_file()
+    } else {
+        crate::config::log_file()
+    };
+    let max_log_bytes = if audit {
+        20 * 1024 * 1024
+    } else {
+        crate::config::DEFAULT_MAX_LOG_BYTES
+    };
     let backup_count = crate::config::DEFAULT_BACKUP_LOG_COUNT;
 
     if clear {
-        let _ = crate::daemon::clear_log(Some(&log_file), backup_count as i32);
+        let _ = crate::daemon::clear_log(Some(&target_file), backup_count as i32);
+        let name = if audit { "audit stream" } else { "gateway log" };
         let _ = writeln!(
             io.stdout,
-            "{}✓ Successfully cleared gateway log ({}){}",
+            "{}✓ Successfully cleared {} ({}){}",
             CLR_GREEN,
-            log_file.display(),
+            name,
+            target_file.display(),
             CLR_RESET
         );
         return 0;
     }
 
     if rotate {
-        match std::fs::metadata(&log_file) {
+        match std::fs::metadata(&target_file) {
             Ok(fi) if fi.len() > 0 => {
                 let rotated =
-                    crate::daemon::rotate_log_if_needed(Some(&log_file), max_log_bytes, backup_count as i32, true);
+                    crate::daemon::rotate_log_if_needed(Some(&target_file), max_log_bytes, backup_count as i32, true);
                 if let Ok(true) = rotated {
                     let _ = writeln!(
                         io.stdout,
                         "{}✓ Rotated active log: {} -> {}.1{}",
                         CLR_GREEN,
-                        log_file.display(),
-                        log_file.display(),
+                        target_file.display(),
+                        target_file.display(),
                         CLR_RESET
                     );
                 } else {
@@ -70,21 +83,23 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
         return 0;
     }
 
-    let fi = match std::fs::metadata(&log_file) {
+    let fi = match std::fs::metadata(&target_file) {
         Ok(m) => m,
         Err(_) => {
+            let name = if audit { "Audit file" } else { "Log file" };
             let _ = writeln!(
                 io.stdout,
-                "{}Log file does not exist yet: {}{}",
+                "{}{} does not exist yet: {}{}",
                 CLR_YELLOW,
-                log_file.display(),
+                name,
+                target_file.display(),
                 CLR_RESET
             );
             return 0;
         }
     };
 
-    let content = match std::fs::read_to_string(&log_file) {
+    let content = match std::fs::read_to_string(&target_file) {
         Ok(c) => c,
         Err(e) => {
             let _ = writeln!(
@@ -99,20 +114,23 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
     let all_lines: Vec<&str> = content.lines().collect();
     let total_lines = all_lines.len();
 
-    let backup_file = format!("{}.1", log_file.display());
+    let backup_file = format!("{}.1", target_file.display());
     let backup_info = if let Ok(bfi) = std::fs::metadata(&backup_file) {
         format!(" | Backup: {}", crate::daemon::format_size(bfi.len() as i64))
     } else {
         String::new()
     };
 
-    let _ = writeln!(io.stdout, "{}", "=".repeat(68));
-    let _ = writeln!(
-        io.stdout,
+    let header_title = if audit {
+        "              Antigravity Gateway Audit Events Stream              "
+    } else {
         "                    Antigravity Gateway Log                         "
-    );
+    };
+
     let _ = writeln!(io.stdout, "{}", "=".repeat(68));
-    let _ = writeln!(io.stdout, "Path: {}", log_file.display());
+    let _ = writeln!(io.stdout, "{}", header_title);
+    let _ = writeln!(io.stdout, "{}", "=".repeat(68));
+    let _ = writeln!(io.stdout, "Path: {}", target_file.display());
     let _ = writeln!(
         io.stdout,
         "Size: {} ({} lines){}",
@@ -279,6 +297,24 @@ mod tests {
         let (code, stdout, _) = run_cli(&["logs", "--clear"], "").await;
         assert_eq!(code, 0, "logs --clear expected 0, got {code}");
         assert!(stdout.contains("Successfully cleared gateway log"));
+    }
+
+    #[tokio::test]
+    async fn test_logs_audit_command() {
+        let _env = cli_test_env();
+
+        let audit_file = crate::config::audit_file();
+        std::fs::write(&audit_file, "{\"request_id\":\"req-1\"}\n{\"request_id\":\"req-2\"}\n").unwrap();
+
+        let (code, stdout, _) = run_cli(&["logs", "--audit", "-n", "1"], "").await;
+        assert_eq!(code, 0, "logs --audit expected 0, got {code}");
+        assert!(stdout.contains("Audit Events Stream"));
+        assert!(stdout.contains("{\"request_id\":\"req-2\"}"));
+
+        // Clear audit
+        let (code, stdout, _) = run_cli(&["logs", "--audit", "--clear"], "").await;
+        assert_eq!(code, 0, "logs --audit --clear expected 0, got {code}");
+        assert!(stdout.contains("Successfully cleared audit stream"));
     }
 
     #[tokio::test]

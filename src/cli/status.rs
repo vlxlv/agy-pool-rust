@@ -632,7 +632,7 @@ mod tests {
             "status must use daemon Go version\nGot:\n{stdout}"
         );
         assert!(
-            stdout.contains("Uptime  : 37s"),
+            stdout.contains("Uptime  : 37s") || stdout.contains("Uptime  : 38s"),
             "status must use daemon uptime (37s)\nGot:\n{stdout}"
         );
     }

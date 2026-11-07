@@ -188,6 +188,23 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
         super::log::maybe_rotate_log();
     });
 
+    // Initialize dual-track logging
+    let log_level = std::env::var("AGY_LOG_LEVEL")
+        .ok()
+        .map(|s| crate::observability::LogLevel::parse_lossy(&s))
+        .unwrap_or(crate::observability::LogLevel::Info);
+    let log_target = opts.log_file.clone().unwrap_or_else(crate::config::log_file);
+    let _logger_handle = if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_target) {
+        Some(crate::observability::init_async_logger_with_writer(
+            Box::new(file),
+            log_level,
+        ))
+    } else {
+        None
+    };
+    let audit_target = crate::config::audit_file();
+    let _audit_handle = crate::observability::init_audit_worker(audit_target, 20 * 1024 * 1024, 1);
+
     // 2. Open TCP listener
     let addr_str = format!("{}:{}", ctx_inst.listen_host, port);
     let listener = match tokio::net::TcpListener::bind(&addr_str).await {
@@ -367,6 +384,8 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     stats_writer.stop().await;
     crate::observability::clear_on_in_flight_change();
     crate::proxy::save_affinities();
+    crate::observability::flush_logs_sync_for_test();
+    crate::observability::flush_audit_sync_for_test();
 
     let _ = super::pid::remove_pid_file_if_owned(&pid_file, current_pid);
     let _ = std::fs::remove_file(&runtime_file);

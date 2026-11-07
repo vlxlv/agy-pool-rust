@@ -171,7 +171,7 @@ fn update_active_auditors_locked(state: &mut AuditState) {
 
 pub fn has_active_auditor() -> bool {
     let state = AUDIT_STATE.read().unwrap();
-    state.active_auditors > 0 || crate::observability::is_audit_worker_active()
+    state.active_auditors > 0
 }
 
 pub fn subscribe_audit(buf_size: usize) -> (tokio::sync::mpsc::Receiver<RoutingEvent>, AuditSubscription) {
@@ -1089,7 +1089,7 @@ impl Handler {
                 format!("req-{}", hex::encode(b))
             });
 
-        let audit_ctx = if is_generation && has_active_auditor() {
+        let audit_ctx = if is_generation && (has_active_auditor() || crate::observability::is_audit_worker_active()) {
             Some(build_selection_audit_context(&pool, strategy, now))
         } else {
             None
