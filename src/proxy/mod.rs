@@ -171,7 +171,7 @@ fn update_active_auditors_locked(state: &mut AuditState) {
 
 pub fn has_active_auditor() -> bool {
     let state = AUDIT_STATE.read().unwrap();
-    state.active_auditors > 0
+    state.active_auditors > 0 || crate::observability::is_audit_worker_active()
 }
 
 pub fn subscribe_audit(buf_size: usize) -> (tokio::sync::mpsc::Receiver<RoutingEvent>, AuditSubscription) {
@@ -1078,6 +1078,17 @@ impl Handler {
             get_user_agent()
         };
 
+        let request_id = parts
+            .headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                let mut b = [0u8; 8];
+                let _ = getrandom::fill(&mut b);
+                format!("req-{}", hex::encode(b))
+            });
+
         let audit_ctx = if is_generation && has_active_auditor() {
             Some(build_selection_audit_context(&pool, strategy, now))
         } else {
@@ -1152,6 +1163,7 @@ impl Handler {
                 frozen_event,
                 in_flight_guard: cur_ifg,
                 lease_guard: cur_lg,
+                request_id: &request_id,
             };
 
             let (outcome, tokens) = dispatch_account(dispatch_params).await;

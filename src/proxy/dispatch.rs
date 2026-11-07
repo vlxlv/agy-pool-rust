@@ -1,10 +1,12 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use hyper::http::{HeaderMap, Method, Response, StatusCode, Uri};
 
-use crate::observability::{InFlightGuard, record_no_replay_prevented};
+use crate::observability::{
+    AuditEvent, AuditQuota, AuditTokens, InFlightGuard, record_audit_event, record_no_replay_prevented,
+};
 use crate::proxy::body::{ProxyBody, StreamBody, StreamBodyParams, send_buffered, send_stream};
 use crate::proxy::usage::UsageTap;
 use crate::proxy::{
@@ -48,6 +50,73 @@ pub struct DispatchParams<'a> {
     pub frozen_event: Option<RoutingEvent>,
     pub in_flight_guard: Option<InFlightGuard>,
     pub lease_guard: Option<LeaseGuard>,
+    pub request_id: &'a str,
+}
+
+fn audit_quota_from_routing_event(ev: &RoutingEvent) -> AuditQuota {
+    let now = jiff::Timestamp::now();
+    let r5_secs = ev.five_hour_reset_at.as_deref().and_then(|s| {
+        s.parse::<jiff::Timestamp>().ok().map(|t| {
+            let diff = t.duration_since(now);
+            let secs = diff.as_secs();
+            if secs > 0 { secs as u64 } else { 0 }
+        })
+    });
+    let r7_secs = ev.weekly_reset_at.as_deref().and_then(|s| {
+        s.parse::<jiff::Timestamp>().ok().map(|t| {
+            let diff = t.duration_since(now);
+            let secs = diff.as_secs();
+            if secs > 0 { secs as u64 } else { 0 }
+        })
+    });
+    AuditQuota {
+        q5: ev.five_hour_remaining,
+        q7: ev.weekly_remaining,
+        r5_secs,
+        r7_secs,
+    }
+}
+
+fn record_attempt_audit(
+    params: &DispatchParams<'_>,
+    status_code: u16,
+    reason: &str,
+    ttfb: Duration,
+    total: Duration,
+    tokens: AuditTokens,
+) {
+    notify_audit(params.frozen_event.as_ref(), params.attempt, status_code, reason);
+    if crate::observability::is_audit_worker_active() {
+        let quota_before = params
+            .frozen_event
+            .as_ref()
+            .map(audit_quota_from_routing_event)
+            .unwrap_or(AuditQuota {
+                q5: None,
+                q7: None,
+                r5_secs: None,
+                r7_secs: None,
+            });
+        let event = AuditEvent {
+            timestamp: jiff::Timestamp::now().to_string(),
+            request_id: params.request_id.to_string(),
+            session_key: params.session_key.to_string(),
+            method: params.req_method.to_string(),
+            path: params.path.to_string(),
+            model: params.model.to_string(),
+            strategy: params.strategy.to_string(),
+            attempt: params.attempt,
+            account_id: params.acc.id.clone(),
+            account_name: crate::accounts::display_account_name(Some(params.acc), Some(false)),
+            status_code,
+            ttfb_ms: ttfb.as_millis() as u64,
+            total_ms: total.as_millis() as u64,
+            tokens,
+            quota_before,
+            failover_reason: reason.to_string(),
+        };
+        record_audit_event(event);
+    }
 }
 
 /// Dispatches a request to one specific account.
@@ -70,7 +139,14 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 "PROXY WARN",
                 &format!("Token refresh failed for {disp_name}: {err}. Switching to next account..."),
             );
-            notify_audit(params.frozen_event.as_ref(), params.attempt, 401, "TokenRefreshFailed");
+            record_attempt_audit(
+                &params,
+                401,
+                "TokenRefreshFailed",
+                Duration::ZERO,
+                Duration::ZERO,
+                AuditTokens { prompt: 0, cached: 0 },
+            );
             if let Err(persist_err) = record_auth_error(params.acc) {
                 log_message(
                     "PROXY WARN",
@@ -117,11 +193,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                         params.req_method, path_base
                     ),
                 );
-                notify_audit(
-                    params.frozen_event.as_ref(),
-                    params.attempt,
+                record_attempt_audit(
+                    &params,
                     502,
                     "PreConnectTransportFailure",
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    AuditTokens { prompt: 0, cached: 0 },
                 );
                 return (
                     Attempt::Failover {
@@ -156,11 +234,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     "PROXY EXCEPTION",
                     &format!("{} {} -> {disp_name}: {send_err}", params.req_method, path_base),
                 );
-                notify_audit(
-                    params.frozen_event.as_ref(),
-                    params.attempt,
+                record_attempt_audit(
+                    &params,
                     502,
                     "AmbiguousTransportFailure",
+                    ttfb,
+                    start.elapsed(),
+                    AuditTokens { prompt: 0, cached: 0 },
                 );
                 record_no_replay_prevented();
 
@@ -205,11 +285,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                             params.req_method, path_base
                         ),
                     );
-                    notify_audit(
-                        params.frozen_event.as_ref(),
-                        params.attempt,
+                    record_attempt_audit(
+                        &params,
                         502,
                         "PreConnectTransportFailure",
+                        Duration::ZERO,
+                        Duration::ZERO,
+                        AuditTokens { prompt: 0, cached: 0 },
                     );
                     return (
                         Attempt::Failover {
@@ -223,11 +305,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     "PROXY EXCEPTION",
                     &format!("{} {} -> {disp_name}: {err}", params.req_method, path_base),
                 );
-                notify_audit(
-                    params.frozen_event.as_ref(),
-                    params.attempt,
+                record_attempt_audit(
+                    &params,
                     502,
                     "AmbiguousTransportFailure",
+                    ttfb,
+                    start.elapsed(),
+                    AuditTokens { prompt: 0, cached: 0 },
                 );
                 record_no_replay_prevented();
                 let err_str = err.to_string().to_ascii_lowercase();
@@ -284,11 +368,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     params.model, cooldown
                 ),
             );
-            notify_audit(
-                params.frozen_event.as_ref(),
-                params.attempt,
+            record_attempt_audit(
+                &params,
                 status_code,
                 "ModelCapacityExhausted",
+                ttfb,
+                start.elapsed(),
+                AuditTokens { prompt: 0, cached: 0 },
             );
             return (
                 Attempt::Failover {
@@ -312,11 +398,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 "FAILOVER",
                 &format!("Account {disp_name} requires account verification! Auto-switching to next account..."),
             );
-            notify_audit(
-                params.frozen_event.as_ref(),
-                params.attempt,
+            record_attempt_audit(
+                &params,
                 status_code,
                 "ValidationError",
+                ttfb,
+                start.elapsed(),
+                AuditTokens { prompt: 0, cached: 0 },
             );
             return (
                 Attempt::Failover {
@@ -342,11 +430,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     "Account {disp_name} hit rate limit/quota error! Cooldown {delay}s. Auto-switching to next account..."
                 ),
             );
-            notify_audit(
-                params.frozen_event.as_ref(),
-                params.attempt,
+            record_attempt_audit(
+                &params,
                 status_code,
                 "QuotaExhausted",
+                ttfb,
+                start.elapsed(),
+                AuditTokens { prompt: 0, cached: 0 },
             );
             return (
                 Attempt::Failover {
@@ -367,7 +457,14 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 "FAILOVER",
                 &format!("Account {disp_name} auth/permission failure! Auto-switching to next account..."),
             );
-            notify_audit(params.frozen_event.as_ref(), params.attempt, status_code, "AuthFailure");
+            record_attempt_audit(
+                &params,
+                status_code,
+                "AuthFailure",
+                ttfb,
+                start.elapsed(),
+                AuditTokens { prompt: 0, cached: 0 },
+            );
             return (
                 Attempt::Failover {
                     reason: "ExplicitRetryableUpstreamResponse:AuthFailure",
@@ -389,11 +486,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     "Account {disp_name} hit temporary location restriction (HTTP {status_code})! Auto-switching to next account (soft cooldown 30s)..."
                 ),
             );
-            notify_audit(
-                params.frozen_event.as_ref(),
-                params.attempt,
+            record_attempt_audit(
+                &params,
                 status_code,
                 "LocationError",
+                ttfb,
+                start.elapsed(),
+                AuditTokens { prompt: 0, cached: 0 },
             );
             return (
                 Attempt::Failover {
@@ -419,11 +518,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     "Account {disp_name} upstream unavailable (HTTP 503)! Auto-switching to next account (soft cooldown 30s)..."
                 ),
             );
-            notify_audit(
-                params.frozen_event.as_ref(),
-                params.attempt,
+            record_attempt_audit(
+                &params,
                 status_code,
                 "UpstreamUnavailable",
+                ttfb,
+                start.elapsed(),
+                AuditTokens { prompt: 0, cached: 0 },
             );
             return (
                 Attempt::Failover {
@@ -435,11 +536,13 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         }
 
         // Ordinary upstream error (400, 404, 500, etc.): Forward directly, DO NOT REPLAY!
-        notify_audit(
-            params.frozen_event.as_ref(),
-            params.attempt,
+        record_attempt_audit(
+            &params,
             status_code,
             "NonRetryableError",
+            ttfb,
+            start.elapsed(),
+            AuditTokens { prompt: 0, cached: 0 },
         );
         let mut out_headers = parts.headers;
         attach_debug_headers(
@@ -485,6 +588,17 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<usize>().ok());
 
+        let quota_before = params
+            .frozen_event
+            .as_ref()
+            .map(audit_quota_from_routing_event)
+            .unwrap_or(AuditQuota {
+                q5: None,
+                q7: None,
+                r5_secs: None,
+                r7_secs: None,
+            });
+
         let stream_params = StreamBodyParams {
             is_generation: params.is_generation,
             method: params.req_method.to_string(),
@@ -502,6 +616,11 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             expected_len,
             in_flight_guard: params.in_flight_guard,
             lease_guard: params.lease_guard,
+            request_id: params.request_id.to_string(),
+            strategy: params.strategy.to_string(),
+            path: params.path.to_string(),
+            attempt: params.attempt,
+            quota_before,
         };
         let stream_body = StreamBody::new(incoming_body, stream_params);
         let resp = send_stream(status, &out_headers, stream_body.boxed());
@@ -541,6 +660,14 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     ),
                 );
                 record_no_replay_prevented();
+                record_attempt_audit(
+                    &params,
+                    StatusCode::BAD_GATEWAY.as_u16(),
+                    "UnexpectedEof",
+                    ttfb,
+                    start.elapsed(),
+                    AuditTokens { prompt: 0, cached: 0 },
+                );
                 let mut out_headers = HeaderMap::new();
                 attach_debug_headers(
                     &mut out_headers,
@@ -578,6 +705,14 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             } else {
                 StatusCode::BAD_GATEWAY
             };
+            record_attempt_audit(
+                &params,
+                err_status.as_u16(),
+                "ReadError",
+                ttfb,
+                start.elapsed(),
+                AuditTokens { prompt: 0, cached: 0 },
+            );
             let resp = send_buffered(
                 err_status,
                 &out_headers,
@@ -608,5 +743,16 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         prompt: usage.prompt,
         cached: usage.cached,
     };
+    record_attempt_audit(
+        &params,
+        status_code,
+        "",
+        ttfb,
+        start.elapsed(),
+        AuditTokens {
+            prompt: tokens.prompt,
+            cached: tokens.cached,
+        },
+    );
     (Attempt::Done(resp), Some(tokens))
 }

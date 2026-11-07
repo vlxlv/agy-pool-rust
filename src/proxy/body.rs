@@ -72,6 +72,11 @@ pub struct StreamBodyParams {
     pub expected_len: Option<usize>,
     pub in_flight_guard: Option<InFlightGuard>,
     pub lease_guard: Option<LeaseGuard>,
+    pub request_id: String,
+    pub strategy: String,
+    pub path: String,
+    pub attempt: usize,
+    pub quota_before: crate::observability::AuditQuota,
 }
 
 /// StreamBody wraps an incoming upstream streaming body, tapping usage, enforcing Content-Length,
@@ -128,6 +133,29 @@ where
                 self.completed = true;
                 log_message("STREAM TRUNCATED", &err.to_string());
                 record_no_replay_prevented();
+                if crate::observability::is_audit_worker_active() {
+                    crate::observability::record_audit_event(crate::observability::AuditEvent {
+                        timestamp: jiff::Timestamp::now().to_string(),
+                        request_id: self.params.request_id.clone(),
+                        session_key: self.params.session_key.clone(),
+                        method: self.params.method.clone(),
+                        path: self.params.path.clone(),
+                        model: self.params.model.clone(),
+                        strategy: self.params.strategy.clone(),
+                        attempt: self.params.attempt,
+                        account_id: self.params.account_id.clone(),
+                        account_name: self.params.disp_name.clone(),
+                        status_code: self.params.status,
+                        ttfb_ms: self.params.ttfb.as_millis() as u64,
+                        total_ms: self.params.start_time.elapsed().as_millis() as u64,
+                        tokens: crate::observability::AuditTokens {
+                            prompt: self.usage.prompt,
+                            cached: self.usage.cached,
+                        },
+                        quota_before: self.params.quota_before.clone(),
+                        failover_reason: "StreamTruncated".to_string(),
+                    });
+                }
                 Poll::Ready(Some(Err(std::io::Error::other(err.to_string()))))
             }
             Poll::Ready(None) => {
@@ -138,6 +166,29 @@ where
                     let msg = format!("expected {} bytes, sent {}", expected, self.sent_bytes);
                     log_message("STREAM TRUNCATED", &msg);
                     record_no_replay_prevented();
+                    if crate::observability::is_audit_worker_active() {
+                        crate::observability::record_audit_event(crate::observability::AuditEvent {
+                            timestamp: jiff::Timestamp::now().to_string(),
+                            request_id: self.params.request_id.clone(),
+                            session_key: self.params.session_key.clone(),
+                            method: self.params.method.clone(),
+                            path: self.params.path.clone(),
+                            model: self.params.model.clone(),
+                            strategy: self.params.strategy.clone(),
+                            attempt: self.params.attempt,
+                            account_id: self.params.account_id.clone(),
+                            account_name: self.params.disp_name.clone(),
+                            status_code: self.params.status,
+                            ttfb_ms: self.params.ttfb.as_millis() as u64,
+                            total_ms: self.params.start_time.elapsed().as_millis() as u64,
+                            tokens: crate::observability::AuditTokens {
+                                prompt: self.usage.prompt,
+                                cached: self.usage.cached,
+                            },
+                            quota_before: self.params.quota_before.clone(),
+                            failover_reason: "StreamTruncatedEof".to_string(),
+                        });
+                    }
                     return Poll::Ready(Some(Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, msg))));
                 }
 
@@ -155,6 +206,30 @@ where
                         self.params.audit_suffix
                     ),
                 );
+
+                if crate::observability::is_audit_worker_active() {
+                    crate::observability::record_audit_event(crate::observability::AuditEvent {
+                        timestamp: jiff::Timestamp::now().to_string(),
+                        request_id: self.params.request_id.clone(),
+                        session_key: self.params.session_key.clone(),
+                        method: self.params.method.clone(),
+                        path: self.params.path.clone(),
+                        model: self.params.model.clone(),
+                        strategy: self.params.strategy.clone(),
+                        attempt: self.params.attempt,
+                        account_id: self.params.account_id.clone(),
+                        account_name: self.params.disp_name.clone(),
+                        status_code: self.params.status,
+                        ttfb_ms: self.params.ttfb.as_millis() as u64,
+                        total_ms: total.as_millis() as u64,
+                        tokens: crate::observability::AuditTokens {
+                            prompt: self.usage.prompt,
+                            cached: self.usage.cached,
+                        },
+                        quota_before: self.params.quota_before.clone(),
+                        failover_reason: String::new(),
+                    });
+                }
 
                 if self.params.is_generation {
                     record_generation_success();
