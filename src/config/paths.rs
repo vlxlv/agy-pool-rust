@@ -973,8 +973,12 @@ mod tests {
 
     #[test]
     fn test_audit_file_path() {
+        let _g = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(configure_data_dir(tmp.path()).is_ok());
         let p = audit_file();
         assert!(p.ends_with("audit-events.jsonl"));
+        reset_data_dir();
     }
 
     #[test]
@@ -1037,6 +1041,7 @@ mod tests {
         assert_eq!(quota_file(), tmp.path().join("quota.json"));
         assert_eq!(pid_file(), tmp.path().join("agy-pool.pid"));
         assert_eq!(log_file(), tmp.path().join("agy-pool.log"));
+        assert_eq!(audit_file(), tmp.path().join("audit-events.jsonl"));
         assert_eq!(locks_dir(), tmp.path().join("locks"));
         assert_eq!(lock_file(), tmp.path().join("locks").join("accounts.lock"));
         assert_eq!(
