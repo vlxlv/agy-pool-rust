@@ -223,7 +223,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: sums
+    needs: [prepare, sums]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-26.04
     timeout-minutes: 10
