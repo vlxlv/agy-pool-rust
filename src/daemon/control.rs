@@ -177,12 +177,10 @@ pub fn restart_instance(
     }
 
     // Determine identity of the running daemon to stop under its recorded port/config.
-    let old_pid = info
-        .as_ref()
-        .filter(|i| super::pid::is_process_alive(i.pid))
-        .map(|i| i.pid);
+    let live_info = info.as_ref().filter(|i| super::pid::is_process_alive(i.pid));
+    let old_pid = live_info.map(|i| i.pid);
     let mut stop_ctx = ctx.clone();
-    if let Some(i) = info.as_ref().filter(|i| super::pid::is_process_alive(i.pid)) {
+    if let Some(i) = live_info {
         if let Some(port) = i.port {
             stop_ctx.listen_port = port;
         }
@@ -214,11 +212,7 @@ pub fn restart_instance(
     }
 
     // 2. Bounded wait for port release
-    let wait_port = if stop_ctx.listen_port == ctx.listen_port {
-        ctx.listen_port
-    } else {
-        stop_ctx.listen_port
-    };
+    let wait_port = stop_ctx.listen_port;
     if wait_port > 0 {
         for _ in 0..30 {
             if !super::server::is_port_listening(wait_port) {
