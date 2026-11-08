@@ -176,8 +176,11 @@ pub fn restart_instance(
         }
     }
 
-    // 1. Stop existing daemon under its recorded port/config: after a config switch they differ from ctx,
-    // and stop_with_file refuses a mismatched identity.
+    // Determine identity of the running daemon to stop under its recorded port/config.
+    let old_pid = info
+        .as_ref()
+        .filter(|i| super::pid::is_process_alive(i.pid))
+        .map(|i| i.pid);
     let mut stop_ctx = ctx.clone();
     if let Some(i) = info.as_ref().filter(|i| super::pid::is_process_alive(i.pid)) {
         if let Some(port) = i.port {
@@ -188,14 +191,41 @@ pub fn restart_instance(
             .as_ref()
             .map(|c| super::instance::canonicalize_file(Path::new(c)).unwrap_or_else(|_| std::path::PathBuf::from(c)));
     }
+
+    // If moving to a different port, verify the target port is free before stopping the running daemon.
+    if stop_ctx.listen_port != ctx.listen_port
+        && ctx.listen_port > 0
+        && super::server::is_port_listening(ctx.listen_port)
+    {
+        return Err(DaemonError::ForeignPortOccupied(format!(
+            "port {} is occupied by another process; cannot move daemon from port {}",
+            ctx.listen_port, stop_ctx.listen_port
+        )));
+    }
+
+    // 1. Stop existing daemon
     let _ = stop_with_file(&stop_ctx, &pid_file, Duration::from_secs(5));
+    if let Some(pid) = old_pid
+        && super::pid::is_process_alive(pid)
+    {
+        return Err(DaemonError::Message(format!(
+            "cannot restart instance: existing daemon (PID {pid}) did not terminate"
+        )));
+    }
 
     // 2. Bounded wait for port release
-    for _ in 0..30 {
-        if !super::server::is_port_listening(ctx.listen_port) {
-            break;
+    let wait_port = if stop_ctx.listen_port == ctx.listen_port {
+        ctx.listen_port
+    } else {
+        stop_ctx.listen_port
+    };
+    if wait_port > 0 {
+        for _ in 0..30 {
+            if !super::server::is_port_listening(wait_port) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
 
     // 3. Start new daemon with same instance configuration
@@ -400,6 +430,60 @@ mod tests {
         let _ = stop_daemon(Some(&pid_file), port_b, Duration::from_secs(3));
         kill_guard1.disarm();
         kill_guard2.disarm();
+    }
+
+    #[test]
+    fn test_restart_preserves_running_daemon_if_target_port_occupied() {
+        let env = crate::daemon::test_env();
+        let pid_file = env.temp_dir.path().join("preserve.pid");
+        let log_file = env.temp_dir.path().join("preserve.log");
+
+        let free_port = || {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let (port_a, port_b) = (free_port(), free_port());
+        let write_cfg = |name: &str, port: u16| {
+            let p = env.temp_dir.path().join(name);
+            std::fs::write(
+                &p,
+                format!(r#"{{"version": 1, "server": {{"listen": "127.0.0.1", "port": {port}}}}}"#),
+            )
+            .unwrap();
+            p
+        };
+        let (cfg_a, cfg_b) = (write_cfg("cfg-a.json", port_a), write_cfg("cfg-b.json", port_b));
+
+        let opts = super::super::lifecycle::LaunchOptions {
+            port: port_a,
+            config_file: Some(cfg_a),
+            pid_file: Some(pid_file.clone()),
+            log_file: Some(log_file),
+            entrypoint_path: Some(super::super::pid::get_entrypoint_path()),
+            ..Default::default()
+        };
+        let res1 = super::super::lifecycle::start_daemon(opts.clone()).unwrap();
+        let mut kill_guard1 = crate::daemon::lifecycle::ProcessKillGuard::new(res1.pid);
+
+        // Occupy port_b with a foreign listener
+        let foreign_listener = std::net::TcpListener::bind(format!("127.0.0.1:{port_b}")).unwrap();
+
+        // Attempting restart to occupied port_b must fail and NOT kill the existing daemon on port_a
+        let err = restart_daemon(super::super::lifecycle::LaunchOptions {
+            port: port_b,
+            config_file: Some(cfg_b),
+            ..opts
+        })
+        .unwrap_err();
+        assert!(matches!(err, DaemonError::ForeignPortOccupied(_)));
+
+        // Daemon on port_a must still be running and alive
+        assert!(super::super::pid::is_process_alive(res1.pid));
+        assert!(super::super::server::is_daemon_running(Some(&pid_file), port_a));
+
+        drop(foreign_listener);
+        let _ = stop_daemon(Some(&pid_file), port_a, Duration::from_secs(3));
+        kill_guard1.disarm();
     }
 
     #[test]
