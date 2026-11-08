@@ -99,6 +99,41 @@ impl<B> StreamBody<B> {
             completed: false,
         }
     }
+
+    fn emit_audit(&self, reason: &str, total: Duration) {
+        if crate::observability::is_audit_worker_active() {
+            let path = self.params.path.split('?').next().unwrap_or(&self.params.path);
+            crate::observability::record_audit_event(crate::observability::AuditEvent {
+                timestamp: jiff::Timestamp::now().to_string(),
+                request_id: self.params.request_id.clone(),
+                session_key: crate::proxy::usage::session_tag(&self.params.session_key),
+                method: self.params.method.clone(),
+                path: path.to_string(),
+                model: self.params.model.clone(),
+                strategy: self.params.strategy.clone(),
+                attempt: self.params.attempt,
+                account_id: self.params.account_id.clone(),
+                account_name: self.params.disp_name.clone(),
+                status_code: self.params.status,
+                ttfb_ms: self.params.ttfb.as_millis() as u64,
+                total_ms: total.as_millis() as u64,
+                tokens: crate::observability::AuditTokens {
+                    prompt: self.usage.prompt,
+                    cached: self.usage.cached,
+                },
+                quota_before: self.params.quota_before.clone(),
+                failover_reason: reason.to_string(),
+            });
+        }
+    }
+}
+
+impl<B> Drop for StreamBody<B> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.emit_audit("ClientDisconnected", self.params.start_time.elapsed());
+        }
+    }
 }
 
 impl<B> Body for StreamBody<B>
@@ -133,29 +168,7 @@ where
                 self.completed = true;
                 log_message("STREAM TRUNCATED", &err.to_string());
                 record_no_replay_prevented();
-                if crate::observability::is_audit_worker_active() {
-                    crate::observability::record_audit_event(crate::observability::AuditEvent {
-                        timestamp: jiff::Timestamp::now().to_string(),
-                        request_id: self.params.request_id.clone(),
-                        session_key: self.params.session_key.clone(),
-                        method: self.params.method.clone(),
-                        path: self.params.path.clone(),
-                        model: self.params.model.clone(),
-                        strategy: self.params.strategy.clone(),
-                        attempt: self.params.attempt,
-                        account_id: self.params.account_id.clone(),
-                        account_name: self.params.disp_name.clone(),
-                        status_code: self.params.status,
-                        ttfb_ms: self.params.ttfb.as_millis() as u64,
-                        total_ms: self.params.start_time.elapsed().as_millis() as u64,
-                        tokens: crate::observability::AuditTokens {
-                            prompt: self.usage.prompt,
-                            cached: self.usage.cached,
-                        },
-                        quota_before: self.params.quota_before.clone(),
-                        failover_reason: "StreamTruncated".to_string(),
-                    });
-                }
+                self.emit_audit("StreamTruncated", self.params.start_time.elapsed());
                 Poll::Ready(Some(Err(std::io::Error::other(err.to_string()))))
             }
             Poll::Ready(None) => {
@@ -166,29 +179,7 @@ where
                     let msg = format!("expected {} bytes, sent {}", expected, self.sent_bytes);
                     log_message("STREAM TRUNCATED", &msg);
                     record_no_replay_prevented();
-                    if crate::observability::is_audit_worker_active() {
-                        crate::observability::record_audit_event(crate::observability::AuditEvent {
-                            timestamp: jiff::Timestamp::now().to_string(),
-                            request_id: self.params.request_id.clone(),
-                            session_key: self.params.session_key.clone(),
-                            method: self.params.method.clone(),
-                            path: self.params.path.clone(),
-                            model: self.params.model.clone(),
-                            strategy: self.params.strategy.clone(),
-                            attempt: self.params.attempt,
-                            account_id: self.params.account_id.clone(),
-                            account_name: self.params.disp_name.clone(),
-                            status_code: self.params.status,
-                            ttfb_ms: self.params.ttfb.as_millis() as u64,
-                            total_ms: self.params.start_time.elapsed().as_millis() as u64,
-                            tokens: crate::observability::AuditTokens {
-                                prompt: self.usage.prompt,
-                                cached: self.usage.cached,
-                            },
-                            quota_before: self.params.quota_before.clone(),
-                            failover_reason: "StreamTruncatedEof".to_string(),
-                        });
-                    }
+                    self.emit_audit("StreamTruncatedEof", self.params.start_time.elapsed());
                     return Poll::Ready(Some(Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, msg))));
                 }
 
@@ -207,29 +198,7 @@ where
                     ),
                 );
 
-                if crate::observability::is_audit_worker_active() {
-                    crate::observability::record_audit_event(crate::observability::AuditEvent {
-                        timestamp: jiff::Timestamp::now().to_string(),
-                        request_id: self.params.request_id.clone(),
-                        session_key: self.params.session_key.clone(),
-                        method: self.params.method.clone(),
-                        path: self.params.path.clone(),
-                        model: self.params.model.clone(),
-                        strategy: self.params.strategy.clone(),
-                        attempt: self.params.attempt,
-                        account_id: self.params.account_id.clone(),
-                        account_name: self.params.disp_name.clone(),
-                        status_code: self.params.status,
-                        ttfb_ms: self.params.ttfb.as_millis() as u64,
-                        total_ms: total.as_millis() as u64,
-                        tokens: crate::observability::AuditTokens {
-                            prompt: self.usage.prompt,
-                            cached: self.usage.cached,
-                        },
-                        quota_before: self.params.quota_before.clone(),
-                        failover_reason: String::new(),
-                    });
-                }
+                self.emit_audit("", total);
 
                 if self.params.is_generation {
                     record_generation_success();

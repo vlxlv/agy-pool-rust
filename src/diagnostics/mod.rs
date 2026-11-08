@@ -1115,7 +1115,7 @@ pub fn run_doctor(out: &mut impl Write) -> bool {
             CLR_RESET,
             log_file.display(),
             crate::daemon::format_size(meta.len() as i64),
-            crate::daemon::format_size(crate::config::DEFAULT_MAX_LOG_BYTES)
+            crate::daemon::format_size(crate::config::load_logging_config(None).max_size_bytes)
         );
     }
 

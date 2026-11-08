@@ -114,9 +114,20 @@ pub fn init_async_logger_with_writer(mut writer: Box<dyn Write + Send>, level: L
     LoggerGuard
 }
 
+pub fn shutdown_logger() {
+    let mut guard = ACTIVE_LOGGER.lock().unwrap();
+    if let Some(chan) = guard.take() {
+        let (done_tx, done_rx) = sync_channel(1);
+        if chan.tx.send(LogCommand::Shutdown(done_tx)).is_ok() {
+            let _ = done_rx.recv_timeout(Duration::from_secs(2));
+        }
+    }
+}
+
 pub struct LoggerGuard;
 impl Drop for LoggerGuard {
     fn drop(&mut self) {
+        shutdown_logger();
         set_log_level(LogLevel::Info);
     }
 }
@@ -215,7 +226,7 @@ pub fn log_message_level(level: LogLevel, prefix: &str, msg: &str) {
     }
 }
 
-pub fn flush_logs_sync_for_test() {
+pub fn flush_logs_sync() {
     let mut test_guard = TEST_WRITER.lock().unwrap();
     if let Some(w) = test_guard.as_mut() {
         let _ = w.flush();
@@ -258,6 +269,7 @@ mod tests {
 
     #[test]
     fn test_async_logger_writes_and_filters() {
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let buf = Arc::new(Mutex::new(Vec::new()));
         let writer = TestWriter(buf.clone());
         let _handle = init_async_logger_with_writer(Box::new(writer), LogLevel::Warn);
@@ -266,7 +278,7 @@ mod tests {
         log_message_level(LogLevel::Warn, "WARN", "warning line");
         log_message_level(LogLevel::Error, "ERR", "error line");
 
-        flush_logs_sync_for_test();
+        flush_logs_sync();
         let content = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
         assert!(!content.contains("should be dropped"));
         assert!(content.contains("[WARN] [WARN] warning line"));

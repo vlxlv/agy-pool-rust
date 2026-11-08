@@ -531,3 +531,299 @@ async fn test_observability_case_l_proxy_persistence_failure() {
         snap.persistence_errors
     );
 }
+
+#[tokio::test]
+async fn test_proxy_audit_case_a_buffered_success() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    reset();
+    let _dir = setup_isolated_test_dir();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let audit_path = tmp.path().join("audit.jsonl");
+    let audit_handle = crate::observability::init_audit_worker(audit_path.clone(), 1 << 20, 1);
+
+    let (mut sub_rx, _sub) = crate::proxy::subscribe_audit(10);
+
+    let server = TestServer::start(|_| {
+        (
+            200,
+            vec![("content-type".to_string(), "application/json".to_string())],
+            b"{\"candidates\":[]}".to_vec(),
+        )
+    });
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-{}", acc.id)));
+
+    let pool = Pool {
+        accounts: vec![Account {
+            id: "acc_1".to_string(),
+            email: "1@example.com".to_string(),
+            last_quota: Some(QuotaState {
+                remaining_fraction: Some(0.9),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let (status, _, _) = serve_once(
+        handler,
+        Method::POST,
+        "/v1/models/gemini:generateContent?key=secret-key&alt=json",
+        headers,
+        Bytes::from_static(b"{\"contents\":[]}"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    crate::observability::flush_audit_sync();
+
+    let content = std::fs::read_to_string(&audit_path).unwrap();
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 1, "expected exactly 1 JSONL line");
+
+    let ev: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(ev["status_code"], 200);
+    assert_eq!(ev.get("failover_reason").and_then(|v| v.as_str()).unwrap_or(""), "");
+    let path = ev["path"].as_str().unwrap();
+    assert!(!path.contains('?'), "path must have no '?' but got: {path}");
+    assert_eq!(path, "/v1/models/gemini:generateContent");
+
+    let mut legacy_events = Vec::new();
+    while let Ok(legacy_ev) = sub_rx.try_recv() {
+        legacy_events.push(legacy_ev);
+    }
+    assert_eq!(
+        legacy_events.len(),
+        1,
+        "expected exactly 1 legacy RoutingEvent observed for attempt"
+    );
+
+    drop(audit_handle);
+}
+
+#[tokio::test]
+async fn test_proxy_audit_case_b_streamed_success() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    reset();
+    let _dir = setup_isolated_test_dir();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let audit_path = tmp.path().join("audit.jsonl");
+    let audit_handle = crate::observability::init_audit_worker(audit_path.clone(), 1 << 20, 1);
+
+    let server = TestServer::start(|_| {
+        (
+            200,
+            vec![("content-type".to_string(), "text/event-stream".to_string())],
+            b"data: chunk 1\n\ndata: chunk 2\n\n".to_vec(),
+        )
+    });
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-{}", acc.id)));
+
+    let pool = Pool {
+        accounts: vec![Account {
+            id: "acc_1".to_string(),
+            email: "1@example.com".to_string(),
+            last_quota: Some(QuotaState {
+                remaining_fraction: Some(0.9),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    let mut headers = HeaderMap::new();
+    headers.insert(hyper::header::ACCEPT, HeaderValue::from_static("text/event-stream"));
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let (status, _, body) = serve_once(
+        handler,
+        Method::POST,
+        "/v1/models/gemini:streamGenerateContent?alt=sse",
+        headers,
+        Bytes::from_static(b"{\"contents\":[]}"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.is_empty());
+
+    crate::observability::flush_audit_sync();
+
+    let content = std::fs::read_to_string(&audit_path).unwrap();
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 1, "expected exactly 1 JSONL line");
+
+    let ev: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(ev["status_code"], 200);
+    assert_eq!(ev.get("failover_reason").and_then(|v| v.as_str()).unwrap_or(""), "");
+    let path = ev["path"].as_str().unwrap();
+    assert!(!path.contains('?'), "path must have no '?' but got: {path}");
+
+    drop(audit_handle);
+}
+
+#[tokio::test]
+async fn test_proxy_audit_case_c_streamed_client_disconnect() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    reset();
+    let _dir = setup_isolated_test_dir();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let audit_path = tmp.path().join("audit.jsonl");
+    let audit_handle = crate::observability::init_audit_worker(audit_path.clone(), 1 << 20, 1);
+
+    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_port = upstream_listener.local_addr().unwrap().port();
+
+    let upstream_task = tokio::spawn(async move {
+        if let Ok((mut conn, _)) = upstream_listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = conn.read(&mut buf).await;
+            conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+                .await
+                .unwrap();
+            conn.write_all(b"f\r\ndata: event 1\n\n\r\n").await.unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = conn.write_all(b"f\r\ndata: event 2\n\n\r\n").await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    });
+
+    let _url_guard = crate::proxy::set_backend_url_for_test(&format!("http://127.0.0.1:{upstream_port}"));
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-{}", acc.id)));
+
+    let pool = Pool {
+        accounts: vec![Account {
+            id: "acc_1".to_string(),
+            email: "1@example.com".to_string(),
+            last_quota: Some(QuotaState {
+                remaining_fraction: Some(0.9),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let h = handler.clone();
+    let server_task = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let service = hyper::service::service_fn(move |req| {
+                let h = h.clone();
+                async move { Ok::<_, std::convert::Infallible>(h.serve(req).await) }
+            });
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(io, service)
+                .await;
+        }
+    });
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            b"POST /v1/models/gemini:streamGenerateContent HTTP/1.1\r\n\
+Host: 127.0.0.1\r\n\
+Accept: text/event-stream\r\n\
+Content-Type: application/json\r\n\
+Content-Length: 2\r\n\
+\r\n\
+{}",
+        )
+        .await
+        .unwrap();
+
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).await.unwrap();
+    let resp_str = String::from_utf8_lossy(&buf[..n]);
+    assert!(resp_str.contains("200 OK"));
+    assert!(resp_str.contains("data: event 1"));
+
+    // Drop the TCP stream after first chunk without reading to end
+    drop(stream);
+    let _ = tokio::time::timeout(Duration::from_millis(500), server_task).await;
+    let _ = upstream_task.await;
+
+    crate::observability::flush_audit_sync();
+
+    let content = std::fs::read_to_string(&audit_path).unwrap();
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 1, "expected exactly 1 JSONL line");
+
+    let ev: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(ev["failover_reason"], "ClientDisconnected");
+
+    drop(audit_handle);
+}
+
+#[test]
+fn test_proxy_audit_case_d_audit_file_permission_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let audit_path = tmp.path().join("audit.jsonl");
+    let audit_handle = crate::observability::init_audit_worker(audit_path.clone(), 1 << 20, 1);
+
+    let event = crate::observability::AuditEvent {
+        timestamp: jiff::Timestamp::now().to_string(),
+        request_id: "req-perm-test".to_string(),
+        session_key: "sess-tag".to_string(),
+        method: "POST".to_string(),
+        path: "/test".to_string(),
+        model: "model".to_string(),
+        strategy: "smart".to_string(),
+        attempt: 1,
+        account_id: "acc-1".to_string(),
+        account_name: "acc-1".to_string(),
+        status_code: 200,
+        ttfb_ms: 10,
+        total_ms: 20,
+        tokens: crate::observability::AuditTokens { prompt: 0, cached: 0 },
+        quota_before: crate::observability::AuditQuota {
+            q5: None,
+            q7: None,
+            r5_secs: None,
+            r7_secs: None,
+        },
+        failover_reason: String::new(),
+    };
+    crate::observability::record_audit_event(event);
+    crate::observability::flush_audit_sync();
+
+    let meta = std::fs::metadata(&audit_path).unwrap();
+    let mode = meta.permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "audit file permission mode must be 0o600, got {:o}", mode);
+
+    drop(audit_handle);
+}

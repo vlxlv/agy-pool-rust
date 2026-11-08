@@ -77,7 +77,7 @@ fn audit_quota_from_routing_event(ev: &RoutingEvent) -> AuditQuota {
     }
 }
 
-fn record_attempt_audit(
+fn write_attempt_audit(
     params: &DispatchParams<'_>,
     status_code: u16,
     reason: &str,
@@ -85,7 +85,6 @@ fn record_attempt_audit(
     total: Duration,
     tokens: AuditTokens,
 ) {
-    notify_audit(params.frozen_event.as_ref(), params.attempt, status_code, reason);
     if crate::observability::is_audit_worker_active() {
         let quota_before = params
             .frozen_event
@@ -97,12 +96,13 @@ fn record_attempt_audit(
                 r5_secs: None,
                 r7_secs: None,
             });
+        let path = params.path.split('?').next().unwrap_or(params.path);
         let event = AuditEvent {
             timestamp: jiff::Timestamp::now().to_string(),
             request_id: params.request_id.to_string(),
-            session_key: params.session_key.to_string(),
+            session_key: crate::proxy::usage::session_tag(params.session_key),
             method: params.req_method.to_string(),
-            path: params.path.to_string(),
+            path: path.to_string(),
             model: params.model.to_string(),
             strategy: params.strategy.to_string(),
             attempt: params.attempt,
@@ -117,6 +117,18 @@ fn record_attempt_audit(
         };
         record_audit_event(event);
     }
+}
+
+fn record_attempt_audit(
+    params: &DispatchParams<'_>,
+    status_code: u16,
+    reason: &str,
+    ttfb: Duration,
+    total: Duration,
+    tokens: AuditTokens,
+) {
+    notify_audit(params.frozen_event.as_ref(), params.attempt, status_code, reason);
+    write_attempt_audit(params, status_code, reason, ttfb, total, tokens);
 }
 
 /// Dispatches a request to one specific account.
@@ -660,7 +672,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     ),
                 );
                 record_no_replay_prevented();
-                record_attempt_audit(
+                write_attempt_audit(
                     &params,
                     StatusCode::BAD_GATEWAY.as_u16(),
                     "UnexpectedEof",
@@ -705,7 +717,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             } else {
                 StatusCode::BAD_GATEWAY
             };
-            record_attempt_audit(
+            write_attempt_audit(
                 &params,
                 err_status.as_u16(),
                 "ReadError",
@@ -743,7 +755,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         prompt: usage.prompt,
         cached: usage.cached,
     };
-    record_attempt_audit(
+    write_attempt_audit(
         &params,
         status_code,
         "",

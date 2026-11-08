@@ -29,6 +29,7 @@ pub const DEFAULT_PORT: u16 = 8899;
 // Log defaults
 pub const DEFAULT_MAX_LOG_BYTES: i64 = 5 * 1024 * 1024;
 pub const DEFAULT_BACKUP_LOG_COUNT: usize = 1;
+pub const DEFAULT_AUDIT_MAX_BYTES: i64 = 20 * 1024 * 1024;
 
 // Quota refresh retry intervals
 pub const QUOTA_REFRESH_BACKOFF: [Duration; 5] = [
@@ -113,10 +114,15 @@ fn default_logging_backup_count() -> i64 {
     DEFAULT_BACKUP_LOG_COUNT as i64
 }
 
+fn default_logging_audit_max_size_bytes() -> i64 {
+    DEFAULT_AUDIT_MAX_BYTES
+}
+
 fn default_logging_config() -> LoggingConfig {
     LoggingConfig {
         max_size_bytes: default_logging_max_size_bytes(),
         backup_count: default_logging_backup_count(),
+        audit_max_size_bytes: default_logging_audit_max_size_bytes(),
     }
 }
 
@@ -165,6 +171,8 @@ pub struct LoggingConfig {
     pub max_size_bytes: i64,
     #[serde(default = "default_logging_backup_count")]
     pub backup_count: i64,
+    #[serde(default = "default_logging_audit_max_size_bytes")]
+    pub audit_max_size_bytes: i64,
 }
 
 pub fn default_static_config() -> StaticConfig {
@@ -181,7 +189,24 @@ pub fn default_static_config() -> StaticConfig {
         logging: LoggingConfig {
             max_size_bytes: DEFAULT_MAX_LOG_BYTES,
             backup_count: DEFAULT_BACKUP_LOG_COUNT as i64,
+            audit_max_size_bytes: DEFAULT_AUDIT_MAX_BYTES,
         },
+    }
+}
+
+/// Loads logging configuration from the given path or default config file if available, falling back to defaults.
+pub fn load_logging_config(path: Option<&Path>) -> LoggingConfig {
+    let resolved = match path {
+        Some(p) => Some(p.to_path_buf()),
+        None => resolve_default_config_file().ok().filter(|p| !p.as_os_str().is_empty()),
+    };
+    if let Some(cfg_path) = resolved
+        && cfg_path.exists()
+        && let Ok(cfg) = load_config_file(&cfg_path)
+    {
+        cfg.logging
+    } else {
+        default_logging_config()
     }
 }
 
@@ -319,6 +344,12 @@ pub fn load_config_file(path: &Path) -> Result<StaticConfig, ConfigError> {
         return Err(ConfigError::Validation(format!(
             "invalid logging max_size_bytes {} (must be > 0)",
             cfg.logging.max_size_bytes
+        )));
+    }
+    if cfg.logging.audit_max_size_bytes <= 0 {
+        return Err(ConfigError::Validation(format!(
+            "invalid logging audit_max_size_bytes {} (must be > 0)",
+            cfg.logging.audit_max_size_bytes
         )));
     }
     if cfg.logging.backup_count < 0 {
@@ -512,6 +543,11 @@ mod tests {
                 "invalid logging max_size_bytes",
             ),
             (
+                "invalid_logging_audit_size",
+                r#"{"version": 1, "logging": {"audit_max_size_bytes": 0}}"#,
+                "invalid logging audit_max_size_bytes",
+            ),
+            (
                 "invalid_logging_backup_negative",
                 r#"{"version": 1, "logging": {"backup_count": -1}}"#,
                 "invalid logging backup_count",
@@ -583,6 +619,16 @@ mod tests {
         assert!(cfg.native_agy.binary.is_none());
         assert_eq!(cfg.logging.max_size_bytes, DEFAULT_MAX_LOG_BYTES);
         assert_eq!(cfg.logging.backup_count as usize, DEFAULT_BACKUP_LOG_COUNT);
+        assert_eq!(cfg.logging.audit_max_size_bytes, DEFAULT_AUDIT_MAX_BYTES);
+    }
+
+    #[test]
+    fn test_config_logging_audit_max_size_bytes_default_when_omitted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("config_omitted.json");
+        std::fs::write(&p, r#"{"version": 1, "logging": {"max_size_bytes": 1000}}"#).unwrap();
+        let cfg = load_config_file(&p).unwrap();
+        assert_eq!(cfg.logging.audit_max_size_bytes, DEFAULT_AUDIT_MAX_BYTES);
     }
 
     #[test]

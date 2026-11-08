@@ -12,6 +12,7 @@
   },
   "logging": {
     "max_size_bytes": 5242880,
-    "backup_count": 1
+    "backup_count": 1,
+    "audit_max_size_bytes": 20971520
   }
 }

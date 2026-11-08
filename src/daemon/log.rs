@@ -121,8 +121,23 @@ pub fn clear_log(log_path: Option<&Path>, mut backup_count: i32) -> Result<(), D
     .map_err(DaemonError::Storage)
 }
 
+static ROTATE_LIMITS: Mutex<(i64, i32)> = Mutex::new((
+    crate::config::DEFAULT_MAX_LOG_BYTES,
+    crate::config::DEFAULT_BACKUP_LOG_COUNT as i32,
+));
+
+pub fn set_rotate_limits(max_bytes: i64, backup_count: i32) {
+    let mut limits = ROTATE_LIMITS.lock().unwrap_or_else(|e| e.into_inner());
+    *limits = (max_bytes, backup_count);
+}
+
+pub fn daemon_rotate_log() {
+    let (max_bytes, backup_count) = *ROTATE_LIMITS.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = maybe_rotate_log(max_bytes, backup_count);
+}
+
 /// Rate-limits log rotation checks to at most once every LogRotateInterval.
-pub fn maybe_rotate_log() -> bool {
+pub fn maybe_rotate_log(max_bytes: i64, backup_count: i32) -> bool {
     let mut check_guard = LAST_LOG_ROTATE_CHECK.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     if let Some(last) = *check_guard
@@ -133,7 +148,7 @@ pub fn maybe_rotate_log() -> bool {
     *check_guard = Some(now);
     drop(check_guard);
 
-    rotate_log_if_needed(None, 0, -1, false).unwrap_or(false)
+    rotate_log_if_needed(None, max_bytes, backup_count, false).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -266,10 +281,19 @@ mod tests {
     fn test_maybe_rotate_log_rate_limiting() {
         // maybe_rotate_log resolves the default log path from the data dir; never let it see the live one.
         let _env = crate::daemon::test_env();
-        let _ = maybe_rotate_log();
+        let _ = maybe_rotate_log(
+            crate::config::DEFAULT_MAX_LOG_BYTES,
+            crate::config::DEFAULT_BACKUP_LOG_COUNT as i32,
+        );
 
         // Second immediate call must be rate-limited and return false
-        assert!(!maybe_rotate_log(), "immediate second call should be rate limited");
+        assert!(
+            !maybe_rotate_log(
+                crate::config::DEFAULT_MAX_LOG_BYTES,
+                crate::config::DEFAULT_BACKUP_LOG_COUNT as i32,
+            ),
+            "immediate second call should be rate limited"
+        );
 
         // Reset timer
         let mut guard = LAST_LOG_ROTATE_CHECK.lock().unwrap();
@@ -277,6 +301,9 @@ mod tests {
         drop(guard);
 
         // Call after interval executes
-        let _ = maybe_rotate_log();
+        let _ = maybe_rotate_log(
+            crate::config::DEFAULT_MAX_LOG_BYTES,
+            crate::config::DEFAULT_BACKUP_LOG_COUNT as i32,
+        );
     }
 }

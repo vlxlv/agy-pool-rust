@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -62,6 +63,22 @@ static ACTIVE_AUDIT: LazyLock<Mutex<Option<AuditChannel>>> = LazyLock::new(|| Mu
 static AUDIT_DROPPED: AtomicU64 = AtomicU64::new(0);
 
 pub struct AuditHandle;
+
+impl Drop for AuditHandle {
+    fn drop(&mut self) {
+        shutdown_audit_worker();
+    }
+}
+
+pub fn shutdown_audit_worker() {
+    let mut guard = ACTIVE_AUDIT.lock().unwrap();
+    if let Some(chan) = guard.take() {
+        let (done_tx, done_rx) = sync_channel(1);
+        if chan.tx.send(AuditCommand::Shutdown(done_tx)).is_ok() {
+            let _ = done_rx.recv_timeout(Duration::from_secs(2));
+        }
+    }
+}
 
 pub fn audit_dropped_count() -> u64 {
     AUDIT_DROPPED.load(Ordering::Relaxed)
@@ -161,21 +178,33 @@ fn write_audit_batch(batch: &mut Vec<AuditEvent>, path: &Path, max_bytes: u64, b
         let _ = crate::daemon::rotate_log_if_needed(Some(path), max_bytes as i64, backup_count, false);
     }
 
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
-        batch.clear();
-        return;
+    let mut file = match OpenOptions::new().create(true).append(true).mode(0o600).open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            AUDIT_DROPPED.fetch_add(batch.len() as u64, Ordering::Relaxed);
+            eprintln!("warning: failed to open audit file {}: {}", path.display(), e);
+            batch.clear();
+            return;
+        }
     };
 
+    let count = batch.len();
+    let mut buf = Vec::new();
     for ev in batch.drain(..) {
         if let Ok(line) = serde_json::to_string(&ev) {
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.write_all(b"\n");
+            buf.extend_from_slice(line.as_bytes());
+            buf.push(b'\n');
         }
     }
-    let _ = file.flush();
+    if let Err(e) = file.write_all(&buf) {
+        AUDIT_DROPPED.fetch_add(count as u64, Ordering::Relaxed);
+        eprintln!("warning: failed to write audit batch to {}: {}", path.display(), e);
+    } else {
+        let _ = file.flush();
+    }
 }
 
-pub fn flush_audit_sync_for_test() {
+pub fn flush_audit_sync() {
     let guard = ACTIVE_AUDIT.lock().unwrap();
     if let Some(chan) = guard.as_ref() {
         let (tx, rx) = sync_channel(1);
@@ -224,7 +253,7 @@ mod tests {
         };
 
         record_audit_event(event);
-        flush_audit_sync_for_test();
+        flush_audit_sync();
 
         let content = std::fs::read_to_string(&audit_path).unwrap();
         assert!(content.contains("\"request_id\":\"req-123\""));
@@ -265,13 +294,13 @@ mod tests {
         };
 
         record_audit_event(event.clone());
-        flush_audit_sync_for_test();
+        flush_audit_sync();
 
         // Write second event exceeding 150 bytes limit
         let mut event2 = event.clone();
         event2.request_id = "req-rot-2".to_string();
         record_audit_event(event2);
-        flush_audit_sync_for_test();
+        flush_audit_sync();
 
         let backup_path = dir.path().join("audit-events.jsonl.1");
         assert!(

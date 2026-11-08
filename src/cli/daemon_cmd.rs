@@ -33,12 +33,13 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
     } else {
         crate::config::log_file()
     };
+    let log_cfg = crate::config::load_logging_config(None);
     let max_log_bytes = if audit {
-        20 * 1024 * 1024
+        log_cfg.audit_max_size_bytes
     } else {
-        crate::config::DEFAULT_MAX_LOG_BYTES
+        log_cfg.max_size_bytes
     };
-    let backup_count = crate::config::DEFAULT_BACKUP_LOG_COUNT;
+    let backup_count = log_cfg.backup_count;
 
     if clear {
         let _ = crate::daemon::clear_log(Some(&target_file), backup_count as i32);
@@ -102,10 +103,11 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
     let content = match std::fs::read_to_string(&target_file) {
         Ok(c) => c,
         Err(e) => {
+            let name = if audit { "Audit file" } else { "Log file" };
             let _ = writeln!(
                 io.stdout,
-                "{}[Error] Failed to read log file: {}{}",
-                CLR_RED, e, CLR_RESET
+                "{}[Error] Failed to read {}: {}{}",
+                CLR_RED, name, e, CLR_RESET
             );
             return 0;
         }

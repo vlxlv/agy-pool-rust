@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -183,18 +184,23 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     // Restore per-model pauses and session affinities
     crate::proxy::load_model_cooldowns();
     crate::proxy::load_affinities();
+    let log_cfg = crate::config::load_logging_config(ctx_inst.config_path.as_deref());
+    super::log::set_rotate_limits(log_cfg.max_size_bytes, log_cfg.backup_count as i32);
     // Rate-limited log rotation on proxied requests; without it the daemon log grows without bound.
-    crate::proxy::set_log_rotator(|| {
-        super::log::maybe_rotate_log();
-    });
+    crate::proxy::set_log_rotator(super::log::daemon_rotate_log);
 
     // Initialize dual-track logging
     let log_level = std::env::var("AGY_LOG_LEVEL")
         .ok()
         .map(|s| crate::observability::LogLevel::parse_lossy(&s))
         .unwrap_or(crate::observability::LogLevel::Info);
-    let log_target = opts.log_file.clone().unwrap_or_else(crate::config::log_file);
-    let _logger_handle = if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_target) {
+    let log_target = opts.log_file.clone().unwrap_or_else(|| ctx_inst.log_file());
+    let _logger_handle = if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&log_target)
+    {
         Some(crate::observability::init_async_logger_with_writer(
             Box::new(file),
             log_level,
@@ -202,8 +208,12 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     } else {
         None
     };
-    let audit_target = crate::config::audit_file();
-    let _audit_handle = crate::observability::init_audit_worker(audit_target, 20 * 1024 * 1024, 1);
+    let audit_target = ctx_inst.audit_file();
+    let _audit_handle = crate::observability::init_audit_worker(
+        audit_target,
+        log_cfg.audit_max_size_bytes as u64,
+        log_cfg.backup_count as i32,
+    );
 
     // 2. Open TCP listener
     let addr_str = format!("{}:{}", ctx_inst.listen_host, port);
@@ -384,8 +394,6 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     stats_writer.stop().await;
     crate::observability::clear_on_in_flight_change();
     crate::proxy::save_affinities();
-    crate::observability::flush_logs_sync_for_test();
-    crate::observability::flush_audit_sync_for_test();
 
     let _ = super::pid::remove_pid_file_if_owned(&pid_file, current_pid);
     let _ = std::fs::remove_file(&runtime_file);

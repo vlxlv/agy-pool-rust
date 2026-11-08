@@ -62,6 +62,10 @@ impl InstanceContext {
         self.data_dir.join("agy-pool.log")
     }
 
+    pub fn audit_file(&self) -> PathBuf {
+        self.data_dir.join("audit-events.jsonl")
+    }
+
     pub fn state_db(&self) -> PathBuf {
         self.data_dir.join("state.db")
     }
