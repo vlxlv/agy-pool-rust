@@ -239,6 +239,72 @@ async fn test_buffered_response_success_and_counters() {
 }
 
 #[tokio::test]
+async fn test_generation_selects_account_when_lease_write_lock_busy() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    let _dir = setup_isolated_test_dir();
+
+    let server = TestServer::start(|_| {
+        (
+            200,
+            vec![("content-type".to_string(), "application/json".to_string())],
+            b"{\"candidates\": [{\"output\": \"generated text\"}]}".to_vec(),
+        )
+    });
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-for-{}", acc.id)));
+
+    let acc = Account {
+        id: "acc_1".to_string(),
+        email: "dev@example.com".to_string(),
+        ..Default::default()
+    };
+    let pool = Pool {
+        accounts: vec![acc.clone()],
+        active_account_id: Some(acc.id.clone()),
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    // Another connection holds the write lock longer than RESERVE_BUSY_TIMEOUT, so reserve_in_flight gives up.
+    let db_path = crate::config::state_db_file();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        locked_tx.send(()).unwrap();
+        std::thread::sleep(crate::storage::inflight::RESERVE_BUSY_TIMEOUT * 4);
+        conn.execute_batch("COMMIT;").unwrap();
+    });
+    locked_rx.recv().unwrap();
+
+    let fallbacks_before = crate::observability::snapshot().lease_fallbacks;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let (status, _, body) = serve_once(
+        Arc::new(Handler::new()),
+        Method::POST,
+        "/v1/models/gemini:generateContent?alt=json",
+        headers,
+        Bytes::from_static(b"{\"prompt\":\"hi\"}"),
+    )
+    .await;
+    writer.join().unwrap();
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "busy lease lock must not turn into ALL EXHAUSTED"
+    );
+    assert!(String::from_utf8_lossy(&body).contains("generated text"));
+    assert_eq!(crate::observability::snapshot().lease_fallbacks, fallbacks_before + 1);
+}
+
+#[tokio::test]
 async fn test_upstream_request_sends_exactly_one_host_header() {
     // Google's front end answers a duplicate Host with an HTML 400 (seen on loadCodeAssist).
     let _lock = TEST_LOCK.lock().await;

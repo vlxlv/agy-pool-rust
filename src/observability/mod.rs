@@ -357,6 +357,11 @@ pub fn set_remote_in_flight(m: HashMap<String, i64>) {
     state.remote = m;
 }
 
+/// Returns the last snapshot of in-flight counts held by other processes.
+pub fn remote_in_flight() -> HashMap<String, i64> {
+    IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).remote.clone()
+}
+
 /// Registers a callback invoked whenever an in-flight generation starts or finishes.
 pub fn set_on_in_flight_change(cb: Option<Box<dyn Fn() + Send + Sync>>) {
     let mut state = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());

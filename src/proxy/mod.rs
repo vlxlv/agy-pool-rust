@@ -958,7 +958,7 @@ impl Handler {
             }
 
             let _sel_guard = SELECTION_MUTEX.lock().await;
-            let reserve_res = crate::storage::reserve_in_flight(|remote| {
+            let mut pick = |remote: &std::collections::HashMap<String, i64>| {
                 crate::observability::set_remote_in_flight(remote.clone());
                 let ordered_indices = crate::scheduler::order_candidates(&pool.accounts, strategy, &pool, now);
                 candidates = ordered_indices
@@ -1028,7 +1028,17 @@ impl Handler {
                 }
 
                 reserved_id.clone()
+            };
+            let mut picked = false;
+            let reserve_res = crate::storage::reserve_in_flight(|remote| {
+                picked = true;
+                pick(remote)
             });
+            // reserve_in_flight gives up without calling pick when the write lock stays busy; select on the last
+            // known remote counts instead of leaving candidates empty (a spurious 503 with a healthy pool).
+            if reserve_res.is_err() && !picked {
+                pick(&crate::observability::remote_in_flight());
+            }
 
             match reserve_res {
                 Ok((_, lg)) => {
