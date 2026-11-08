@@ -157,9 +157,12 @@ pub fn restart_instance(
 ) -> Result<super::lifecycle::StartResult, DaemonError> {
     let pid_file = opts.pid_file.clone().unwrap_or_else(|| ctx.pid_file());
 
-    let (status, _, msg) = super::instance::check_status_with_file(ctx, &pid_file);
+    let (status, info, msg) = super::instance::check_status_with_file(ctx, &pid_file);
+    // A live PID here can only be this data dir's own daemon on another port (config changed): restart moves it.
+    let own_daemon_on_other_port = status == super::instance::InstanceStatus::PortOccupiedForeign
+        && info.as_ref().is_some_and(|i| super::pid::is_process_alive(i.pid));
     if status == super::instance::InstanceStatus::ForeignInstance
-        || status == super::instance::InstanceStatus::PortOccupiedForeign
+        || (status == super::instance::InstanceStatus::PortOccupiedForeign && !own_daemon_on_other_port)
     {
         return Err(DaemonError::Message(format!("cannot restart instance: {msg}")));
     }
@@ -176,8 +179,19 @@ pub fn restart_instance(
         }
     }
 
-    // 1. Stop existing daemon
-    let _ = stop_with_file(ctx, &pid_file, Duration::from_secs(5));
+    // 1. Stop existing daemon under its recorded port/config: after a config switch they differ from ctx,
+    // and stop_with_file refuses a mismatched identity.
+    let mut stop_ctx = ctx.clone();
+    if let Some(i) = info.as_ref().filter(|i| super::pid::is_process_alive(i.pid)) {
+        if let Some(port) = i.port {
+            stop_ctx.listen_port = port;
+        }
+        stop_ctx.config_path = i
+            .config_path
+            .as_ref()
+            .map(|c| super::instance::canonicalize_file(Path::new(c)).unwrap_or_else(|_| std::path::PathBuf::from(c)));
+    }
+    let _ = stop_with_file(&stop_ctx, &pid_file, Duration::from_secs(5));
 
     // 2. Bounded wait for port release
     for _ in 0..30 {
@@ -335,6 +349,58 @@ mod tests {
 
         // Cleanup
         let _ = stop_daemon(Some(&pid_file), port, Duration::from_secs(3));
+        kill_guard1.disarm();
+        kill_guard2.disarm();
+    }
+
+    #[test]
+    fn test_restart_moves_own_daemon_to_new_port() {
+        let env = crate::daemon::test_env();
+        let pid_file = env.temp_dir.path().join("move.pid");
+        let log_file = env.temp_dir.path().join("move.log");
+
+        let free_port = || {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let (port_a, port_b) = (free_port(), free_port());
+        let write_cfg = |name: &str, port: u16| {
+            let p = env.temp_dir.path().join(name);
+            std::fs::write(
+                &p,
+                format!(r#"{{"version": 1, "server": {{"listen": "127.0.0.1", "port": {port}}}}}"#),
+            )
+            .unwrap();
+            p
+        };
+        let (cfg_a, cfg_b) = (write_cfg("config-a.json", port_a), write_cfg("config-b.json", port_b));
+
+        let opts = super::super::lifecycle::LaunchOptions {
+            port: port_a,
+            config_file: Some(cfg_a),
+            pid_file: Some(pid_file.clone()),
+            log_file: Some(log_file),
+            entrypoint_path: Some(super::super::pid::get_entrypoint_path()),
+            ..Default::default()
+        };
+        let res1 = super::super::lifecycle::start_daemon(opts.clone()).unwrap();
+        let mut kill_guard1 = crate::daemon::lifecycle::ProcessKillGuard::new(res1.pid);
+
+        // Switch both config file and port, as `agy-pool restart -c config-b.json` does.
+        let res2 = restart_daemon(super::super::lifecycle::LaunchOptions {
+            port: port_b,
+            config_file: Some(cfg_b),
+            ..opts
+        })
+        .expect("restart with another config must move this instance's own daemon");
+        let mut kill_guard2 = crate::daemon::lifecycle::ProcessKillGuard::new(res2.pid);
+
+        assert_ne!(res1.pid, res2.pid);
+        assert!(!super::super::pid::is_process_alive(res1.pid));
+        assert!(super::super::server::is_daemon_running(Some(&pid_file), port_b));
+        assert!(!super::super::server::is_port_listening(port_a));
+
+        let _ = stop_daemon(Some(&pid_file), port_b, Duration::from_secs(3));
         kill_guard1.disarm();
         kill_guard2.disarm();
     }
