@@ -125,14 +125,19 @@ pub async fn status_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
                 CLR_YELLOW, CLR_RESET, msg
             );
         }
+        crate::daemon::InstanceStatus::PortMismatch => {
+            let _ = writeln!(
+                io.stdout,
+                "Gateway : {}PORT MISMATCH{} ({})",
+                CLR_YELLOW, CLR_RESET, msg
+            );
+        }
         crate::daemon::InstanceStatus::PortOccupiedForeign => {
-            // A live PID means this instance's own daemon is up on a different port.
-            let label = if info.as_ref().is_some_and(|i| crate::daemon::is_process_alive(i.pid)) {
-                "PORT MISMATCH"
-            } else {
-                "PORT OCCUPIED"
-            };
-            let _ = writeln!(io.stdout, "Gateway : {}{}{} ({})", CLR_YELLOW, label, CLR_RESET, msg);
+            let _ = writeln!(
+                io.stdout,
+                "Gateway : {}PORT OCCUPIED{} ({})",
+                CLR_YELLOW, CLR_RESET, msg
+            );
         }
         crate::daemon::InstanceStatus::ForeignInstance => {
             let _ = writeln!(

@@ -20,6 +20,7 @@ pub enum InstanceStatus {
     StalePID,
     ForeignInstance,
     ConfigMismatch,
+    PortMismatch,
     PortOccupiedForeign,
     OutdatedBinary,
     LegacyPID,
@@ -33,6 +34,7 @@ impl std::fmt::Display for InstanceStatus {
             InstanceStatus::StalePID => write!(f, "STALE_PID"),
             InstanceStatus::ForeignInstance => write!(f, "FOREIGN_INSTANCE"),
             InstanceStatus::ConfigMismatch => write!(f, "CONFIG_MISMATCH"),
+            InstanceStatus::PortMismatch => write!(f, "PORT_MISMATCH"),
             InstanceStatus::PortOccupiedForeign => write!(f, "PORT_OCCUPIED_FOREIGN"),
             InstanceStatus::OutdatedBinary => write!(f, "OUTDATED_BINARY"),
             InstanceStatus::LegacyPID => write!(f, "LEGACY_PID"),
@@ -431,7 +433,7 @@ pub fn check_status_with_file(
             ),
         ),
         MatchResult::PortMismatch => (
-            InstanceStatus::PortOccupiedForeign,
+            InstanceStatus::PortMismatch,
             Some(info.clone()),
             format!(
                 "daemon running (PID {}) on port {}, requested {}",
@@ -717,5 +719,19 @@ mod tests {
 
         let (status, _, _) = check_instance_status(&ctx);
         assert_eq!(status, InstanceStatus::ConfigMismatch);
+
+        // 5. Port mismatch (same data dir, different port)
+        let port_mismatch_info = super::super::pid::DaemonInfo {
+            pid: std::process::id() as i32,
+            data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
+            config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+            config_hash: ctx.config_hash.clone(),
+            port: Some(9999),
+            ..Default::default()
+        };
+        super::super::pid::write_pid_file(&ctx.pid_file(), port_mismatch_info).unwrap();
+
+        let (status, _, _) = check_instance_status(&ctx);
+        assert_eq!(status, InstanceStatus::PortMismatch);
     }
 }

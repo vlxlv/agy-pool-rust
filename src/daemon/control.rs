@@ -158,11 +158,8 @@ pub fn restart_instance(
     let pid_file = opts.pid_file.clone().unwrap_or_else(|| ctx.pid_file());
 
     let (status, info, msg) = super::instance::check_status_with_file(ctx, &pid_file);
-    // A live PID here can only be this data dir's own daemon on another port (config changed): restart moves it.
-    let own_daemon_on_other_port = status == super::instance::InstanceStatus::PortOccupiedForeign
-        && info.as_ref().is_some_and(|i| super::pid::is_process_alive(i.pid));
     if status == super::instance::InstanceStatus::ForeignInstance
-        || (status == super::instance::InstanceStatus::PortOccupiedForeign && !own_daemon_on_other_port)
+        || status == super::instance::InstanceStatus::PortOccupiedForeign
     {
         return Err(DaemonError::Message(format!("cannot restart instance: {msg}")));
     }

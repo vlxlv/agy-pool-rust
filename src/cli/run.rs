@@ -150,7 +150,9 @@ pub async fn run_agy_with_lb(io: &mut Io<'_>, extra: &[String]) -> i32 {
                 return 1;
             }
         }
-        crate::daemon::InstanceStatus::PortOccupiedForeign | crate::daemon::InstanceStatus::ForeignInstance => {
+        crate::daemon::InstanceStatus::PortOccupiedForeign
+        | crate::daemon::InstanceStatus::PortMismatch
+        | crate::daemon::InstanceStatus::ForeignInstance => {
             if !crate::config::is_test_mode() {
                 let _ = writeln!(
                     io.stderr,
