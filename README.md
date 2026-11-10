@@ -28,18 +28,6 @@ Automated side-by-side benchmark comparing `agy-pool-rust` and `agy-pool-go` und
   <img src="assets/bench.jpg" alt="Antigravity Quota Pool Benchmark - Rust vs Go" width="850">
 </p>
 
-| Metric | 🐹 Go | 🦀 Rust | Δ (Rust vs Go) | Winner |
-| :--- | :---: | :---: | :---: | :---: |
-| **Binary Size** | 11.85 MiB | 7.88 MiB | **-33.5%** | 🦀 Rust |
-| **Cold Start (Median)** | 2.10 ms | 0.82 ms | **-60.9%** | 🦀 Rust |
-| **Idle Memory (VmRSS)** | 12.73 MiB | 5.74 MiB | **-54.9%** | 🦀 Rust |
-| **Virtual Memory (VmSize)** | 1,242.7 MiB | 20.8 MiB | **-98.3%** | 🦀 Rust |
-| **OS Threads** | 8 threads | 7 threads | **-12.5%** | 🦀 Rust |
-| **Throughput (QPS)** | 8,967.9 req/s | 10,779.5 req/s | **+20.2%** | 🦀 Rust |
-| **Latency (Median / P50)** | 1.75 ms | 1.46 ms | **-16.6%** | 🦀 Rust |
-| **Latency (P95)** | 4.87 ms | 4.10 ms | **-15.8%** | 🦀 Rust |
-| **Latency (P99)** | 6.84 ms | 5.57 ms | **-18.6%** | 🦀 Rust |
-
 > **Summary:** Rust sweeps all 9 metrics, achieving a **+20.2% increase in QPS**, **~61% faster cold starts**, and using **54.9% less resident memory (VmRSS)** with zero garbage collection overhead.
 
 ## Install
