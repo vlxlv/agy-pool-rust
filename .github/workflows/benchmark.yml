@@ -62,7 +62,7 @@ jobs:
       - name: Download Go release binary
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GO_TAG: ${{ inputs.go_version }}
+          GO_TAG: ${{ inputs.go_version || 'v0.1.1-alpha.2' }}
         run: |
           if [ -n "$GO_TAG" ]; then
             gh release download "$GO_TAG" --repo vlxlv/agy-pool-go -p 'agy-pool-linux-amd64'
