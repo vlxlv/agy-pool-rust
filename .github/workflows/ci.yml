@@ -5,14 +5,25 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - 'assets/**'
       - '.gitignore'
       - 'LICENSE'
+      - 'config.example.json'
+      - '.github/workflows/benchmark.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/benchmark-compare.py'
   pull_request:
+    branches: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - 'assets/**'
       - '.gitignore'
       - 'LICENSE'
+      - 'config.example.json'
+      - '.github/workflows/benchmark.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/benchmark-compare.py'
   schedule:
     - cron: '17 3 * * 1'
   workflow_dispatch:
@@ -34,6 +45,7 @@ env:
 jobs:
   test:
     name: Smoke Test & Code Hygiene
+    if: github.event_name != 'schedule' || github.event.repository.fork == false
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
@@ -158,7 +170,7 @@ jobs:
   # thread counts on scheduled weekly runs and manual triggers.
   stress:
     name: Concurrency Stress (${{ matrix.threads }} threads)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.event.repository.fork == false
     needs: test
     runs-on: ubuntu-26.04
     timeout-minutes: 30
