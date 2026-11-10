@@ -151,3 +151,58 @@ async fn test_sse_commit_point_no_replay() {
     assert_eq!(acc1_hits.load(Ordering::SeqCst), 1);
     assert_eq!(acc2_hits.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn test_sse_keep_alive_slow_upstream() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    let (_dir, _acc1, _acc2) = setup_two_account_pool();
+
+    let old_cfg = crate::config::get_static_config();
+    let mut cfg = old_cfg.clone();
+    cfg.server.keep_alive_secs = 1;
+    crate::config::set_static_config(cfg);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = match listener.accept().await {
+                Ok(res) => res,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                // Sleep past 1s keep-alive duration
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+                let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                let _ = socket.write_all(resp.as_bytes()).await;
+                let _ = socket.write_all(b"15\r\ndata: delayed chunk\n\n\r\n").await;
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            });
+        }
+    });
+
+    let _url_guard = crate::proxy::set_backend_url_for_test(&format!("http://127.0.0.1:{port}"));
+    let handler = Arc::new(Handler::new());
+    let mut headers = HeaderMap::new();
+    headers.insert(hyper::header::ACCEPT, HeaderValue::from_static("text/event-stream"));
+
+    let (status, _, body) = serve_once(
+        handler,
+        Method::POST,
+        "/v1/models/gemini:streamGenerateContent?alt=sse",
+        headers,
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+
+    crate::config::set_static_config(old_cfg);
+
+    assert_eq!(status, StatusCode::OK);
+    let body_str = String::from_utf8_lossy(&body);
+    assert!(body_str.contains(": keep-alive\n\n"));
+    assert!(body_str.contains("data: delayed chunk\n\n"));
+}

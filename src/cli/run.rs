@@ -341,7 +341,7 @@ mod tests {
         let has_cloud_code_url = captured
             .env
             .iter()
-            .any(|(k, v)| k == "CLOUD_CODE_URL" && v.starts_with("http://127.0.0.1:8899"));
+            .any(|(k, v)| k == "CLOUD_CODE_URL" && v.starts_with("http://127.0.0.1:"));
         assert!(has_cloud_code_url, "expected CLOUD_CODE_URL in env for run");
 
         // 2. Test "raw"

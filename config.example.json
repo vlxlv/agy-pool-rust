@@ -2,11 +2,13 @@
   "version": 1,
   "server": {
     "listen": "127.0.0.1",
-    "port": 8899
+    "port": 8899,
+    "keep_alive_secs": 0
   },
   "scheduler": {
     "strategy": "max_quota"
   },
+  "model_mapping": {},
   "native_agy": {
     "binary": null
   },

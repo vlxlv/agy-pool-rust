@@ -15,7 +15,8 @@ Release binaries and `.deb` packages are on the [releases page](https://github.c
 - **Automatic failover.** On HTTP 429 or exhausted quota the request moves to the next account, honouring upstream `Retry-After` and reset times. Model capacity errors (503) pause only that model, not the account.
 - **No duplicate generations.** A generation request is retried on another account only if it failed before any byte reached upstream (DNS, connect, TLS). Once a request may have reached Google, it is never replayed.
 - **Prompt-cache affinity.** A conversation stays on the same account while that account is healthy, so upstream prompt caching keeps working.
-- **Streaming.** Server-sent events are passed through as they arrive.
+- **Streaming & SSE Keep-Alive.** Server-sent events are streamed in real time. Optional keep-alive (`server.keep_alive_secs`, off by default) sends `200` early and then `: keep-alive` heartbeats for slow SSE requests; upstream errors after that point arrive as an in-stream `data: {"error":…}` event instead of an HTTP status.
+- **Model Mapping & Aliases.** Configurable `model_mapping` dynamically rewrites model IDs across both URL paths and JSON request bodies.
 - **Dashboards.** `quota` shows per-account quota bars and reset times, `top` is a live terminal dashboard, `stats` and `forecast` report routing effectiveness and quota runway.
 - **Static release binaries** for Linux (amd64, arm64; musl, so they also run on Termux and old glibc), plus `.deb` packages with systemd units.
 - **Encrypted backups.** `export` / `import` move the account pool between machines, optionally encrypted (PBKDF2-HMAC-SHA256).
@@ -124,7 +125,7 @@ After `install`, plain `agy` goes through the pool with no flags or environment 
 
 | Path | Contents |
 |---|---|
-| `~/.config/agy-pool/config.json` | Static settings: listen address and port, strategy, native `agy` path, log size. See [`config.example.json`](config.example.json). |
+| `~/.config/agy-pool/config.json` | Static settings: listen address/port, keep-alive interval, model mapping aliases, routing strategy, native `agy` path, log size. See [`config.example.json`](config.example.json). |
 | `~/.local/share/agy-pool/state.db` | Account pool and runtime state (SQLite). Managed by agy-pool; don't edit it. |
 | `~/.local/share/agy-pool/agy-pool.log` | Gateway log. It and `quota-history.jsonl` rotate at `logging.max_size_bytes` (5 MB by default). |
 

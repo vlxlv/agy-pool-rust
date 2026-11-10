@@ -93,6 +93,7 @@ fn default_server_config() -> ServerConfig {
     ServerConfig {
         listen: default_server_listen(),
         port: default_server_port(),
+        keep_alive_secs: 0,
     }
 }
 
@@ -139,6 +140,8 @@ pub struct StaticConfig {
     pub native_agy: NativeAgyConfig,
     #[serde(default = "default_logging_config")]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub model_mapping: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -148,6 +151,10 @@ pub struct ServerConfig {
     pub listen: String,
     #[serde(default = "default_server_port")]
     pub port: i64,
+    /// Seconds before a slow SSE request gets an early 200 and heartbeats; 0 = off.
+    /// Off by default: once 200 is sent, upstream 429/503 can only arrive as an in-stream error event.
+    #[serde(default)]
+    pub keep_alive_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -181,6 +188,7 @@ pub fn default_static_config() -> StaticConfig {
         server: ServerConfig {
             listen: "127.0.0.1".to_string(),
             port: DEFAULT_PORT as i64,
+            keep_alive_secs: 0,
         },
         scheduler: SchedulerConfig {
             strategy: DEFAULT_STRATEGY.to_string(),
@@ -191,6 +199,7 @@ pub fn default_static_config() -> StaticConfig {
             backup_count: DEFAULT_BACKUP_LOG_COUNT as i64,
             audit_max_size_bytes: DEFAULT_AUDIT_MAX_BYTES,
         },
+        model_mapping: std::collections::HashMap::new(),
     }
 }
 

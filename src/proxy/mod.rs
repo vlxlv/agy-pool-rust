@@ -3,7 +3,9 @@ pub mod body;
 pub mod confirmation;
 pub mod dispatch;
 pub mod failover;
+pub mod keep_alive;
 pub mod model_cooldown;
+pub mod model_mapping;
 pub mod smooth_rate;
 pub mod usage;
 
@@ -12,7 +14,9 @@ pub use body::*;
 pub use confirmation::*;
 pub use dispatch::*;
 pub use failover::*;
+pub use keep_alive::*;
 pub use model_cooldown::*;
+pub use model_mapping::*;
 pub use smooth_rate::*;
 pub use usage::*;
 
@@ -901,10 +905,80 @@ impl Handler {
             }
         };
 
+        let static_cfg = crate::config::get_static_config();
+        let (path, body_bytes, remapped) = apply_model_mapping(&path, &body_bytes, &static_cfg.model_mapping);
+        if let Some((ref src, ref target)) = remapped {
+            log_message("MODEL MAPPING", &format!("Remapped request model: {src} -> {target}"));
+        }
+
         let is_generation = is_generation_request_path(&path);
         let accept = parts.headers.get(hyper::header::ACCEPT).and_then(|v| v.to_str().ok());
         let is_sse = is_stream_request_path(&path, accept);
+        // Narrower than is_sse: heartbeats would corrupt JSON and JSON-array (no alt=sse) streams.
+        let wants_sse =
+            path.contains("alt=sse") || accept.is_some_and(|a| a.to_ascii_lowercase().contains("text/event-stream"));
+        let keep_alive_secs = static_cfg.server.keep_alive_secs;
+        let keep_alive_duration = Duration::from_secs(keep_alive_secs);
 
+        if wants_sse && keep_alive_secs > 0 {
+            struct AbortOnDrop(Option<tokio::task::AbortHandle>);
+            impl Drop for AbortOnDrop {
+                fn drop(&mut self) {
+                    if let Some(ref handle) = self.0 {
+                        handle.abort();
+                    }
+                }
+            }
+
+            let (tx, mut rx) = tokio::sync::oneshot::channel();
+            let join_handle = tokio::spawn(async move {
+                let res = Self::execute_request(parts, path, body_bytes, is_generation, is_sse).await;
+                let _ = tx.send(res);
+            });
+            let mut abort_guard = AbortOnDrop(Some(join_handle.abort_handle()));
+
+            match tokio::time::timeout(keep_alive_duration, &mut rx).await {
+                Ok(Ok(resp)) => {
+                    abort_guard.0 = None;
+                    resp
+                }
+                Ok(Err(_)) => {
+                    abort_guard.0 = None;
+                    send_buffered(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &HeaderMap::new(),
+                        Bytes::from_static(b"Request task aborted\n"),
+                    )
+                }
+                Err(_) => {
+                    log_message(
+                        "KEEP-ALIVE",
+                        &format!(
+                            "SSE stream in progress after {keep_alive_duration:?}; committing 200 OK headers and sending heartbeats"
+                        ),
+                    );
+                    let handle = abort_guard.0.take();
+                    let body = KeepAliveBody::new(rx, keep_alive_duration, handle);
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(hyper::header::CONTENT_TYPE, "text/event-stream")
+                        .header(hyper::header::CACHE_CONTROL, "no-cache")
+                        .body(http_body_util::BodyExt::boxed(body))
+                        .unwrap()
+                }
+            }
+        } else {
+            Self::execute_request(parts, path, body_bytes, is_generation, is_sse).await
+        }
+    }
+
+    pub async fn execute_request(
+        parts: hyper::http::request::Parts,
+        path: String,
+        body_bytes: Bytes,
+        is_generation: bool,
+        is_sse: bool,
+    ) -> Response<ProxyBody> {
         if let Some(rotate) = LOG_ROTATOR.get() {
             rotate();
         }
