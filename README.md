@@ -25,7 +25,7 @@ Release binaries and `.deb` packages are on the [releases page](https://github.c
 Automated side-by-side benchmark comparing `agy-pool-rust` and `agy-pool-go` under high concurrency (5,000 requests, concurrency = 20) on Ubuntu Linux (`x86_64`):
 
 <p align="center">
-  <img src="assets/bench.webp" alt="Antigravity Quota Pool Benchmark - Rust vs Go" width="850">
+  <img src="assets/bench.jpg" alt="Antigravity Quota Pool Benchmark - Rust vs Go" width="850">
 </p>
 
 | Metric | 🐹 Go | 🦀 Rust | Δ (Rust vs Go) | Winner |
