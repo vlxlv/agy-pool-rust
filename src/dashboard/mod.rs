@@ -13,7 +13,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use crate::proxy::body::{full_body, ProxyBody};
 
 pub fn dashboard_html() -> &'static str {
-    "<!doctype html><html><body>agy-pool dashboard</body></html>"
+    include_str!("assets/index.html")
 }
 
 pub struct SseBody {
