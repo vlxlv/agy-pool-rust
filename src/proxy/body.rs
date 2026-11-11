@@ -101,6 +101,17 @@ impl<B> StreamBody<B> {
     }
 
     fn emit_audit(&self, reason: &str, total: Duration) {
+        crate::dashboard::telemetry::record_attempt(crate::dashboard::telemetry::DashboardAuditEvent {
+            timestamp: jiff::Timestamp::now().to_string(),
+            model: self.params.model.clone(),
+            account: self.params.disp_name.clone(),
+            ttfb_ms: self.params.ttfb.as_millis() as u64,
+            total_ms: total.as_millis() as u64,
+            tokens: self.usage.prompt.max(0),
+            status: self.params.status,
+            failover: !reason.is_empty(),
+        });
+
         if crate::observability::is_audit_worker_active() {
             let path = self.params.path.split('?').next().unwrap_or(&self.params.path);
             crate::observability::record_audit_event(crate::observability::AuditEvent {
