@@ -864,7 +864,7 @@ impl Handler {
     }
 
     pub async fn handle_proxy(&self, req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
-        if let Some(resp) = crate::dashboard::try_handle_request(&req) {
+        if let Some(resp) = crate::dashboard::try_handle_request(&req).await {
             return resp;
         }
 
@@ -1001,6 +1001,7 @@ impl Handler {
 
         if is_generation {
             record_generation_request();
+            crate::dashboard::telemetry::record_client_request();
             for a in &pool.accounts {
                 if crate::scheduler::is_restricted(a) {
                     record_restricted_skip();

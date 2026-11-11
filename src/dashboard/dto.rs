@@ -46,6 +46,7 @@ pub struct AccountsResponse {
     pub accounts: Vec<AccountDto>,
     pub total_accounts: usize,
     pub active_accounts: usize,
+    pub show_email_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -120,8 +121,7 @@ pub fn build_status_response() -> StatusResponse {
         Err(_) => "smart".to_string(),
     };
 
-    let runtime_stats = crate::daemon::runtime::collect_runtime_stats(0, Some(started_at));
-    let memory_rss_bytes = runtime_stats.alloc_bytes;
+    let memory_rss_bytes = crate::daemon::runtime::process_rss_bytes();
 
     let in_flight_map = crate::observability::all_in_flight_generations();
     let in_flight_requests: i64 = in_flight_map.values().sum();
@@ -145,14 +145,37 @@ pub fn build_status_response() -> StatusResponse {
     }
 }
 
-pub fn build_accounts_response(pool: &Pool, show_email: bool, now_ts: f64) -> AccountsResponse {
-    let now_sys = if now_ts >= 0.0 {
-        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs_f64(now_ts)
-    } else {
-        std::time::SystemTime::UNIX_EPOCH
-    };
+fn build_quota_window_dto(
+    fraction_opt: Option<f64>,
+    reset_time_opt: Option<std::time::SystemTime>,
+    now_ts: f64,
+) -> Option<QuotaWindowDto> {
+    fraction_opt.map(|fraction| {
+        let remaining_percent = (fraction * 1000.0).round() / 10.0;
+        let reset_at_unix = reset_time_opt
+            .and_then(|st| {
+                st.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_secs() as i64)
+            })
+            .unwrap_or(0);
+        let reset_in_secs = if (reset_at_unix as f64) > now_ts {
+            (reset_at_unix as f64 - now_ts).ceil() as u64
+        } else {
+            0
+        };
+        QuotaWindowDto {
+            fraction,
+            remaining_percent,
+            reset_at_unix,
+            reset_in_secs,
+        }
+    })
+}
 
-    let active_pauses = crate::proxy::active_model_pauses(now_sys);
+pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f64) -> AccountsResponse {
+    let show_email_allowed = crate::accounts::is_show_email_enabled(Some(pool));
+    let show_email = show_email_allowed && request_show_email;
     let in_flight_map = crate::observability::all_in_flight_generations();
 
     let mut accounts = Vec::with_capacity(pool.accounts.len());
@@ -161,57 +184,12 @@ pub fn build_accounts_response(pool: &Pool, show_email: bool, now_ts: f64) -> Ac
         let cap = crate::quota::compute_capacity_state(acc, now_ts);
         let (q5_frac, qw_frac) = crate::quota::display_quota_fractions(acc.last_quota.as_ref());
 
-        let five_hour = q5_frac.map(|fraction| {
-            let remaining_percent = (fraction * 1000.0).round() / 10.0;
-            let reset_at_unix = cap
-                .reset5_time
-                .and_then(|st| {
-                    st.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                        .ok()
-                        .map(|d| d.as_secs() as i64)
-                })
-                .unwrap_or(0);
-            let reset_in_secs = if (reset_at_unix as f64) > now_ts {
-                (reset_at_unix as f64 - now_ts).ceil() as u64
-            } else {
-                0
-            };
-            QuotaWindowDto {
-                fraction,
-                remaining_percent,
-                reset_at_unix,
-                reset_in_secs,
-            }
-        });
-
-        let weekly = qw_frac.map(|fraction| {
-            let remaining_percent = (fraction * 1000.0).round() / 10.0;
-            let reset_at_unix = cap
-                .reset7_time
-                .and_then(|st| {
-                    st.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                        .ok()
-                        .map(|d| d.as_secs() as i64)
-                })
-                .unwrap_or(0);
-            let reset_in_secs = if (reset_at_unix as f64) > now_ts {
-                (reset_at_unix as f64 - now_ts).ceil() as u64
-            } else {
-                0
-            };
-            QuotaWindowDto {
-                fraction,
-                remaining_percent,
-                reset_at_unix,
-                reset_in_secs,
-            }
-        });
-
-        let has_model_pause = active_pauses.get(&acc.id).map(|m| !m.is_empty()).unwrap_or(false);
+        let five_hour = build_quota_window_dto(q5_frac, cap.reset5_time, now_ts);
+        let weekly = build_quota_window_dto(qw_frac, cap.reset7_time, now_ts);
 
         let scheduler_state = if acc.status == crate::storage::STATUS_DISABLED {
             "disabled".to_string()
-        } else if acc.rate_limited_until.is_some_and(|r| r > now_ts) || has_model_pause {
+        } else if acc.rate_limited_until.is_some_and(|r| r > now_ts) {
             "cooling".to_string()
         } else if crate::scheduler::is_restricted(acc) {
             "restricted".to_string()
@@ -257,6 +235,7 @@ pub fn build_accounts_response(pool: &Pool, show_email: bool, now_ts: f64) -> Ac
         accounts,
         total_accounts,
         active_accounts,
+        show_email_allowed,
     }
 }
 
@@ -273,14 +252,9 @@ pub fn build_forecast_response(pool: &Pool, now_ts: f64) -> ForecastResponse {
     }
     let window_used = burn_telemetry.window_used;
 
-    let (is_sustainable, runway_hours, runway_text) = match forecast {
-        Some(ref f) if f.current_runway.first_stall_sec.is_some() => {
-            let secs = f.current_runway.first_stall_sec.unwrap();
-            let hours = ((secs / 3600.0) * 10.0).round() / 10.0;
-            let text = crate::forecast::format_duration_short(Some(secs));
-            (false, Some(hours), text)
-        }
-        _ => (true, None, "Sustainable".to_string()),
+    let (is_sustainable, runway_hours, runway_text) = match forecast.as_ref().map(|f| f.summary_verdict()) {
+        Some(verdict) => (verdict.is_sustainable, verdict.runway_hours, verdict.runway_text),
+        None => (false, None, "Unavailable".to_string()),
     };
 
     ForecastResponse {
@@ -298,9 +272,8 @@ pub fn build_sse_stats_event() -> SseStatsEvent {
 
     let (_, qps) = crate::dashboard::telemetry::latency_and_qps_snapshot(std::time::Instant::now());
 
-    let (_, started_at) = get_runtime_meta();
-    let runtime_stats = crate::daemon::runtime::collect_runtime_stats(0, Some(started_at));
-    let rss_mb = ((runtime_stats.alloc_bytes as f64 / (1024.0 * 1024.0)) * 10.0).round() / 10.0;
+    let rss_bytes = crate::daemon::runtime::process_rss_bytes();
+    let rss_mb = ((rss_bytes as f64 / (1024.0 * 1024.0)) * 10.0).round() / 10.0;
 
     SseStatsEvent { in_flight, qps, rss_mb }
 }
@@ -322,6 +295,7 @@ mod tests {
 
     #[test]
     fn test_accounts_dto_null_quotas_and_show_email_toggle() {
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let now = 1700000000.0;
         let mut pool = Pool::default();
 
@@ -384,19 +358,33 @@ mod tests {
 
         pool.accounts = vec![acc_uninit, acc_cooling, acc_reserve, acc_disabled, acc_expired_reset];
 
+        // Default config (pool.show_email == None): server forbids revealing full emails even if query requests it.
+        let res_gated = build_accounts_response(&pool, true, now);
+        assert!(!res_gated.show_email_allowed);
+        let val_gated = serde_json::to_value(&res_gated).expect("serialize res_gated");
+        let accs_gated = val_gated
+            .get("accounts")
+            .and_then(|v| v.as_array())
+            .expect("accounts array");
+        assert!(accs_gated[0].get("email").is_none());
+        assert_eq!(
+            accs_gated[0].get("email_masked").and_then(|v| v.as_str()),
+            Some("a***e@example.com")
+        );
+
+        // When pool enables show_email = Some(true), client toggle controls visibility.
+        pool.show_email = Some(true);
         let res_no_email = build_accounts_response(&pool, false, now);
+        assert!(res_no_email.show_email_allowed);
         let val_no_email = serde_json::to_value(&res_no_email).expect("serialize res_no_email");
         let accs_no_email = val_no_email
             .get("accounts")
             .and_then(|v| v.as_array())
             .expect("accounts array");
         assert!(accs_no_email[0].get("email").is_none());
-        assert_eq!(
-            accs_no_email[0].get("email_masked").and_then(|v| v.as_str()),
-            Some("a***e@example.com")
-        );
 
         let res_with_email = build_accounts_response(&pool, true, now);
+        assert!(res_with_email.show_email_allowed);
         let val_with_email = serde_json::to_value(&res_with_email).expect("serialize res_with_email");
         let accs_with_email = val_with_email
             .get("accounts")
@@ -430,18 +418,121 @@ mod tests {
     }
 
     #[test]
-    fn test_forecast_dto_empty_and_sustainable() {
-        let pool = Pool::default();
+    fn test_forecast_dto_verdicts_and_nan_safety() {
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let now = 1700000000.0;
-        let res = build_forecast_response(&pool, now);
 
-        assert!(res.is_sustainable);
-        assert_eq!(res.runway_hours, None);
-        assert_eq!(res.runway_text, "Sustainable");
-        assert_eq!(res.burn_rate_requests_per_hour, 0.0);
-
-        let json_str = serde_json::to_string(&res).expect("valid JSON");
+        // 1. Empty pool must NOT claim Sustainable
+        let empty_pool = Pool::default();
+        let res_empty = build_forecast_response(&empty_pool, now);
+        assert!(!res_empty.is_sustainable);
+        assert_eq!(res_empty.runway_hours, None);
+        assert_eq!(res_empty.runway_text, "No Accounts");
+        assert_eq!(res_empty.burn_rate_requests_per_hour, 0.0);
+        let json_str = serde_json::to_string(&res_empty).expect("valid JSON");
         assert!(!json_str.contains("NaN"));
+
+        // 2. All restricted pool must NOT claim Sustainable
+        let restricted_pool = Pool {
+            accounts: vec![Account {
+                id: "acc_1".to_string(),
+                status: STATUS_DISABLED.to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let res_restricted = build_forecast_response(&restricted_pool, now);
+        assert!(!res_restricted.is_sustainable);
+        assert_eq!(res_restricted.runway_hours, None);
+        assert_eq!(res_restricted.runway_text, "All Restricted");
+
+        // 3. Idle pool with scarce 5h quota stalls at benchmark pace (< 24h)
+        let scarce_pool = Pool {
+            accounts: vec![Account {
+                id: "acc_1".to_string(),
+                status: "active".to_string(),
+                last_quota: Some(QuotaState {
+                    gemini_5h: Some(QuotaWindow {
+                        fraction: Some(0.15),
+                        reset_time: Some(serde_json::json!(now + 4.5 * 3600.0)),
+                        ..Default::default()
+                    }),
+                    gemini_weekly: Some(QuotaWindow {
+                        fraction: Some(0.95),
+                        reset_time: Some(serde_json::json!(now + 6.0 * 86400.0)),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let res_scarce = build_forecast_response(&scarce_pool, now);
+        assert!(!res_scarce.is_sustainable);
+        assert!(res_scarce.runway_hours.is_some());
+
+        // 4. Multi-account healthy pool with ample quota is Sustainable
+        let healthy_pool = Pool {
+            accounts: (1..=3)
+                .map(|i| Account {
+                    id: format!("acc_{i}"),
+                    status: "active".to_string(),
+                    last_quota: Some(QuotaState {
+                        gemini_5h: Some(QuotaWindow {
+                            fraction: Some(1.0),
+                            reset_time: Some(serde_json::json!(now + (i as f64) * 3600.0)),
+                            ..Default::default()
+                        }),
+                        gemini_weekly: Some(QuotaWindow {
+                            fraction: Some(1.0),
+                            reset_time: Some(serde_json::json!(now + 6.0 * 86400.0)),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let res_healthy = build_forecast_response(&healthy_pool, now);
+        assert!(res_healthy.is_sustainable);
+        assert_eq!(res_healthy.runway_hours, None);
+        assert_eq!(res_healthy.runway_text, "Sustainable");
+
+        // 5. Pool where 5h is fine (>= 24h) but weekly quota exhausts (< 7d)
+        let weekly_pinch_pool = Pool {
+            accounts: (1..=3)
+                .map(|i| Account {
+                    id: format!("acc_{i}"),
+                    status: "active".to_string(),
+                    last_quota: Some(QuotaState {
+                        gemini_5h: Some(QuotaWindow {
+                            fraction: Some(1.0),
+                            reset_time: Some(serde_json::json!(now + (i as f64) * 1800.0)),
+                            ..Default::default()
+                        }),
+                        gemini_weekly: Some(QuotaWindow {
+                            fraction: Some(0.05),
+                            reset_time: Some(serde_json::json!(now + 6.5 * 86400.0)),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let res_weekly = build_forecast_response(&weekly_pinch_pool, now);
+        assert!(!res_weekly.is_sustainable);
+        assert!(res_weekly.runway_hours.is_some());
+        assert!(
+            res_weekly.runway_text.contains("(weekly)"),
+            "expected weekly text, got {}",
+            res_weekly.runway_text
+        );
     }
 
     #[test]

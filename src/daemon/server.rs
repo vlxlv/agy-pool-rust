@@ -244,7 +244,12 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
 
     let current_pid = std::process::id() as i32;
     let start_time = jiff::Timestamp::now();
-    crate::dashboard::dto::set_runtime_meta(format!("{}:{}", ctx_inst.listen_host, actual_port), start_time);
+    let runtime_listen = if ctx_inst.listen_host.contains(':') && !ctx_inst.listen_host.starts_with('[') {
+        format!("[{}]:{}", ctx_inst.listen_host, actual_port)
+    } else {
+        format!("{}:{}", ctx_inst.listen_host, actual_port)
+    };
+    crate::dashboard::dto::set_runtime_meta(runtime_listen, start_time);
     let initial_stats = super::runtime::collect_runtime_stats(current_pid, Some(start_time));
 
     let pid_info = super::pid::DaemonInfo {

@@ -64,6 +64,100 @@ pub struct RunwayForecast {
     pub accounts_forecast: Vec<AccountForecast>,
 }
 
+/// Shared horizon verdict derived consistently across CLI (`top`, `forecast`) and Web Dashboard.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunwayVerdict {
+    pub is_sustainable: bool,
+    pub runway_hours: Option<f64>,
+    pub runway_text: String,
+    pub five_hour_stall_sec: Option<f64>,
+    pub weekly_exhaust_sec: Option<f64>,
+}
+
+impl RunwayForecast {
+    /// Returns the active simulation horizon (benchmark pace when idle, current pace otherwise).
+    pub fn active_runway(&self) -> &SingleRunwayResult {
+        if self.is_idle {
+            &self.benchmark_runway
+        } else {
+            &self.current_runway
+        }
+    }
+
+    /// Returns the 5-hour stall time in seconds only when non-sustainable (< 24h), otherwise `None`.
+    pub fn five_hour_stall_sec(&self) -> Option<f64> {
+        let active = self.active_runway();
+        if !active.is_sustainable_5h {
+            active.first_stall_sec
+        } else {
+            None
+        }
+    }
+
+    /// Returns the weekly exhaustion time in seconds only when non-sustainable (< 7d), otherwise `None`.
+    pub fn weekly_exhaust_sec(&self) -> Option<f64> {
+        let active = self.active_runway();
+        if !active.is_sustainable_weekly {
+            active.weekly_exhaust_sec
+        } else {
+            None
+        }
+    }
+
+    pub fn summary_verdict(&self) -> RunwayVerdict {
+        match self.status.as_str() {
+            "no_accounts" => RunwayVerdict {
+                is_sustainable: false,
+                runway_hours: None,
+                runway_text: "No Accounts".to_string(),
+                five_hour_stall_sec: None,
+                weekly_exhaust_sec: None,
+            },
+            "all_restricted" => RunwayVerdict {
+                is_sustainable: false,
+                runway_hours: None,
+                runway_text: "All Restricted".to_string(),
+                five_hour_stall_sec: None,
+                weekly_exhaust_sec: None,
+            },
+            _ => {
+                let s5 = self.five_hour_stall_sec();
+                let sw = self.weekly_exhaust_sec();
+                if let Some(secs) = s5 {
+                    let hours = ((secs / 3600.0) * 10.0).round() / 10.0;
+                    let text = format!("~{}", format_duration_short(Some(secs)));
+                    RunwayVerdict {
+                        is_sustainable: false,
+                        runway_hours: Some(hours),
+                        runway_text: text,
+                        five_hour_stall_sec: s5,
+                        weekly_exhaust_sec: sw,
+                    }
+                } else if let Some(secs) = sw {
+                    let hours = ((secs / 3600.0) * 10.0).round() / 10.0;
+                    let days = secs / 86400.0;
+                    let text = format!("~{days:.1}d (weekly)");
+                    RunwayVerdict {
+                        is_sustainable: false,
+                        runway_hours: Some(hours),
+                        runway_text: text,
+                        five_hour_stall_sec: s5,
+                        weekly_exhaust_sec: sw,
+                    }
+                } else {
+                    RunwayVerdict {
+                        is_sustainable: true,
+                        runway_hours: None,
+                        runway_text: "Sustainable".to_string(),
+                        five_hour_stall_sec: None,
+                        weekly_exhaust_sec: None,
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// SimAccount tracks internal mutable state for chronological minute-by-minute simulation.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SimAccount {

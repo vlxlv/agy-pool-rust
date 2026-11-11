@@ -1438,7 +1438,6 @@ fn render_telemetry(sb: &mut String, pool: Option<&Pool>, now_ts: i64, width: us
     let burn = fc.burn_rate_pct_hr;
     let net = fc.net_rate_pct_hr;
     let sim = &fc.current_runway;
-    let bench = &fc.benchmark_runway;
 
     let mut health_str = format!("{h_count}/{tot_count} Active");
     if cool_count > 0 {
@@ -1470,29 +1469,15 @@ fn render_telemetry(sb: &mut String, pool: Option<&Pool>, now_ts: i64, width: us
         }
 
         // 5h Runway compact
-        let r5_tag = if is_idle {
-            if bench.is_sustainable_5h {
-                format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET}")
-            } else {
-                format!("~{}", format_duration_short(bench.first_stall_sec))
-            }
-        } else if sim.is_sustainable_5h {
-            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET}")
-        } else if let Some(first_stall_sec) = sim.first_stall_sec {
-            format!(
-                "{CLR_YELLOW}~{}{CLR_RESET}",
-                format_duration_short(Some(first_stall_sec))
-            )
-        } else {
-            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET}")
+        let r5_tag = match (is_idle, fc.five_hour_stall_sec()) {
+            (true, Some(sec)) => format!("~{}", format_duration_short(Some(sec))),
+            (false, Some(sec)) => format!("{CLR_YELLOW}~{}{CLR_RESET}", format_duration_short(Some(sec))),
+            (_, None) => format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET}"),
         };
         sb.push_str(&format!("  • 5-Hour Runway:  {r5_tag}\n"));
 
         // Weekly Runway compact
-        let active_sim = if is_idle { bench } else { sim };
-        let w_tag = if active_sim.is_sustainable_weekly {
-            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET}")
-        } else if let Some(weekly_exhaust_sec) = active_sim.weekly_exhaust_sec {
+        let w_tag = if let Some(weekly_exhaust_sec) = fc.weekly_exhaust_sec() {
             let w_days = weekly_exhaust_sec / 86400.0;
             let w_clr = if w_days <= 2.0 { CLR_RED } else { CLR_YELLOW };
             format!("{w_clr}~{w_days:.1}d{CLR_RESET}")
@@ -1530,39 +1515,31 @@ fn render_telemetry(sb: &mut String, pool: Option<&Pool>, now_ts: i64, width: us
         sb.push_str(&format!("{replenish_line}\n"));
 
         // 5h Runway
-        let r5_tag = if is_idle {
-            if bench.is_sustainable_5h {
-                format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET} (> 24h at standard pace)")
-            } else {
-                format!("~{}", format_duration_short(bench.first_stall_sec))
+        let r5_tag = match (is_idle, fc.five_hour_stall_sec()) {
+            (true, None) => format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET} (> 24h at standard pace)"),
+            (true, Some(sec)) => format!("~{}", format_duration_short(Some(sec))),
+            (false, None) => format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET} (Pool replenishes faster than burn)"),
+            (false, Some(first_stall_sec)) => {
+                let stall_str = format_duration_short(Some(first_stall_sec));
+                let cause_note = if let Some(pause_sec) = sim.stall_duration_sec
+                    && pause_sec > 0.0
+                {
+                    format!(" (Dry pause: ~{})", format_duration_short(Some(pause_sec)))
+                } else {
+                    String::new()
+                };
+                format!("{CLR_YELLOW}~{stall_str} until stall{CLR_RESET}{cause_note}")
             }
-        } else if sim.is_sustainable_5h {
-            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET} (Pool replenishes faster than burn)")
-        } else if let Some(first_stall_sec) = sim.first_stall_sec {
-            let stall_str = format_duration_short(Some(first_stall_sec));
-            let cause_note = if let Some(pause_sec) = sim.stall_duration_sec
-                && pause_sec > 0.0
-            {
-                format!(" (Dry pause: ~{})", format_duration_short(Some(pause_sec)))
-            } else {
-                String::new()
-            };
-            format!("{CLR_YELLOW}~{stall_str} until stall{CLR_RESET}{cause_note}")
-        } else {
-            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET}")
         };
         sb.push_str(&format!("  • 5-Hour Runway:  {r5_tag}\n"));
 
         // Weekly Runway
-        let active_sim = if is_idle { bench } else { sim };
-        let w_tag = if active_sim.is_sustainable_weekly {
-            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET} (> 7 Days remaining)")
-        } else if let Some(weekly_exhaust_sec) = active_sim.weekly_exhaust_sec {
+        let w_tag = if let Some(weekly_exhaust_sec) = fc.weekly_exhaust_sec() {
             let w_days = weekly_exhaust_sec / 86400.0;
             let w_clr = if w_days <= 2.0 { CLR_RED } else { CLR_YELLOW };
             format!("{w_clr}~{w_days:.1} Days remaining{CLR_RESET}")
         } else {
-            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET}")
+            format!("{CLR_GREEN}⚡ Sustainable{CLR_RESET} (> 7 Days remaining)")
         };
         let w_label = if is_idle {
             "Weekly Budget:  "

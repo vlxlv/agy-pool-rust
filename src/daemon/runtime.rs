@@ -233,24 +233,49 @@ impl RuntimeStats {
     }
 }
 
+fn system_page_size() -> u64 {
+    #[cfg(unix)]
+    {
+        let sz = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if sz > 0 { sz as u64 } else { 4096 }
+    }
+    #[cfg(not(unix))]
+    {
+        4096
+    }
+}
+
+fn read_statm_bytes() -> (u64, u64) {
+    let page_size = system_page_size();
+    let Ok(statm) = std::fs::read_to_string("/proc/self/statm") else {
+        return (0, 0);
+    };
+    let mut parts = statm.split_whitespace();
+    if let (Some(Ok(total_pages)), Some(Ok(rss_pages))) = (
+        parts.next().map(|s| s.parse::<u64>()),
+        parts.next().map(|s| s.parse::<u64>()),
+    ) {
+        (
+            total_pages.saturating_mul(page_size),
+            rss_pages.saturating_mul(page_size),
+        )
+    } else {
+        (0, 0)
+    }
+}
+
+/// Returns current process resident set size (RSS) in bytes from `/proc/self/statm`.
+pub fn process_rss_bytes() -> u64 {
+    read_statm_bytes().1
+}
+
 /// Collects runtime stats from the current process and /proc/self.
 pub fn collect_runtime_stats(pid: i32, started_at: Option<jiff::Timestamp>) -> RuntimeStats {
     let pid = if pid <= 0 { std::process::id() as i32 } else { pid };
     let started_at = started_at.unwrap_or_else(jiff::Timestamp::now);
 
-    let mut sys_bytes = 0u64;
-    let mut alloc_bytes = 0u64;
+    let (sys_bytes, alloc_bytes) = read_statm_bytes();
     let mut goroutines = 1usize;
-
-    if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
-        let parts: Vec<&str> = statm.split_whitespace().collect();
-        if parts.len() >= 2
-            && let (Ok(total_pages), Ok(rss_pages)) = (parts[0].parse::<u64>(), parts[1].parse::<u64>())
-        {
-            sys_bytes = total_pages * 4096;
-            alloc_bytes = rss_pages * 4096;
-        }
-    }
 
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
         for line in status.lines() {

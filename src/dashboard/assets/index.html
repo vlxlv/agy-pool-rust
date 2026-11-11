@@ -603,7 +603,7 @@
               <th>Model</th>
               <th>Account</th>
               <th>TTFB / Total</th>
-              <th>Tokens</th>
+              <th>Prompt Tokens</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -625,6 +625,7 @@
   <script>
     // State
     let showEmail = localStorage.getItem('agy_show_email') === 'true';
+    let showEmailAllowed = false;
     let streamPaused = false;
     let eventList = [];
     let accountsData = [];
@@ -634,6 +635,7 @@
 
     // DOM Elements
     const showEmailCheckbox = document.getElementById('show_email');
+    const showEmailLabel = showEmailCheckbox.closest('label');
     showEmailCheckbox.checked = showEmail;
 
     const sseDot = document.getElementById('sse-dot');
@@ -644,6 +646,10 @@
 
     // Email toggle event listener
     showEmailCheckbox.addEventListener('change', (e) => {
+      if (!showEmailAllowed) {
+        e.target.checked = false;
+        return;
+      }
       showEmail = e.target.checked;
       localStorage.setItem('agy_show_email', showEmail);
       fetchAccounts();
@@ -757,7 +763,34 @@
         const res = await fetch(url);
         if (!res.ok) return;
         const data = await res.json();
-        accountsData = data.accounts || [];
+        const fetchedAtMs = Date.now();
+
+        showEmailAllowed = Boolean(data.show_email_allowed);
+        showEmailCheckbox.disabled = !showEmailAllowed;
+        if (!showEmailAllowed) {
+          showEmailCheckbox.checked = false;
+          if (showEmailLabel) {
+            showEmailLabel.title = 'Disabled by server config (set AGY_SHOW_EMAIL=true or show_email: true in pool.json)';
+            showEmailLabel.style.opacity = '0.5';
+            showEmailLabel.style.cursor = 'not-allowed';
+          }
+        } else {
+          showEmailCheckbox.checked = showEmail;
+          if (showEmailLabel) {
+            showEmailLabel.title = 'Toggle full email visibility in table';
+            showEmailLabel.style.opacity = '';
+            showEmailLabel.style.cursor = 'pointer';
+          }
+        }
+
+        accountsData = (data.accounts || []).map((acc) => {
+          for (const win of [acc.five_hour, acc.weekly]) {
+            if (win && win.reset_at_unix > 0) {
+              win._deadlineMs = fetchedAtMs + (Number(win.reset_in_secs) || 0) * 1000;
+            }
+          }
+          return acc;
+        });
 
         // Update accounts badge
         document.getElementById('accounts-count-badge').textContent = `${data.total_accounts} accounts`;
@@ -808,12 +841,12 @@
         return;
       }
 
-      const nowSec = Math.floor(Date.now() / 1000);
+      const nowMs = Date.now();
       let html = '';
 
       for (const acc of accountsData) {
         const safeId = sanitizeId(acc.id);
-        const emailDisplay = showEmail && acc.email ? acc.email : (acc.email_masked || '—');
+        const emailDisplay = showEmailAllowed && showEmail && acc.email ? acc.email : (acc.email_masked || '—');
         const badgeClass = getBadgeClass(acc.scheduler_state);
 
         // 5H quota window
@@ -831,8 +864,12 @@
                 <div class="progress-bar-fill ${colorClass}" style="width: ${pct}%"></div>
               </div>
             </div>`;
-          const remainingSec = Math.max(0, (acc.five_hour.reset_at_unix || 0) - nowSec);
-          fiveHourReset = `<span id="reset-5h-${safeId}" class="num">${formatDuration(remainingSec)}</span>`;
+          if (acc.five_hour.reset_at_unix > 0 && acc.five_hour._deadlineMs !== undefined) {
+            const remainingSec = Math.max(0, Math.ceil((acc.five_hour._deadlineMs - nowMs) / 1000));
+            fiveHourReset = `<span id="reset-5h-${safeId}" class="num">${formatDuration(remainingSec)}</span>`;
+          } else {
+            fiveHourReset = `<span id="reset-5h-${safeId}" class="text-dim num">—</span>`;
+          }
         }
 
         // Weekly quota window
@@ -840,12 +877,14 @@
         if (acc.weekly) {
           const pct = Math.min(100, Math.max(0, acc.weekly.remaining_percent || 0));
           const colorClass = getProgressBarColorClass(pct);
-          const remainingSec = Math.max(0, (acc.weekly.reset_at_unix || 0) - nowSec);
+          const weeklyResetText = (acc.weekly.reset_at_unix > 0 && acc.weekly._deadlineMs !== undefined)
+            ? formatDuration(Math.max(0, Math.ceil((acc.weekly._deadlineMs - nowMs) / 1000)))
+            : '—';
           weeklyHtml = `
             <div class="quota-cell">
               <div class="quota-info">
                 <span class="num">${pct.toFixed(1)}%</span>
-                <span class="num text-dim" id="reset-wk-${safeId}">${formatDuration(remainingSec)}</span>
+                <span class="num text-dim" id="reset-wk-${safeId}">${weeklyResetText}</span>
               </div>
               <div class="progress-bar-bg">
                 <div class="progress-bar-fill ${colorClass}" style="width: ${pct}%"></div>
@@ -881,21 +920,21 @@
     // 1-second local tick: update countdowns without DOM flicker
     function updateLocalCountdowns() {
       if (!accountsData || accountsData.length === 0) return;
-      const nowSec = Math.floor(Date.now() / 1000);
+      const nowMs = Date.now();
 
       for (const acc of accountsData) {
         const safeId = sanitizeId(acc.id);
-        if (acc.five_hour && acc.five_hour.reset_at_unix) {
+        if (acc.five_hour && acc.five_hour.reset_at_unix > 0 && acc.five_hour._deadlineMs !== undefined) {
           const elem = document.getElementById(`reset-5h-${safeId}`);
           if (elem) {
-            const diff = Math.max(0, acc.five_hour.reset_at_unix - nowSec);
+            const diff = Math.max(0, Math.ceil((acc.five_hour._deadlineMs - nowMs) / 1000));
             elem.textContent = formatDuration(diff);
           }
         }
-        if (acc.weekly && acc.weekly.reset_at_unix) {
+        if (acc.weekly && acc.weekly.reset_at_unix > 0 && acc.weekly._deadlineMs !== undefined) {
           const elem = document.getElementById(`reset-wk-${safeId}`);
           if (elem) {
-            const diff = Math.max(0, acc.weekly.reset_at_unix - nowSec);
+            const diff = Math.max(0, Math.ceil((acc.weekly._deadlineMs - nowMs) / 1000));
             elem.textContent = formatDuration(diff);
           }
         }
@@ -963,11 +1002,21 @@
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
         }
+        if (!streamPaused) {
+          eventList = [];
+          renderStream();
+        }
       };
 
       sseSource.addEventListener('audit', (e) => {
         try {
           const ev = JSON.parse(e.data);
+          const isDup = eventList.some(
+            (item) => (ev.id && item.id === ev.id) || (item.id === ev.id && item.timestamp === ev.timestamp && item.account === ev.account && item.model === ev.model)
+          );
+          if (isDup) {
+            return;
+          }
           eventList.unshift(ev);
           if (eventList.length > 20) {
             eventList.pop();
