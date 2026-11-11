@@ -58,7 +58,11 @@ fn setup_sample_pool() {
     agy_pool::storage::save_pool(&pool).expect("failed to save pool");
 }
 
-async fn start_server() -> (SocketAddr, tokio::task::JoinHandle<()>, tokio::sync::oneshot::Sender<()>) {
+async fn start_server() -> (
+    SocketAddr,
+    tokio::task::JoinHandle<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let handler = Arc::new(agy_pool::proxy::Handler::new());
@@ -125,10 +129,10 @@ async fn send_request(
     let mut body_bytes = bytes::BytesMut::new();
     let mut resp_body = resp.into_body();
     while let Some(frame_res) = resp_body.frame().await {
-        if let Ok(frame) = frame_res {
-            if let Some(chunk) = frame.data_ref() {
-                body_bytes.extend_from_slice(chunk);
-            }
+        if let Ok(frame) = frame_res
+            && let Some(chunk) = frame.data_ref()
+        {
+            body_bytes.extend_from_slice(chunk);
         }
     }
     drop(sender);
@@ -147,13 +151,17 @@ async fn test_dashboard_html_and_rest_routes() {
         let (status, headers, body) = send_request(addr, Method::GET, path, HeaderMap::new(), Bytes::new()).await;
         assert_eq!(status, StatusCode::OK, "path {path} status");
         let content_type = headers.get(hyper::header::CONTENT_TYPE).unwrap().to_str().unwrap();
-        assert!(content_type.contains("text/html; charset=utf-8"), "content type for {path}: {content_type}");
+        assert!(
+            content_type.contains("text/html; charset=utf-8"),
+            "content type for {path}: {content_type}"
+        );
         let body_str = String::from_utf8_lossy(&body);
         assert!(body_str.contains("agy-pool dashboard"), "body for {path}: {body_str}");
     }
 
     // 2. GET /api/v1/status returns 200 OK JSON containing version, strategy, latency.ttfb_p50_ms, qps
-    let (status, headers, body) = send_request(addr, Method::GET, "/api/v1/status", HeaderMap::new(), Bytes::new()).await;
+    let (status, headers, body) =
+        send_request(addr, Method::GET, "/api/v1/status", HeaderMap::new(), Bytes::new()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json from /api/v1/status");
@@ -164,7 +172,8 @@ async fn test_dashboard_html_and_rest_routes() {
     assert!(latency.get("ttfb_p50_ms").is_some());
 
     // 3. GET /api/v1/accounts returns 200 OK JSON with email_masked and omits email
-    let (status, headers, body) = send_request(addr, Method::GET, "/api/v1/accounts", HeaderMap::new(), Bytes::new()).await;
+    let (status, headers, body) =
+        send_request(addr, Method::GET, "/api/v1/accounts", HeaderMap::new(), Bytes::new()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json from /api/v1/accounts");
@@ -175,7 +184,14 @@ async fn test_dashboard_html_and_rest_routes() {
     assert!(first.get("email").is_none());
 
     // 4. GET /api/v1/accounts?show_email=true includes full email
-    let (status, _, body) = send_request(addr, Method::GET, "/api/v1/accounts?show_email=true", HeaderMap::new(), Bytes::new()).await;
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/accounts?show_email=true",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json with show_email=true");
     let accounts = json.get("accounts").and_then(|a| a.as_array()).expect("accounts array");
@@ -184,7 +200,8 @@ async fn test_dashboard_html_and_rest_routes() {
     assert_eq!(first.get("email").and_then(|e| e.as_str()), Some("alice@example.com"));
 
     // 5. GET /api/v1/forecast returns 200 OK JSON with is_sustainable, runway_text
-    let (status, headers, body) = send_request(addr, Method::GET, "/api/v1/forecast", HeaderMap::new(), Bytes::new()).await;
+    let (status, headers, body) =
+        send_request(addr, Method::GET, "/api/v1/forecast", HeaderMap::new(), Bytes::new()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json from /api/v1/forecast");
@@ -204,7 +221,8 @@ async fn test_dashboard_non_get_returns_405() {
 
     // POST /api/v1/status and POST /dashboard return 405 Method Not Allowed with Allow: GET header
     for path in ["/api/v1/status", "/dashboard"] {
-        let (status, headers, _) = send_request(addr, Method::POST, path, HeaderMap::new(), Bytes::from_static(b"{}")).await;
+        let (status, headers, _) =
+            send_request(addr, Method::POST, path, HeaderMap::new(), Bytes::from_static(b"{}")).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "path {path} should return 405");
         let allow = headers.get(hyper::header::ALLOW).expect("Allow header present");
         assert_eq!(allow, "GET", "Allow header value for {path}");
@@ -242,7 +260,8 @@ async fn test_proxy_routes_remain_unaffected() {
         "/v1/models/gemini:generateContent",
         HeaderMap::new(),
         Bytes::from_static(b"{\"contents\":[]}"),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 
     let _ = shutdown_tx.send(());
@@ -287,7 +306,12 @@ async fn test_sse_events_replay_and_live_stream() {
 
     let resp = sender.send_request(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp.headers().get(hyper::header::CONTENT_TYPE).unwrap().to_str().unwrap();
+    let ct = resp
+        .headers()
+        .get(hyper::header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(ct.contains("text/event-stream; charset=utf-8"), "content type: {ct}");
 
     let mut body = resp.into_body();
@@ -295,17 +319,19 @@ async fn test_sse_events_replay_and_live_stream() {
     // Read initial frames (body.frame().await with timeout) and assert pre-recorded event is replayed
     let replay_event = tokio::time::timeout(Duration::from_secs(3), async {
         while let Some(frame_res) = body.frame().await {
-            if let Ok(frame) = frame_res {
-                if let Some(chunk) = frame.data_ref() {
-                    let s = String::from_utf8_lossy(chunk);
-                    if s.contains("event: audit") && s.contains("gemini-2.5-flash") {
-                        return s.to_string();
-                    }
+            if let Ok(frame) = frame_res
+                && let Some(chunk) = frame.data_ref()
+            {
+                let s = String::from_utf8_lossy(chunk);
+                if s.contains("event: audit") && s.contains("gemini-2.5-flash") {
+                    return s.to_string();
                 }
             }
         }
         String::new()
-    }).await.expect("timed out waiting for replay audit event");
+    })
+    .await
+    .expect("timed out waiting for replay audit event");
 
     assert!(replay_event.contains("event: audit\ndata: "));
     assert!(replay_event.contains("gemini-2.5-flash"));
@@ -325,17 +351,19 @@ async fn test_sse_events_replay_and_live_stream() {
     // Assert the new live event arrives over the same SSE stream
     let live_event = tokio::time::timeout(Duration::from_secs(3), async {
         while let Some(frame_res) = body.frame().await {
-            if let Ok(frame) = frame_res {
-                if let Some(chunk) = frame.data_ref() {
-                    let s = String::from_utf8_lossy(chunk);
-                    if s.contains("event: audit") && s.contains("gemini-2.5-pro") {
-                        return s.to_string();
-                    }
+            if let Ok(frame) = frame_res
+                && let Some(chunk) = frame.data_ref()
+            {
+                let s = String::from_utf8_lossy(chunk);
+                if s.contains("event: audit") && s.contains("gemini-2.5-pro") {
+                    return s.to_string();
                 }
             }
         }
         String::new()
-    }).await.expect("timed out waiting for live audit event");
+    })
+    .await
+    .expect("timed out waiting for live audit event");
 
     assert!(live_event.contains("event: audit\ndata: "));
     assert!(live_event.contains("gemini-2.5-pro"));
@@ -391,8 +419,14 @@ async fn test_embedded_spa_asset_constraints() {
 
     // Assert body references all four backend endpoints
     assert!(body_str.contains("/api/v1/status"), "missing /api/v1/status reference");
-    assert!(body_str.contains("/api/v1/accounts"), "missing /api/v1/accounts reference");
-    assert!(body_str.contains("/api/v1/forecast"), "missing /api/v1/forecast reference");
+    assert!(
+        body_str.contains("/api/v1/accounts"),
+        "missing /api/v1/accounts reference"
+    );
+    assert!(
+        body_str.contains("/api/v1/forecast"),
+        "missing /api/v1/forecast reference"
+    );
     assert!(body_str.contains("/api/v1/events"), "missing /api/v1/events reference");
 
     // Assert body includes the email visibility toggle control (show_email)
