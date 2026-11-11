@@ -348,3 +348,56 @@ async fn test_sse_events_replay_and_live_stream() {
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_embedded_spa_asset_constraints() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, headers, body) = send_request(addr, Method::GET, "/dashboard", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    let ct = headers.get(hyper::header::CONTENT_TYPE).unwrap().to_str().unwrap();
+    assert!(ct.contains("text/html; charset=utf-8"));
+
+    let body_str = String::from_utf8(body.to_vec()).expect("valid UTF-8 HTML body");
+
+    // Assert body length > 2048 and < 90_000 bytes
+    assert!(
+        body_str.len() > 2048 && body_str.len() < 90_000,
+        "body length {} not in range (2048, 90000)",
+        body_str.len()
+    );
+
+    // Assert body contains no external CDN URLs in <script or <link tags
+    let body_lower = body_str.to_lowercase();
+    for tag_start in ["<script", "<link"] {
+        let mut rest = body_lower.as_str();
+        while let Some(idx) = rest.find(tag_start) {
+            let after = &rest[idx..];
+            if let Some(end_tag) = after.find('>') {
+                let tag_content = &after[..=end_tag];
+                assert!(
+                    !tag_content.contains("https://") && !tag_content.contains("http://"),
+                    "external URL found in tag: {tag_content}"
+                );
+                rest = &after[end_tag + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Assert body references all four backend endpoints
+    assert!(body_str.contains("/api/v1/status"), "missing /api/v1/status reference");
+    assert!(body_str.contains("/api/v1/accounts"), "missing /api/v1/accounts reference");
+    assert!(body_str.contains("/api/v1/forecast"), "missing /api/v1/forecast reference");
+    assert!(body_str.contains("/api/v1/events"), "missing /api/v1/events reference");
+
+    // Assert body includes the email visibility toggle control (show_email)
+    assert!(body_str.contains("show_email"), "missing show_email toggle control");
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
