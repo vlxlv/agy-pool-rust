@@ -254,6 +254,7 @@ async fn test_sse_events_replay_and_live_stream() {
     let _guard = lock_test().await;
     let _tmp = setup_test_env();
     setup_sample_pool();
+    agy_pool::dashboard::telemetry::reset_for_test();
 
     // Call dashboard::telemetry::record_attempt(...) before connecting
     agy_pool::dashboard::telemetry::record_attempt(agy_pool::dashboard::telemetry::DashboardAuditEvent {
