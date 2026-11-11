@@ -49,7 +49,7 @@ static BROADCAST_TX: LazyLock<broadcast::Sender<DashboardAuditEvent>> =
 pub fn record_attempt(ev: DashboardAuditEvent) {
     let now = Instant::now();
     {
-        let mut state = TELEMETRY_STATE.lock().unwrap();
+        let mut state = TELEMETRY_STATE.lock().unwrap_or_else(|e| e.into_inner());
         state.latency_samples.push_back(LatencySample {
             ts: now,
             ttfb_ms: ev.ttfb_ms,
@@ -79,7 +79,7 @@ fn percentile(sorted: &[u64], pct: f64) -> u64 {
 
 pub fn latency_and_qps_snapshot(now: Instant) -> (LatencyStatsDto, f64) {
     let (mut ttfb_list, mut total_list, recent_count) = {
-        let state = TELEMETRY_STATE.lock().unwrap();
+        let state = TELEMETRY_STATE.lock().unwrap_or_else(|e| e.into_inner());
         let mut ttfb = Vec::with_capacity(state.latency_samples.len());
         let mut total = Vec::with_capacity(state.latency_samples.len());
         let mut recent = 0usize;
@@ -134,7 +134,7 @@ pub fn recent_events(limit: usize) -> Vec<DashboardAuditEvent> {
     if limit == 0 {
         return Vec::new();
     }
-    let state = TELEMETRY_STATE.lock().unwrap();
+    let state = TELEMETRY_STATE.lock().unwrap_or_else(|e| e.into_inner());
     let len = state.recent_events.len();
     let take = limit.min(len);
     let skip = len - take;
@@ -146,7 +146,7 @@ pub fn subscribe_events() -> broadcast::Receiver<DashboardAuditEvent> {
 }
 
 pub fn reset_for_test() {
-    let mut state = TELEMETRY_STATE.lock().unwrap();
+    let mut state = TELEMETRY_STATE.lock().unwrap_or_else(|e| e.into_inner());
     state.latency_samples.clear();
     state.recent_events.clear();
 }
