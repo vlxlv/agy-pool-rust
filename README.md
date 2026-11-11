@@ -1,6 +1,8 @@
 # agy-pool-rust
 
 [![CI](https://github.com/vlxlv/agy-pool-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/vlxlv/agy-pool-rust/actions/workflows/ci.yml)
+[![Rust Version](https://img.shields.io/badge/rust-1.99%2B-orange.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Termux-green.svg)](#)
 
 A local gateway that pools several Google accounts behind the **Antigravity CLI (`agy`)**. `agy` talks to `127.0.0.1:8899`; agy-pool forwards each request upstream on the account with the most usable quota and moves on to the next account when one runs out.
@@ -17,6 +19,8 @@ Release binaries and `.deb` packages are on the [releases page](https://github.c
 - **Prompt-cache affinity.** A conversation stays on the same account while that account is healthy, so upstream prompt caching keeps working.
 - **Streaming & SSE Keep-Alive.** Server-sent events are streamed in real time. Optional keep-alive (`server.keep_alive_secs`, off by default) sends `200` early and then `: keep-alive` heartbeats for slow SSE requests; upstream errors after that point arrive as an in-stream `data: {"error":…}` event instead of an HTTP status.
 - **Model Mapping & Aliases.** Configurable `model_mapping` dynamically rewrites model IDs across both URL paths and JSON request bodies.
+- **Dual-Track Logging & Structured Audit Events.** Separates operational gateway logs (`agy-pool.log`) from high-resolution, secure request audit events (`audit-events.jsonl`, `0600` permissions) tracking latency, TTFB, token metrics, upstream quota state, and failover reasons (including `ClientDisconnected`). Searchable via `agy-pool logs --audit` (with `-f` to follow).
+- **Zero-Downtime Daemon Restart.** `agy-pool restart` seamlessly migrates between different configurations or ports without "port mismatch" errors, dangling PIDs, or manual cleanup.
 - **Dashboards.** `quota` shows per-account quota bars and reset times, `top` is a live terminal dashboard, `stats` and `forecast` report routing effectiveness and quota runway.
 - **Static release binaries** for Linux (amd64, arm64; musl, so they also run on Termux and old glibc), plus `.deb` packages with systemd units.
 - **Encrypted backups.** `export` / `import` move the account pool between machines, optionally encrypted (PBKDF2-HMAC-SHA256).
@@ -110,7 +114,7 @@ After `install`, plain `agy` goes through the pool with no flags or environment 
 | `login`, `import-current` | Add an account by browser login, or import the account native `agy` is signed in with |
 | `list`, `quota`, `top` | Show the pool, quota bars, or a live dashboard (`-e` shows emails) |
 | `status`, `stats`, `forecast` | Gateway process summary, routing effectiveness, quota runway |
-| `start`, `stop`, `restart`, `logs` | Control the gateway and read its log |
+| `start`, `stop`, `restart`, `logs` | Control the gateway daemon, hot-restart across port/config changes, and inspect logs (`--audit` to view structured audit events, `-f` to follow) |
 | `run [-- agy args]` | Start the gateway if needed and run native `agy` through it |
 | `strategy`, `switch` | Choose the routing strategy, or the account native `agy` uses directly |
 | `rename`, `enable`, `disable`, `remove`, `verify` | Manage single accounts |
@@ -125,9 +129,39 @@ After `install`, plain `agy` goes through the pool with no flags or environment 
 
 | Path | Contents |
 |---|---|
-| `~/.config/agy-pool/config.json` | Static settings: listen address/port, keep-alive interval, model mapping aliases, routing strategy, native `agy` path, log size. See [`config.example.json`](config.example.json). |
+| `~/.config/agy-pool/config.json` | Static settings: listen address/port, `keep_alive_secs`, `model_mapping` aliases, routing strategy, native `agy` path, log and audit size limits. See [`config.example.json`](config.example.json). |
 | `~/.local/share/agy-pool/state.db` | Account pool and runtime state (SQLite). Managed by agy-pool; don't edit it. |
-| `~/.local/share/agy-pool/agy-pool.log` | Gateway log. It and `quota-history.jsonl` rotate at `logging.max_size_bytes` (5 MB by default). |
+| `~/.local/share/agy-pool/agy-pool.log` | Gateway operational log. Rotates at `logging.max_size_bytes` (5 MB by default). |
+| `~/.local/share/agy-pool/audit-events.jsonl` | Structured JSONL request audit stream (`0600` permissions). Rotates at `logging.audit_max_size_bytes` (20 MB by default). |
+| `~/.local/share/agy-pool/quota-history.jsonl` | Quota snapshot telemetry history. |
+
+### Configuration Example
+
+```json
+{
+  "version": 1,
+  "server": {
+    "listen": "127.0.0.1",
+    "port": 8899,
+    "keep_alive_secs": 15
+  },
+  "scheduler": {
+    "strategy": "smart"
+  },
+  "model_mapping": {
+    "gemini-2.0-flash-exp": "gemini-2.0-flash"
+  },
+  "logging": {
+    "max_size_bytes": 5242880,
+    "backup_count": 1,
+    "audit_max_size_bytes": 20971520
+  }
+}
+```
+
+- `server.keep_alive_secs`: Interval (seconds) for SSE heartbeat frames (`: keep-alive`). `0` disables keep-alive (default).
+- `model_mapping`: Maps requested model names/aliases to target models across URL paths and request payloads.
+- `logging.audit_max_size_bytes`: Maximum file size before `audit-events.jsonl` rotates (defaults to 20 MiB).
 
 Environment variables:
 
