@@ -77,25 +77,33 @@ fn audit_quota_from_routing_event(ev: &RoutingEvent) -> AuditQuota {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_attempt_audit(
     params: &DispatchParams<'_>,
+    disp_name: &str,
     status_code: u16,
     reason: &str,
+    is_failover: bool,
+    record_latency: bool,
     ttfb: Duration,
     total: Duration,
     tokens: AuditTokens,
 ) {
-    let disp_name = crate::accounts::display_account_name(Some(params.acc), Some(false));
-    crate::dashboard::telemetry::record_attempt(crate::dashboard::telemetry::DashboardAuditEvent {
-        timestamp: jiff::Timestamp::now().to_string(),
-        model: params.model.to_string(),
-        account: disp_name.clone(),
-        ttfb_ms: ttfb.as_millis() as u64,
-        total_ms: total.as_millis() as u64,
-        tokens: tokens.prompt.max(0),
-        status: status_code,
-        failover: !reason.is_empty(),
-    });
+    let now = jiff::Timestamp::now();
+    crate::dashboard::telemetry::record_attempt(
+        crate::dashboard::telemetry::DashboardAuditEvent {
+            id: 0,
+            timestamp: now,
+            model: params.model.to_string(),
+            account: disp_name.to_string(),
+            ttfb_ms: ttfb.as_millis() as u64,
+            total_ms: total.as_millis() as u64,
+            tokens: tokens.prompt.max(0),
+            status: status_code,
+            failover: is_failover,
+        },
+        record_latency,
+    );
 
     if crate::observability::is_audit_worker_active() {
         let quota_before = params
@@ -110,7 +118,7 @@ fn write_attempt_audit(
             });
         let path = params.path.split('?').next().unwrap_or(params.path);
         let event = AuditEvent {
-            timestamp: jiff::Timestamp::now().to_string(),
+            timestamp: now.to_string(),
             request_id: params.request_id.to_string(),
             session_key: crate::proxy::usage::session_tag(params.session_key),
             method: params.req_method.to_string(),
@@ -119,7 +127,7 @@ fn write_attempt_audit(
             strategy: params.strategy.to_string(),
             attempt: params.attempt,
             account_id: params.acc.id.clone(),
-            account_name: disp_name,
+            account_name: disp_name.to_string(),
             status_code,
             ttfb_ms: ttfb.as_millis() as u64,
             total_ms: total.as_millis() as u64,
@@ -131,16 +139,29 @@ fn write_attempt_audit(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_attempt_audit(
     params: &DispatchParams<'_>,
+    disp_name: &str,
     status_code: u16,
     reason: &str,
+    is_failover: bool,
     ttfb: Duration,
     total: Duration,
     tokens: AuditTokens,
 ) {
     notify_audit(params.frozen_event.as_ref(), params.attempt, status_code, reason);
-    write_attempt_audit(params, status_code, reason, ttfb, total, tokens);
+    write_attempt_audit(
+        params,
+        disp_name,
+        status_code,
+        reason,
+        is_failover,
+        false,
+        ttfb,
+        total,
+        tokens,
+    );
 }
 
 /// Dispatches a request to one specific account.
@@ -165,8 +186,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
             record_attempt_audit(
                 &params,
+                &disp_name,
                 401,
                 "TokenRefreshFailed",
+                true,
                 Duration::ZERO,
                 Duration::ZERO,
                 AuditTokens { prompt: 0, cached: 0 },
@@ -219,8 +242,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 );
                 record_attempt_audit(
                     &params,
+                    &disp_name,
                     502,
                     "PreConnectTransportFailure",
+                    true,
                     Duration::ZERO,
                     Duration::ZERO,
                     AuditTokens { prompt: 0, cached: 0 },
@@ -260,8 +285,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 );
                 record_attempt_audit(
                     &params,
+                    &disp_name,
                     502,
                     "AmbiguousTransportFailure",
+                    false,
                     ttfb,
                     start.elapsed(),
                     AuditTokens { prompt: 0, cached: 0 },
@@ -311,8 +338,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     );
                     record_attempt_audit(
                         &params,
+                        &disp_name,
                         502,
                         "PreConnectTransportFailure",
+                        true,
                         Duration::ZERO,
                         Duration::ZERO,
                         AuditTokens { prompt: 0, cached: 0 },
@@ -331,8 +360,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 );
                 record_attempt_audit(
                     &params,
+                    &disp_name,
                     502,
                     "AmbiguousTransportFailure",
+                    false,
                     ttfb,
                     start.elapsed(),
                     AuditTokens { prompt: 0, cached: 0 },
@@ -394,8 +425,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
             record_attempt_audit(
                 &params,
+                &disp_name,
                 status_code,
                 "ModelCapacityExhausted",
+                true,
                 ttfb,
                 start.elapsed(),
                 AuditTokens { prompt: 0, cached: 0 },
@@ -424,8 +457,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
             record_attempt_audit(
                 &params,
+                &disp_name,
                 status_code,
                 "ValidationError",
+                true,
                 ttfb,
                 start.elapsed(),
                 AuditTokens { prompt: 0, cached: 0 },
@@ -456,8 +491,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
             record_attempt_audit(
                 &params,
+                &disp_name,
                 status_code,
                 "QuotaExhausted",
+                true,
                 ttfb,
                 start.elapsed(),
                 AuditTokens { prompt: 0, cached: 0 },
@@ -483,8 +520,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
             record_attempt_audit(
                 &params,
+                &disp_name,
                 status_code,
                 "AuthFailure",
+                true,
                 ttfb,
                 start.elapsed(),
                 AuditTokens { prompt: 0, cached: 0 },
@@ -512,8 +551,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
             record_attempt_audit(
                 &params,
+                &disp_name,
                 status_code,
                 "LocationError",
+                true,
                 ttfb,
                 start.elapsed(),
                 AuditTokens { prompt: 0, cached: 0 },
@@ -544,8 +585,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
             record_attempt_audit(
                 &params,
+                &disp_name,
                 status_code,
                 "UpstreamUnavailable",
+                true,
                 ttfb,
                 start.elapsed(),
                 AuditTokens { prompt: 0, cached: 0 },
@@ -562,8 +605,10 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         // Ordinary upstream error (400, 404, 500, etc.): Forward directly, DO NOT REPLAY!
         record_attempt_audit(
             &params,
+            &disp_name,
             status_code,
             "NonRetryableError",
+            false,
             ttfb,
             start.elapsed(),
             AuditTokens { prompt: 0, cached: 0 },
@@ -686,8 +731,11 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 record_no_replay_prevented();
                 write_attempt_audit(
                     &params,
+                    &disp_name,
                     StatusCode::BAD_GATEWAY.as_u16(),
                     "UnexpectedEof",
+                    false,
+                    false,
                     ttfb,
                     start.elapsed(),
                     AuditTokens { prompt: 0, cached: 0 },
@@ -731,8 +779,11 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             };
             write_attempt_audit(
                 &params,
+                &disp_name,
                 err_status.as_u16(),
                 "ReadError",
+                false,
+                false,
                 ttfb,
                 start.elapsed(),
                 AuditTokens { prompt: 0, cached: 0 },
@@ -769,8 +820,11 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
     };
     write_attempt_audit(
         &params,
+        &disp_name,
         status_code,
         "",
+        false,
+        params.is_generation,
         ttfb,
         start.elapsed(),
         AuditTokens {

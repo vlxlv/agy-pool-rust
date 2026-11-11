@@ -112,9 +112,10 @@ async fn send_request(
         let _ = conn.await;
     });
 
-    let mut req_builder = hyper::Request::builder()
-        .method(method)
-        .uri(format!("http://{addr}{path_and_query}"));
+    let mut req_builder = hyper::Request::builder().method(method).uri(path_and_query);
+    if !headers.contains_key(hyper::header::HOST) {
+        req_builder = req_builder.header(hyper::header::HOST, addr.to_string());
+    }
     if !headers.contains_key(hyper::header::CONNECTION) {
         req_builder = req_builder.header(hyper::header::CONNECTION, "close");
     }
@@ -171,19 +172,20 @@ async fn test_dashboard_html_and_rest_routes() {
     let latency = json.get("latency").expect("latency object");
     assert!(latency.get("ttfb_p50_ms").is_some());
 
-    // 3. GET /api/v1/accounts returns 200 OK JSON with email_masked and omits email
+    // 3. GET /api/v1/accounts returns 200 OK JSON with email_masked, omits email, and reports show_email_allowed=false
     let (status, headers, body) =
         send_request(addr, Method::GET, "/api/v1/accounts", HeaderMap::new(), Bytes::new()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json from /api/v1/accounts");
+    assert_eq!(json.get("show_email_allowed").and_then(|v| v.as_bool()), Some(false));
     let accounts = json.get("accounts").and_then(|a| a.as_array()).expect("accounts array");
     assert!(!accounts.is_empty());
     let first = &accounts[0];
     assert!(first.get("email_masked").is_some());
     assert!(first.get("email").is_none());
 
-    // 4. GET /api/v1/accounts?show_email=true includes full email
+    // 4. GET /api/v1/accounts?show_email=true still omits email while server config disables it
     let (status, _, body) = send_request(
         addr,
         Method::GET,
@@ -193,11 +195,45 @@ async fn test_dashboard_html_and_rest_routes() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json with show_email=true");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json with show_email=true gated");
+    assert_eq!(json.get("show_email_allowed").and_then(|v| v.as_bool()), Some(false));
     let accounts = json.get("accounts").and_then(|a| a.as_array()).expect("accounts array");
-    assert!(!accounts.is_empty());
-    let first = &accounts[0];
-    assert_eq!(first.get("email").and_then(|e| e.as_str()), Some("alice@example.com"));
+    assert!(accounts[0].get("email").is_none());
+
+    // 4b. When pool enables show_email=Some(true), ?show_email=true reveals full email while ?show_email=false masks it
+    let mut pool = agy_pool::storage::load_pool().unwrap();
+    pool.show_email = Some(true);
+    agy_pool::storage::save_pool(&pool).unwrap();
+
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/accounts?show_email=false",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json with show_email=false");
+    assert_eq!(json.get("show_email_allowed").and_then(|v| v.as_bool()), Some(true));
+    assert!(json["accounts"][0].get("email").is_none());
+
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/accounts?show_email=true",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json with show_email=true allowed");
+    assert_eq!(json.get("show_email_allowed").and_then(|v| v.as_bool()), Some(true));
+    let accounts = json.get("accounts").and_then(|a| a.as_array()).expect("accounts array");
+    assert_eq!(
+        accounts[0].get("email").and_then(|e| e.as_str()),
+        Some("alice@example.com")
+    );
 
     // 5. GET /api/v1/forecast returns 200 OK JSON with is_sustainable, runway_text
     let (status, headers, body) =
@@ -264,6 +300,78 @@ async fn test_proxy_routes_remain_unaffected() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 
+    // 4. Non-GET / falls through to proxy dispatch rather than returning 405 Method Not Allowed
+    let (status, _, _) = send_request(addr, Method::POST, "/", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_host_and_origin_validation() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    // 1. Disallowed DNS-rebinding Host is rejected with 403 Forbidden
+    for path in ["/", "/dashboard", "/api/v1/accounts", "/api/v1/events"] {
+        let mut h = HeaderMap::new();
+        h.insert(hyper::header::HOST, "evil.com:8899".parse().unwrap());
+        let (status, _, _) = send_request(addr, Method::GET, path, h, Bytes::new()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "evil host must be blocked on {path}");
+    }
+
+    // 2. Allowed Hosts: localhost, IPv6 loopback, Tailscale IPv4 & IPv6, and Tailscale MagicDNS
+    for allowed_host in [
+        "localhost:8899",
+        "[::1]:8899",
+        "100.64.1.2:8899",
+        "[fd7a:115c:a1e0::1]:8899",
+        "devbox.tail1234.ts.net:8899",
+    ] {
+        let mut h = HeaderMap::new();
+        h.insert(hyper::header::HOST, allowed_host.parse().unwrap());
+        let (status, _, _) = send_request(addr, Method::GET, "/api/v1/status", h, Bytes::new()).await;
+        assert_eq!(status, StatusCode::OK, "host {allowed_host} should be allowed");
+    }
+
+    // 3. Matching Origin is allowed; mismatched Origin, port, or Origin: null is rejected
+    let mut same_origin = HeaderMap::new();
+    same_origin.insert(hyper::header::HOST, "100.64.1.2:8899".parse().unwrap());
+    same_origin.insert(hyper::header::ORIGIN, "http://100.64.1.2:8899".parse().unwrap());
+    let (status, _, _) = send_request(addr, Method::GET, "/api/v1/accounts", same_origin, Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    for bad_origin in ["http://evil.com", "null", "http://100.64.1.2:9999"] {
+        let mut h = HeaderMap::new();
+        h.insert(hyper::header::HOST, "100.64.1.2:8899".parse().unwrap());
+        h.insert(hyper::header::ORIGIN, bad_origin.parse().unwrap());
+        let (status, _, _) = send_request(addr, Method::GET, "/api/v1/accounts", h, Bytes::new()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "origin {bad_origin} must be rejected");
+    }
+
+    // 4. Sec-Fetch-Site: cross-site is rejected on API routes and non-document fetches, allowed only on top-level document navigation
+    let mut cross_api = HeaderMap::new();
+    cross_api.insert("sec-fetch-site", "cross-site".parse().unwrap());
+    let (status, _, _) = send_request(addr, Method::GET, "/api/v1/accounts", cross_api, Bytes::new()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let mut cross_iframe = HeaderMap::new();
+    cross_iframe.insert("sec-fetch-site", "cross-site".parse().unwrap());
+    cross_iframe.insert("sec-fetch-mode", "navigate".parse().unwrap());
+    cross_iframe.insert("sec-fetch-dest", "iframe".parse().unwrap());
+    let (status, _, _) = send_request(addr, Method::GET, "/", cross_iframe, Bytes::new()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let mut cross_doc = HeaderMap::new();
+    cross_doc.insert("sec-fetch-site", "cross-site".parse().unwrap());
+    cross_doc.insert("sec-fetch-mode", "navigate".parse().unwrap());
+    cross_doc.insert("sec-fetch-dest", "document".parse().unwrap());
+    let (status, _, _) = send_request(addr, Method::GET, "/", cross_doc, Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
@@ -276,16 +384,20 @@ async fn test_sse_events_replay_and_live_stream() {
     agy_pool::dashboard::telemetry::reset_for_test();
 
     // Call dashboard::telemetry::record_attempt(...) before connecting
-    agy_pool::dashboard::telemetry::record_attempt(agy_pool::dashboard::telemetry::DashboardAuditEvent {
-        timestamp: jiff::Timestamp::now().to_string(),
-        model: "gemini-2.5-flash".to_string(),
-        account: "Alice".to_string(),
-        ttfb_ms: 100,
-        total_ms: 200,
-        tokens: 50,
-        status: 200,
-        failover: false,
-    });
+    agy_pool::dashboard::telemetry::record_attempt(
+        agy_pool::dashboard::telemetry::DashboardAuditEvent {
+            id: 0,
+            timestamp: jiff::Timestamp::now(),
+            model: "gemini-2.5-flash".to_string(),
+            account: "Alice".to_string(),
+            ttfb_ms: 100,
+            total_ms: 200,
+            tokens: 50,
+            status: 200,
+            failover: false,
+        },
+        true,
+    );
 
     let (addr, server_task, shutdown_tx) = start_server().await;
 
@@ -299,7 +411,8 @@ async fn test_sse_events_replay_and_live_stream() {
 
     let req = hyper::Request::builder()
         .method(Method::GET)
-        .uri(format!("http://{addr}/api/v1/events"))
+        .uri("/api/v1/events")
+        .header(hyper::header::HOST, addr.to_string())
         .header(hyper::header::CONNECTION, "keep-alive")
         .body(http_body_util::Empty::<Bytes>::new())
         .unwrap();
@@ -333,20 +446,24 @@ async fn test_sse_events_replay_and_live_stream() {
     .await
     .expect("timed out waiting for replay audit event");
 
-    assert!(replay_event.contains("event: audit\ndata: "));
+    assert!(replay_event.contains("id: 1\nevent: audit\ndata: "));
     assert!(replay_event.contains("gemini-2.5-flash"));
 
     // Call dashboard::telemetry::record_attempt(...) again while stream is open
-    agy_pool::dashboard::telemetry::record_attempt(agy_pool::dashboard::telemetry::DashboardAuditEvent {
-        timestamp: jiff::Timestamp::now().to_string(),
-        model: "gemini-2.5-pro".to_string(),
-        account: "Bob".to_string(),
-        ttfb_ms: 150,
-        total_ms: 350,
-        tokens: 80,
-        status: 200,
-        failover: true,
-    });
+    agy_pool::dashboard::telemetry::record_attempt(
+        agy_pool::dashboard::telemetry::DashboardAuditEvent {
+            id: 0,
+            timestamp: jiff::Timestamp::now(),
+            model: "gemini-2.5-pro".to_string(),
+            account: "Bob".to_string(),
+            ttfb_ms: 150,
+            total_ms: 350,
+            tokens: 80,
+            status: 200,
+            failover: true,
+        },
+        false,
+    );
 
     // Assert the new live event arrives over the same SSE stream
     let live_event = tokio::time::timeout(Duration::from_secs(3), async {
@@ -365,7 +482,7 @@ async fn test_sse_events_replay_and_live_stream() {
     .await
     .expect("timed out waiting for live audit event");
 
-    assert!(live_event.contains("event: audit\ndata: "));
+    assert!(live_event.contains("id: 2\nevent: audit\ndata: "));
     assert!(live_event.contains("gemini-2.5-pro"));
 
     // Drop client stream/sender and verify clean teardown without panic
