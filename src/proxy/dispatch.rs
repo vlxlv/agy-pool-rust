@@ -85,6 +85,18 @@ fn write_attempt_audit(
     total: Duration,
     tokens: AuditTokens,
 ) {
+    let disp_name = crate::accounts::display_account_name(Some(params.acc), Some(false));
+    crate::dashboard::telemetry::record_attempt(crate::dashboard::telemetry::DashboardAuditEvent {
+        timestamp: jiff::Timestamp::now().to_string(),
+        model: params.model.to_string(),
+        account: disp_name.clone(),
+        ttfb_ms: ttfb.as_millis() as u64,
+        total_ms: total.as_millis() as u64,
+        tokens: tokens.prompt.max(0),
+        status: status_code,
+        failover: !reason.is_empty(),
+    });
+
     if crate::observability::is_audit_worker_active() {
         let quota_before = params
             .frozen_event
@@ -107,7 +119,7 @@ fn write_attempt_audit(
             strategy: params.strategy.to_string(),
             attempt: params.attempt,
             account_id: params.acc.id.clone(),
-            account_name: crate::accounts::display_account_name(Some(params.acc), Some(false)),
+            account_name: disp_name,
             status_code,
             ttfb_ms: ttfb.as_millis() as u64,
             total_ms: total.as_millis() as u64,
