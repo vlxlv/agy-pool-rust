@@ -1012,7 +1012,8 @@
         try {
           const ev = JSON.parse(e.data);
           const isDup = eventList.some(
-            (item) => (ev.id && item.id === ev.id) || (item.id === ev.id && item.timestamp === ev.timestamp && item.account === ev.account && item.model === ev.model)
+            (item) => (ev.id && item.id === ev.id && item.timestamp === ev.timestamp)
+              || (!ev.id && item.timestamp === ev.timestamp && item.account === ev.account && item.model === ev.model)
           );
           if (isDup) {
             return;
