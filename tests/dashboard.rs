@@ -315,20 +315,33 @@ async fn test_host_and_origin_validation() {
     setup_sample_pool();
     let (addr, server_task, shutdown_tx) = start_server().await;
 
-    // 1. Disallowed DNS-rebinding Host is rejected with 403 Forbidden
+    // 1. Disallowed DNS-rebinding & malformed Hosts are rejected with 403 Forbidden
     for path in ["/", "/dashboard", "/api/v1/accounts", "/api/v1/events"] {
-        let mut h = HeaderMap::new();
-        h.insert(hyper::header::HOST, "evil.com:8899".parse().unwrap());
-        let (status, _, _) = send_request(addr, Method::GET, path, h, Bytes::new()).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "evil host must be blocked on {path}");
+        for bad_host in [
+            "evil.com:8899",
+            "localhost.evil.com:8899",
+            ".local:8899",
+            "evil..ts.net:8899",
+        ] {
+            let mut h = HeaderMap::new();
+            h.insert(hyper::header::HOST, bad_host.parse().unwrap());
+            let (status, _, _) = send_request(addr, Method::GET, path, h, Bytes::new()).await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "host {bad_host} must be blocked on {path}"
+            );
+        }
     }
 
-    // 2. Allowed Hosts: localhost, IPv6 loopback, Tailscale IPv4 & IPv6, and Tailscale MagicDNS
+    // 2. Allowed Hosts: localhost, IPv6 loopback, Tailscale IPv4 & IPv6, Tailscale MagicDNS (short + FQDN), and mDNS .local
     for allowed_host in [
         "localhost:8899",
         "[::1]:8899",
         "100.64.1.2:8899",
         "[fd7a:115c:a1e0::1]:8899",
+        "myhost:8899",
+        "myhost.local:8899",
         "devbox.tail1234.ts.net:8899",
     ] {
         let mut h = HeaderMap::new();
@@ -484,6 +497,65 @@ async fn test_sse_events_replay_and_live_stream() {
 
     assert!(live_event.contains("id: 2\nevent: audit\ndata: "));
     assert!(live_event.contains("gemini-2.5-pro"));
+
+    // Fire 16 concurrent live events; out-of-order broadcast arrivals must NOT drop lower IDs
+    let mut handles = Vec::new();
+    for i in 0..16 {
+        handles.push(tokio::spawn(async move {
+            agy_pool::dashboard::telemetry::record_attempt(
+                agy_pool::dashboard::telemetry::DashboardAuditEvent {
+                    id: 0,
+                    timestamp: jiff::Timestamp::now(),
+                    model: format!("concurrent-model-{i}"),
+                    account: "ConcAcc".to_string(),
+                    ttfb_ms: 10,
+                    total_ms: 20,
+                    tokens: 1,
+                    status: 200,
+                    failover: false,
+                },
+                false,
+            );
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut buf = String::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        while seen_ids.len() < 16 {
+            let Some(frame_res) = body.frame().await else {
+                break;
+            };
+            if let Ok(frame) = frame_res
+                && let Some(chunk) = frame.data_ref()
+            {
+                buf.push_str(&String::from_utf8_lossy(chunk));
+                while let Some(end_idx) = buf.find("\n\n") {
+                    let block = buf[..end_idx].to_string();
+                    buf.drain(..end_idx + 2);
+                    if block.contains("event: audit") && block.contains("concurrent-model-") {
+                        for line in block.lines() {
+                            if let Some(id_str) = line.strip_prefix("id: ")
+                                && let Ok(id) = id_str.trim().parse::<u64>()
+                            {
+                                seen_ids.insert(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await;
+    assert_eq!(
+        seen_ids.len(),
+        16,
+        "expected all 16 concurrent SSE live events without drops, got {:?}",
+        seen_ids
+    );
 
     // Drop client stream/sender and verify clean teardown without panic
     drop(body);

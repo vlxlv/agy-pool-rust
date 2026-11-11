@@ -119,13 +119,15 @@ fn is_allowed_hostname(host: &str) -> bool {
         return true;
     }
     let normalized = host.trim_end_matches('.').to_ascii_lowercase();
-    if normalized.is_empty() {
+    if normalized.is_empty() || normalized.split('.').any(|label| label.is_empty()) {
         return false;
     }
-    if normalized == "localhost" || normalized.ends_with(".localhost") {
+    // Single-label hostnames cover Tailscale MagicDNS short names (e.g. `http://myhost:8899`).
+    // Assumes no untrusted DNS search suffix on browsers opening the dashboard.
+    if !normalized.contains('.') {
         return true;
     }
-    if normalized.ends_with(".ts.net") && normalized.len() > ".ts.net".len() {
+    if normalized.ends_with(".localhost") || normalized.ends_with(".local") || normalized.ends_with(".ts.net") {
         return true;
     }
     let (listen, _) = dto::get_runtime_meta();
@@ -318,9 +320,8 @@ pub async fn try_handle_request(req: &Request<hyper::body::Incoming>) -> Option<
         let (recent, mut audit_rx) = telemetry::subscribe_with_replay(20);
 
         tokio::spawn(async move {
-            let mut last_replayed_id = 0u64;
+            let last_replayed_id = recent.iter().map(|e| e.id).max().unwrap_or(0);
             for ev in recent {
-                last_replayed_id = last_replayed_id.max(ev.id);
                 if let Ok(data) = serde_json::to_string(&ev) {
                     let msg = format!("id: {}\nevent: audit\ndata: {data}\n\n", ev.id);
                     if tx.send(Bytes::from(msg)).await.is_err() {
@@ -345,7 +346,6 @@ pub async fn try_handle_request(req: &Request<hyper::body::Incoming>) -> Option<
                                 if ev.id <= last_replayed_id {
                                     continue;
                                 }
-                                last_replayed_id = ev.id;
                                 if let Ok(data) = serde_json::to_string(&ev) {
                                     let msg = format!("id: {}\nevent: audit\ndata: {data}\n\n", ev.id);
                                     if tx.send(Bytes::from(msg)).await.is_err() {
