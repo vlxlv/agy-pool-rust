@@ -1,3 +1,5 @@
 /target
 # shortcut: some test creates an empty state.db in the cwd; ignore it until that test is isolated
 /state.db*
+/.superpowers/
+

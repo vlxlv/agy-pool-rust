@@ -420,6 +420,8 @@
     .badge-active { background-color: var(--green-dim); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
     .badge-reserve { background-color: rgba(56, 189, 248, 0.12); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.25); }
     .badge-cooling { background-color: var(--amber-dim); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-restricted { background-color: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-depleted { background-color: rgba(244, 63, 94, 0.15); color: #f87171; border: 1px solid rgba(244, 63, 94, 0.3); }
     .badge-disabled { background-color: var(--red-dim); color: #f87171; border: 1px solid rgba(244, 63, 94, 0.3); }
 
     .status-pill {
@@ -703,11 +705,17 @@
       return '';
     }
 
+    function sanitizeId(id) {
+      return String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    }
+
     function getBadgeClass(state) {
       const s = (state || '').toLowerCase();
       if (s === 'active') return 'badge-active';
       if (s === 'cooling') return 'badge-cooling';
       if (s === 'reserve') return 'badge-reserve';
+      if (s === 'restricted') return 'badge-restricted';
+      if (s === 'depleted') return 'badge-depleted';
       if (s === 'disabled') return 'badge-disabled';
       return 'badge-reserve';
     }
@@ -724,7 +732,8 @@
         document.getElementById('version-pill').textContent = `v${statusData.version}`;
         const upFormatted = formatDuration(statusData.uptime_secs);
         document.getElementById('uptime-pill').textContent = `up ${upFormatted}`;
-        document.getElementById('footer-uptime').textContent = `Uptime: ${upFormatted} | Total requests: ${statusData.total_requests.toLocaleString()}`;
+        const totalReq = (statusData.total_requests || 0).toLocaleString();
+        document.getElementById('footer-uptime').textContent = `Uptime: ${upFormatted} | Total requests: ${totalReq}`;
 
         // Update cards
         document.getElementById('metric-inflight').textContent = statusData.in_flight_requests;
@@ -803,6 +812,7 @@
       let html = '';
 
       for (const acc of accountsData) {
+        const safeId = sanitizeId(acc.id);
         const emailDisplay = showEmail && acc.email ? acc.email : (acc.email_masked || '—');
         const badgeClass = getBadgeClass(acc.scheduler_state);
 
@@ -822,7 +832,7 @@
               </div>
             </div>`;
           const remainingSec = Math.max(0, (acc.five_hour.reset_at_unix || 0) - nowSec);
-          fiveHourReset = `<span id="reset-5h-${acc.id}" class="num">${formatDuration(remainingSec)}</span>`;
+          fiveHourReset = `<span id="reset-5h-${safeId}" class="num">${formatDuration(remainingSec)}</span>`;
         }
 
         // Weekly quota window
@@ -835,7 +845,7 @@
             <div class="quota-cell">
               <div class="quota-info">
                 <span class="num">${pct.toFixed(1)}%</span>
-                <span class="num text-dim" id="reset-wk-${acc.id}">${formatDuration(remainingSec)}</span>
+                <span class="num text-dim" id="reset-wk-${safeId}">${formatDuration(remainingSec)}</span>
               </div>
               <div class="progress-bar-bg">
                 <div class="progress-bar-fill ${colorClass}" style="width: ${pct}%"></div>
@@ -874,15 +884,16 @@
       const nowSec = Math.floor(Date.now() / 1000);
 
       for (const acc of accountsData) {
+        const safeId = sanitizeId(acc.id);
         if (acc.five_hour && acc.five_hour.reset_at_unix) {
-          const elem = document.getElementById(`reset-5h-${acc.id}`);
+          const elem = document.getElementById(`reset-5h-${safeId}`);
           if (elem) {
             const diff = Math.max(0, acc.five_hour.reset_at_unix - nowSec);
             elem.textContent = formatDuration(diff);
           }
         }
         if (acc.weekly && acc.weekly.reset_at_unix) {
-          const elem = document.getElementById(`reset-wk-${acc.id}`);
+          const elem = document.getElementById(`reset-wk-${safeId}`);
           if (elem) {
             const diff = Math.max(0, acc.weekly.reset_at_unix - nowSec);
             elem.textContent = formatDuration(diff);
@@ -895,7 +906,8 @@
         statusData.uptime_secs += 1;
         const upStr = formatDuration(statusData.uptime_secs);
         document.getElementById('uptime-pill').textContent = `up ${upStr}`;
-        document.getElementById('footer-uptime').textContent = `Uptime: ${upStr} | Total requests: ${statusData.total_requests.toLocaleString()}`;
+        const totalReq = (statusData.total_requests || 0).toLocaleString();
+        document.getElementById('footer-uptime').textContent = `Uptime: ${upStr} | Total requests: ${totalReq}`;
       }
     }
 
@@ -956,11 +968,11 @@
       sseSource.addEventListener('audit', (e) => {
         try {
           const ev = JSON.parse(e.data);
+          eventList.unshift(ev);
+          if (eventList.length > 20) {
+            eventList.pop();
+          }
           if (!streamPaused) {
-            eventList.unshift(ev);
-            if (eventList.length > 20) {
-              eventList.pop();
-            }
             renderStream();
           }
         } catch (err) {

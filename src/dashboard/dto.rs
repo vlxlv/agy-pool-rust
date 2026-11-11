@@ -1,5 +1,5 @@
-use std::sync::{LazyLock, RwLock};
 use serde::{Deserialize, Serialize};
+use std::sync::{LazyLock, RwLock};
 
 use crate::dashboard::telemetry::LatencyStatsDto;
 use crate::storage::Pool;
@@ -64,8 +64,7 @@ pub struct SseStatsEvent {
     pub rss_mb: f64,
 }
 
-static RUNTIME_META: LazyLock<RwLock<Option<(String, jiff::Timestamp)>>> =
-    LazyLock::new(|| RwLock::new(None));
+static RUNTIME_META: LazyLock<RwLock<Option<(String, jiff::Timestamp)>>> = LazyLock::new(|| RwLock::new(None));
 
 pub fn set_runtime_meta(listen: String, started_at: jiff::Timestamp) {
     let mut lock = RUNTIME_META.write().unwrap_or_else(|e| e.into_inner());
@@ -130,8 +129,7 @@ pub fn build_status_response() -> StatusResponse {
     let snap = crate::observability::snapshot();
     let total_requests = snap.generation_requests;
 
-    let (latency, qps) =
-        crate::dashboard::telemetry::latency_and_qps_snapshot(std::time::Instant::now());
+    let (latency, qps) = crate::dashboard::telemetry::latency_and_qps_snapshot(std::time::Instant::now());
 
     StatusResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -209,10 +207,7 @@ pub fn build_accounts_response(pool: &Pool, show_email: bool, now_ts: f64) -> Ac
             }
         });
 
-        let has_model_pause = active_pauses
-            .get(&acc.id)
-            .map(|m| !m.is_empty())
-            .unwrap_or(false);
+        let has_model_pause = active_pauses.get(&acc.id).map(|m| !m.is_empty()).unwrap_or(false);
 
         let scheduler_state = if acc.status == crate::storage::STATUS_DISABLED {
             "disabled".to_string()
@@ -222,9 +217,7 @@ pub fn build_accounts_response(pool: &Pool, show_email: bool, now_ts: f64) -> Ac
             "restricted".to_string()
         } else if cap.is_depleted {
             "depleted".to_string()
-        } else if crate::scheduler::is_reserve_capacity(&cap)
-            || crate::scheduler::over_weekly_pace_capacity(&cap)
-        {
+        } else if crate::scheduler::is_reserve_capacity(&cap) || crate::scheduler::over_weekly_pace_capacity(&cap) {
             "reserve".to_string()
         } else {
             "active".to_string()
@@ -237,11 +230,7 @@ pub fn build_accounts_response(pool: &Pool, show_email: bool, now_ts: f64) -> Ac
         };
 
         let email_masked = mask_email(&acc.email);
-        let email = if show_email {
-            Some(acc.email.clone())
-        } else {
-            None
-        };
+        let email = if show_email { Some(acc.email.clone()) } else { None };
 
         let name = crate::accounts::display_account_name(Some(acc), Some(false));
         let hits = acc.hits();
@@ -262,10 +251,7 @@ pub fn build_accounts_response(pool: &Pool, show_email: bool, now_ts: f64) -> Ac
     }
 
     let total_accounts = accounts.len();
-    let active_accounts = accounts
-        .iter()
-        .filter(|a| a.scheduler_state == "active")
-        .count();
+    let active_accounts = accounts.iter().filter(|a| a.scheduler_state == "active").count();
 
     AccountsResponse {
         accounts,
@@ -310,18 +296,13 @@ pub fn build_sse_stats_event() -> SseStatsEvent {
     let in_flight_map = crate::observability::all_in_flight_generations();
     let in_flight: i64 = in_flight_map.values().sum();
 
-    let (_, qps) =
-        crate::dashboard::telemetry::latency_and_qps_snapshot(std::time::Instant::now());
+    let (_, qps) = crate::dashboard::telemetry::latency_and_qps_snapshot(std::time::Instant::now());
 
     let (_, started_at) = get_runtime_meta();
     let runtime_stats = crate::daemon::runtime::collect_runtime_stats(0, Some(started_at));
     let rss_mb = ((runtime_stats.alloc_bytes as f64 / (1024.0 * 1024.0)) * 10.0).round() / 10.0;
 
-    SseStatsEvent {
-        in_flight,
-        qps,
-        rss_mb,
-    }
+    SseStatsEvent { in_flight, qps, rss_mb }
 }
 
 #[cfg(test)]
@@ -401,13 +382,7 @@ mod tests {
             ..Default::default()
         };
 
-        pool.accounts = vec![
-            acc_uninit,
-            acc_cooling,
-            acc_reserve,
-            acc_disabled,
-            acc_expired_reset,
-        ];
+        pool.accounts = vec![acc_uninit, acc_cooling, acc_reserve, acc_disabled, acc_expired_reset];
 
         let res_no_email = build_accounts_response(&pool, false, now);
         let val_no_email = serde_json::to_value(&res_no_email).expect("serialize res_no_email");
@@ -417,15 +392,12 @@ mod tests {
             .expect("accounts array");
         assert!(accs_no_email[0].get("email").is_none());
         assert_eq!(
-            accs_no_email[0]
-                .get("email_masked")
-                .and_then(|v| v.as_str()),
+            accs_no_email[0].get("email_masked").and_then(|v| v.as_str()),
             Some("a***e@example.com")
         );
 
         let res_with_email = build_accounts_response(&pool, true, now);
-        let val_with_email =
-            serde_json::to_value(&res_with_email).expect("serialize res_with_email");
+        let val_with_email = serde_json::to_value(&res_with_email).expect("serialize res_with_email");
         let accs_with_email = val_with_email
             .get("accounts")
             .and_then(|v| v.as_array())
@@ -435,14 +407,8 @@ mod tests {
             Some("alice@example.com")
         );
 
-        assert_eq!(
-            accs_no_email[0].get("five_hour"),
-            Some(&serde_json::Value::Null)
-        );
-        assert_eq!(
-            accs_no_email[0].get("weekly"),
-            Some(&serde_json::Value::Null)
-        );
+        assert_eq!(accs_no_email[0].get("five_hour"), Some(&serde_json::Value::Null));
+        assert_eq!(accs_no_email[0].get("weekly"), Some(&serde_json::Value::Null));
 
         let acc5_json = &accs_no_email[4];
         let reset_in_secs = acc5_json

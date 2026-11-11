@@ -10,7 +10,7 @@ use http_body_util::BodyExt;
 use hyper::body::{Body, Frame};
 use hyper::{Method, Request, Response, StatusCode};
 
-use crate::proxy::body::{full_body, ProxyBody};
+use crate::proxy::body::{ProxyBody, full_body};
 
 pub fn dashboard_html() -> &'static str {
     include_str!("assets/index.html")
@@ -45,10 +45,8 @@ impl Body for SseBody {
 fn method_not_allowed() -> Response<ProxyBody> {
     let mut resp = Response::new(full_body(Bytes::from_static(b"Method Not Allowed\n")));
     *resp.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
-    resp.headers_mut().insert(
-        hyper::header::ALLOW,
-        hyper::header::HeaderValue::from_static("GET"),
-    );
+    resp.headers_mut()
+        .insert(hyper::header::ALLOW, hyper::header::HeaderValue::from_static("GET"));
     resp.headers_mut().insert(
         hyper::header::CONTENT_TYPE,
         hyper::header::HeaderValue::from_static("text/plain; charset=utf-8"),
@@ -103,9 +101,13 @@ pub fn try_handle_request(req: &Request<hyper::body::Incoming>) -> Option<Respon
     }
 
     if is_accounts {
-        let show_email = req.uri().query().map(|q| {
-            url::form_urlencoded::parse(q.as_bytes()).any(|(k, v)| k == "show_email" && (v == "true" || v == "1"))
-        }).unwrap_or(false);
+        let show_email = req
+            .uri()
+            .query()
+            .map(|q| {
+                url::form_urlencoded::parse(q.as_bytes()).any(|(k, v)| k == "show_email" && (v == "true" || v == "1"))
+            })
+            .unwrap_or(false);
         let pool = crate::storage::load_pool().unwrap_or_default();
         let now_ts = jiff::Timestamp::now().as_second() as f64;
         let accounts = dto::build_accounts_response(&pool, show_email, now_ts);
