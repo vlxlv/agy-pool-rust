@@ -864,6 +864,10 @@ impl Handler {
     }
 
     pub async fn handle_proxy(&self, req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
+        if let Some(resp) = crate::dashboard::try_handle_request(&req) {
+            return resp;
+        }
+
         if req.method() == Method::GET {
             let path = req.uri().path();
             if path == "/metrics" || path == "/metrics/" {
