@@ -621,6 +621,28 @@ async fn test_embedded_spa_asset_constraints() {
     // Assert body includes the email visibility toggle control (show_email)
     assert!(body_str.contains("show_email"), "missing show_email toggle control");
 
+    // Assert body includes system/manual theme switching support
+    assert!(body_str.contains("theme-switcher"), "missing theme-switcher control");
+    assert!(
+        body_str.contains("prefers-color-scheme: light"),
+        "missing prefers-color-scheme: light detection"
+    );
+    assert!(
+        body_str.contains(r#"data-theme="light""#),
+        "missing light theme CSS override"
+    );
+    assert!(body_str.contains("agy_theme"), "missing agy_theme persistence key");
+    // The theme must be applied in <head>, before the body paints, or light-mode users see a dark flash.
+    let bootstrap = body_str
+        .find("window.__applyAgyTheme(saved)")
+        .expect("missing theme bootstrap");
+    let head_end = body_str.find("</head>").expect("missing </head>");
+    assert!(bootstrap < head_end, "theme bootstrap must run inside <head>");
+    // Blocked storage (privacy mode, sandboxed iframe) throws; one unguarded access halts the whole script.
+    for line in body_str.lines().filter(|l| l.contains("localStorage.")) {
+        assert!(line.contains("try {"), "unguarded localStorage access: {}", line.trim());
+    }
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }

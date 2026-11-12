@@ -3,30 +3,109 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
   <title>agy-pool dashboard</title>
+  <script>
+    (function () {
+      const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+      window.__applyAgyTheme = function (mode) {
+        const normalized = mode === 'light' || mode === 'dark' ? mode : 'system';
+        const effective = normalized === 'system' ? (mq && mq.matches ? 'light' : 'dark') : normalized;
+        document.documentElement.dataset.theme = effective;
+        return { mode: normalized, effective };
+      };
+      let saved = 'system';
+      try { saved = localStorage.getItem('agy_theme') || 'system'; } catch (_) {}
+      window.__applyAgyTheme(saved);
+      window.__agyThemeSaved = saved;
+      window.__agyThemeMedia = mq;
+    })();
+  </script>
   <style>
     :root {
+      color-scheme: dark;
       --bg: #0b0f19;
+      --header-bg: #0f172a;
       --card-bg: #111827;
-      --card-hover: #162032;
       --border: #1f293d;
       --border-subtle: #162032;
+      --border-hover: #2b3952;
       --text-main: #f1f5f9;
       --text-muted: #8fa0b8;
       --text-dim: #5c6b84;
       --accent: #38bdf8;
       --accent-dim: rgba(56, 189, 248, 0.15);
+      --accent-soft: rgba(56, 189, 248, 0.12);
+      --accent-text: #7dd3fc;
+      --accent-border: rgba(56, 189, 248, 0.25);
+      --accent-contrast: #0b0f19;
       --green: #10b981;
       --green-dim: rgba(16, 185, 129, 0.15);
+      --green-text: #34d399;
+      --green-border: rgba(16, 185, 129, 0.3);
       --amber: #f59e0b;
       --amber-dim: rgba(245, 158, 11, 0.15);
+      --amber-text: #fbbf24;
+      --amber-border: rgba(245, 158, 11, 0.3);
       --red: #f43f5e;
       --red-dim: rgba(244, 63, 94, 0.15);
-      --purple: #a855f7;
+      --red-text: #f87171;
+      --red-border: rgba(244, 63, 94, 0.3);
       --purple-dim: rgba(168, 85, 247, 0.15);
-      --blue: #3b82f6;
+      --purple-text: #c084fc;
+      --purple-border: rgba(168, 85, 247, 0.3);
+      --surface-subtle: rgba(255, 255, 255, 0.03);
+      --track-bg: rgba(255, 255, 255, 0.06);
+      --section-header-bg: rgba(255, 255, 255, 0.015);
+      --btn-bg: rgba(255, 255, 255, 0.05);
+      --btn-hover-bg: rgba(255, 255, 255, 0.1);
+      --btn-hover-border: #334155;
+      --th-bg: rgba(15, 23, 42, 0.4);
+      --row-hover: rgba(255, 255, 255, 0.02);
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f8fafc;
+      --header-bg: #ffffff;
+      --card-bg: #ffffff;
+      --border: #e2e8f0;
+      --border-subtle: #e2e8f0;
+      --border-hover: #cbd5e1;
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --text-dim: #64748b;
+      --accent: #0284c7;
+      --accent-dim: rgba(2, 132, 199, 0.12);
+      --accent-soft: rgba(2, 132, 199, 0.1);
+      --accent-text: #0369a1;
+      --accent-border: rgba(2, 132, 199, 0.25);
+      --accent-contrast: #ffffff;
+      --green: #059669;
+      --green-dim: rgba(5, 150, 105, 0.12);
+      --green-text: #047857;
+      --green-border: rgba(5, 150, 105, 0.28);
+      --amber: #d97706;
+      --amber-dim: rgba(217, 119, 6, 0.12);
+      --amber-text: #b45309;
+      --amber-border: rgba(217, 119, 6, 0.28);
+      --red: #e11d48;
+      --red-dim: rgba(225, 29, 72, 0.1);
+      --red-text: #be123c;
+      --red-border: rgba(225, 29, 72, 0.25);
+      --purple-dim: rgba(147, 51, 234, 0.1);
+      --purple-text: #7e22ce;
+      --purple-border: rgba(147, 51, 234, 0.25);
+      --surface-subtle: rgba(15, 23, 42, 0.03);
+      --track-bg: rgba(15, 23, 42, 0.08);
+      --section-header-bg: #f8fafc;
+      --btn-bg: rgba(15, 23, 42, 0.04);
+      --btn-hover-bg: rgba(15, 23, 42, 0.08);
+      --btn-hover-border: #cbd5e1;
+      --th-bg: #f8fafc;
+      --row-hover: rgba(15, 23, 42, 0.025);
     }
 
     * {
@@ -55,12 +134,14 @@
 
     /* Header Bar */
     header {
-      background-color: #0f172a;
+      background-color: var(--header-bg);
       border-bottom: 1px solid var(--border);
       padding: 10px 20px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
       position: sticky;
       top: 0;
       z-index: 100;
@@ -120,7 +201,7 @@
       font-size: 11px;
       font-weight: 500;
       border: 1px solid var(--border);
-      background-color: rgba(255, 255, 255, 0.03);
+      background-color: var(--surface-subtle);
       color: var(--text-muted);
     }
 
@@ -133,6 +214,46 @@
       display: flex;
       align-items: center;
       gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .theme-switcher {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      background-color: var(--surface-subtle);
+    }
+
+    .theme-btn {
+      appearance: none;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-family: var(--font-sans);
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 9999px;
+      cursor: pointer;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+
+    .theme-btn:hover {
+      color: var(--text-main);
+    }
+
+    .theme-btn.active {
+      background-color: var(--accent-dim);
+      color: var(--accent-text);
+    }
+
+    .theme-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }
 
     .toggle-label {
@@ -166,7 +287,7 @@
 
     .toggle-label input[type="checkbox"]:checked::before {
       content: "✓";
-      color: #0b0f19;
+      color: var(--accent-contrast);
       font-size: 11px;
       font-weight: 900;
     }
@@ -175,7 +296,7 @@
     #reconnect-banner {
       background-color: var(--amber-dim);
       border-bottom: 1px solid var(--amber);
-      color: #fbbf24;
+      color: var(--amber-text);
       padding: 6px 20px;
       font-size: 12px;
       display: none;
@@ -221,7 +342,7 @@
     }
 
     .card:hover {
-      border-color: #2b3952;
+      border-color: var(--border-hover);
     }
 
     .card-title {
@@ -263,7 +384,7 @@
     /* Progress bar */
     .progress-bar-bg {
       height: 6px;
-      background-color: rgba(255, 255, 255, 0.06);
+      background-color: var(--track-bg);
       border-radius: 3px;
       overflow: hidden;
       margin-top: 8px;
@@ -299,7 +420,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background-color: rgba(255, 255, 255, 0.015);
+      background-color: var(--section-header-bg);
     }
 
     .section-title {
@@ -318,7 +439,7 @@
     }
 
     button.btn {
-      background-color: rgba(255, 255, 255, 0.05);
+      background-color: var(--btn-bg);
       border: 1px solid var(--border);
       color: var(--text-muted);
       border-radius: 4px;
@@ -330,9 +451,9 @@
     }
 
     button.btn:hover {
-      background-color: rgba(255, 255, 255, 0.1);
+      background-color: var(--btn-hover-bg);
       color: var(--text-main);
-      border-color: #334155;
+      border-color: var(--btn-hover-border);
     }
 
     /* Tables */
@@ -356,7 +477,7 @@
       text-transform: uppercase;
       letter-spacing: 0.04em;
       border-bottom: 1px solid var(--border);
-      background-color: rgba(15, 23, 42, 0.4);
+      background-color: var(--th-bg);
       white-space: nowrap;
     }
 
@@ -372,7 +493,7 @@
     }
 
     tr:hover td {
-      background-color: rgba(255, 255, 255, 0.02);
+      background-color: var(--row-hover);
     }
 
     /* Account column */
@@ -417,12 +538,12 @@
       letter-spacing: 0.03em;
     }
 
-    .badge-active { background-color: var(--green-dim); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-reserve { background-color: rgba(56, 189, 248, 0.12); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.25); }
-    .badge-cooling { background-color: var(--amber-dim); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .badge-restricted { background-color: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .badge-depleted { background-color: rgba(244, 63, 94, 0.15); color: #f87171; border: 1px solid rgba(244, 63, 94, 0.3); }
-    .badge-disabled { background-color: var(--red-dim); color: #f87171; border: 1px solid rgba(244, 63, 94, 0.3); }
+    .badge-active { background-color: var(--green-dim); color: var(--green-text); border: 1px solid var(--green-border); }
+    .badge-reserve { background-color: var(--accent-soft); color: var(--accent-text); border: 1px solid var(--accent-border); }
+    .badge-cooling { background-color: var(--amber-dim); color: var(--amber-text); border: 1px solid var(--amber-border); }
+    .badge-restricted { background-color: var(--amber-dim); color: var(--amber-text); border: 1px solid var(--amber-border); }
+    .badge-depleted { background-color: var(--red-dim); color: var(--red-text); border: 1px solid var(--red-border); }
+    .badge-disabled { background-color: var(--red-dim); color: var(--red-text); border: 1px solid var(--red-border); }
 
     .status-pill {
       font-family: var(--font-mono);
@@ -432,13 +553,13 @@
       font-weight: 600;
     }
 
-    .status-200 { background: var(--green-dim); color: #34d399; }
-    .status-429 { background: var(--amber-dim); color: #fbbf24; }
-    .status-err { background: var(--red-dim); color: #f87171; }
+    .status-200 { background: var(--green-dim); color: var(--green-text); }
+    .status-429 { background: var(--amber-dim); color: var(--amber-text); }
+    .status-err { background: var(--red-dim); color: var(--red-text); }
     .badge-failover {
       background: var(--purple-dim);
-      color: #c084fc;
-      border: 1px solid rgba(168, 85, 247, 0.3);
+      color: var(--purple-text);
+      border: 1px solid var(--purple-border);
       padding: 1px 5px;
       border-radius: 3px;
       font-size: 10px;
@@ -487,6 +608,11 @@
       <div id="sse-pill" class="pill">
         <span id="sse-dot" class="status-dot"></span>
         <span id="sse-status-text">Connecting...</span>
+      </div>
+      <div id="theme-switcher" class="theme-switcher" role="group" aria-label="Theme mode">
+        <button type="button" class="theme-btn" data-theme-value="system" title="Follow system theme" aria-pressed="true">Auto</button>
+        <button type="button" class="theme-btn" data-theme-value="light" title="Light theme" aria-pressed="false">Light</button>
+        <button type="button" class="theme-btn" data-theme-value="dark" title="Dark theme" aria-pressed="false">Dark</button>
       </div>
       <label class="toggle-label" title="Toggle full email visibility in table">
         <input type="checkbox" id="show_email" name="show_email">
@@ -624,8 +750,10 @@
 
   <script>
     // State
-    let showEmail = localStorage.getItem('agy_show_email') === 'true';
+    let showEmail = false;
+    try { showEmail = localStorage.getItem('agy_show_email') === 'true'; } catch (_) {}
     let showEmailAllowed = false;
+    let themeMode = window.__agyThemeSaved;
     let streamPaused = false;
     let eventList = [];
     let accountsData = [];
@@ -637,6 +765,53 @@
     const showEmailCheckbox = document.getElementById('show_email');
     const showEmailLabel = showEmailCheckbox.closest('label');
     showEmailCheckbox.checked = showEmail;
+
+    const themeSwitcher = document.getElementById('theme-switcher');
+    const themeButtons = Array.from(themeSwitcher.querySelectorAll('.theme-btn'));
+    const themeMedia = window.__agyThemeMedia;
+
+    function syncThemeUI() {
+      const state = window.__applyAgyTheme(themeMode);
+      themeMode = state.mode;
+      for (const btn of themeButtons) {
+        const active = btn.dataset.themeValue === themeMode;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      }
+      const modeLabel = themeMode === 'system'
+        ? `Auto (${state.effective === 'light' ? 'Light' : 'Dark'})`
+        : (themeMode === 'light' ? 'Light' : 'Dark');
+      themeSwitcher.title = `Theme: ${modeLabel}`;
+    }
+
+    syncThemeUI();
+
+    themeSwitcher.addEventListener('click', (e) => {
+      const btn = e.target.closest('.theme-btn');
+      if (!btn) return;
+      themeMode = btn.dataset.themeValue || 'system';
+      try { localStorage.setItem('agy_theme', themeMode); } catch (_) {}
+      syncThemeUI();
+    });
+
+    if (themeMedia) {
+      const onSystemThemeChange = () => {
+        if (themeMode === 'system') syncThemeUI();
+      };
+      if (themeMedia.addEventListener) {
+        themeMedia.addEventListener('change', onSystemThemeChange);
+      } else if (themeMedia.addListener) {
+        themeMedia.addListener(onSystemThemeChange);
+      }
+    }
+
+    window.addEventListener('storage', (e) => {
+      // key is null when another tab clears all storage
+      if (e.key === 'agy_theme' || e.key === null) {
+        themeMode = e.newValue || 'system';
+        syncThemeUI();
+      }
+    });
 
     const sseDot = document.getElementById('sse-dot');
     const sseStatusText = document.getElementById('sse-status-text');
@@ -651,7 +826,7 @@
         return;
       }
       showEmail = e.target.checked;
-      localStorage.setItem('agy_show_email', showEmail);
+      try { localStorage.setItem('agy_show_email', showEmail); } catch (_) {}
       fetchAccounts();
     });
 
