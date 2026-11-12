@@ -754,7 +754,8 @@
 
   <script>
     // State
-    let showEmail = localStorage.getItem('agy_show_email') === 'true';
+    let showEmail = false;
+    try { showEmail = localStorage.getItem('agy_show_email') === 'true'; } catch (_) {}
     let showEmailAllowed = false;
     let themeMode = 'system';
     try { themeMode = localStorage.getItem('agy_theme') || 'system'; } catch (_) {}
@@ -810,7 +811,8 @@
     }
 
     window.addEventListener('storage', (e) => {
-      if (e.key === 'agy_theme') {
+      // key is null when another tab clears all storage
+      if (e.key === 'agy_theme' || e.key === null) {
         themeMode = e.newValue || 'system';
         syncThemeUI();
       }
@@ -829,7 +831,7 @@
         return;
       }
       showEmail = e.target.checked;
-      localStorage.setItem('agy_show_email', showEmail);
+      try { localStorage.setItem('agy_show_email', showEmail); } catch (_) {}
       fetchAccounts();
     });
 

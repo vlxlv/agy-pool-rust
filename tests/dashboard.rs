@@ -632,6 +632,10 @@ async fn test_embedded_spa_asset_constraints() {
         "missing light theme CSS override"
     );
     assert!(body_str.contains("agy_theme"), "missing agy_theme persistence key");
+    // Blocked storage (privacy mode, sandboxed iframe) throws; one unguarded access halts the whole script.
+    for line in body_str.lines().filter(|l| l.contains("localStorage.")) {
+        assert!(line.contains("try {"), "unguarded localStorage access: {}", line.trim());
+    }
 
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
