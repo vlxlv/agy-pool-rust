@@ -5,6 +5,8 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - '.agents/**'
+      - '.claude/**'
       - 'assets/**'
       - '.gitignore'
       - 'LICENSE'
@@ -17,6 +19,8 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+      - '.agents/**'
+      - '.claude/**'
       - 'assets/**'
       - '.gitignore'
       - 'LICENSE'
