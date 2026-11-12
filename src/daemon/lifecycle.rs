@@ -61,6 +61,7 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
     crate::config::assert_safe_write_path(&log_file)?;
 
     if opts.foreground {
+        crate::config::set_static_config(crate::config::load_static_config(ctx.config_path.as_deref()));
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
         let res = rt.block_on(async {
             super::server::run_foreground(super::server::ServerOptions {
@@ -267,6 +268,8 @@ pub fn run_daemon_child(stderr: &mut impl std::io::Write) -> i32 {
         let _ = writeln!(stderr, "daemon child error: {e}");
         return 1;
     }
+    // The proxy reads model_mapping / keep_alive_secs via get_static_config(); honor this instance's -c config.
+    crate::config::set_static_config(crate::config::load_static_config(ctx.config_path.as_deref()));
 
     let pid_file = std::env::var("AGY_TEST_PID_FILE")
         .ok()

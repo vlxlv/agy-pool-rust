@@ -270,3 +270,66 @@ fn test_daemon_child_listen_interface_and_fail_closed() {
     assert!(err.to_string().contains("not found"), "unexpected error: {err}");
     assert!(!bad_ctx.pid_file().exists());
 }
+
+#[test]
+fn test_daemon_child_applies_config_model_mapping() {
+    let rust_bin = env!("CARGO_BIN_EXE_agy-pool");
+    let tmp_dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = tmp_dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let port = get_ephemeral_port();
+    let cfg_file = tmp_dir.path().join("config.json");
+    std::fs::write(
+        &cfg_file,
+        format!(
+            r#"{{"version": 1, "server": {{"listen": "127.0.0.1", "port": {port}}}, "model_mapping": {{"agy-old-model": "agy-new-model"}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let ctx = agy_pool::daemon::resolve_instance_context(Some(&data_dir), Some(&cfg_file), Some(port), None)
+        .expect("resolve_instance_context");
+    let res = agy_pool::daemon::start_instance(
+        &ctx,
+        agy_pool::daemon::LaunchOptions {
+            entrypoint_path: Some(PathBuf::from(rust_bin)),
+            ..Default::default()
+        },
+    )
+    .expect("start_instance");
+    let mut kill_guard = ProcessGuard::new(res.pid);
+    assert!(wait_for_healthz(port, Duration::from_secs(3)));
+
+    // The daemon logs the remap before picking an account, so no upstream is needed.
+    {
+        use std::io::{Read, Write};
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let body = "{}";
+        write!(
+            s,
+            "POST /v1beta/models/agy-old-model:generateContent HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut sink = Vec::new();
+        let _ = s.read_to_end(&mut sink);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut log = String::new();
+    while Instant::now() < deadline {
+        log = std::fs::read_to_string(ctx.log_file()).unwrap_or_default();
+        if log.contains("agy-old-model -> agy-new-model") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    agy_pool::daemon::stop_instance(&ctx, Duration::from_secs(5)).expect("stop_instance");
+    kill_guard.disarm();
+    assert!(
+        log.contains("agy-old-model -> agy-new-model"),
+        "daemon must apply model_mapping from its config file; log:\n{log}"
+    );
+}
