@@ -169,6 +169,16 @@ pub async fn handle_logs(io: &mut Io<'_>, args: &[String]) -> i32 {
     0
 }
 
+fn format_listen_urls(ctx: &crate::daemon::InstanceContext, info: Option<&crate::daemon::DaemonInfo>) -> String {
+    ctx.display_listen(info)
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("http://{s}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub async fn start_daemon_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
     let (ctx, _) = match crate::cli::resolve_context_for_cmd(args) {
         Ok(res) => res,
@@ -192,19 +202,22 @@ pub async fn start_daemon_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
                     CLR_YELLOW, res.pid, CLR_RESET
                 );
             } else {
+                let live_info = crate::daemon::get_daemon_info(Some(&ctx.pid_file()));
+                let endpoints = format_listen_urls(&ctx, live_info.as_ref());
                 let _ = writeln!(
                     io.stdout,
-                    "{}✓ Started agy-pool gateway proxy on http://{}:{} (PID: {}){}",
-                    CLR_GREEN, ctx.listen_host, ctx.listen_port, res.pid, CLR_RESET
+                    "{}✓ Started agy-pool gateway proxy on {} (PID: {}){}",
+                    CLR_GREEN, endpoints, res.pid, CLR_RESET
                 );
             }
             0
         }
-        Err(_) => {
+        Err(e) => {
             let _ = writeln!(
                 io.stdout,
-                "{}[Error] Failed to start gateway. Check {}{}",
+                "{}[Error] Failed to start gateway: {}. Check {}{}",
                 CLR_RED,
+                e,
                 ctx.log_file().display(),
                 CLR_RESET
             );
@@ -261,10 +274,12 @@ pub async fn restart_daemon_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
     let opts = crate::daemon::LaunchOptions::default();
     match crate::daemon::restart_instance(&ctx, opts) {
         Ok(res) => {
+            let live_info = crate::daemon::get_daemon_info(Some(&ctx.pid_file()));
+            let endpoints = format_listen_urls(&ctx, live_info.as_ref());
             let _ = writeln!(
                 io.stdout,
-                "{}✓ Started agy-pool gateway proxy on http://{}:{} (PID: {}){}",
-                CLR_GREEN, ctx.listen_host, ctx.listen_port, res.pid, CLR_RESET
+                "{}✓ Started agy-pool gateway proxy on {} (PID: {}){}",
+                CLR_GREEN, endpoints, res.pid, CLR_RESET
             );
             0
         }
@@ -377,6 +392,7 @@ mod tests {
             listen: Some("127.0.0.1".to_string()),
             port: Some(port),
             runtime: None,
+            ..Default::default()
         };
         crate::daemon::write_pid_file(&ctx_a.pid_file(), pid_info_a).unwrap();
 

@@ -131,10 +131,12 @@ fn is_allowed_hostname(host: &str) -> bool {
         return true;
     }
     let (listen, _) = dto::get_runtime_meta();
-    if let Some((listen_host, _)) = parse_authority(&listen) {
-        let listen_norm = listen_host.trim_end_matches('.');
-        if !listen_norm.is_empty() && normalized.eq_ignore_ascii_case(listen_norm) {
-            return true;
+    for entry in listen.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some((listen_host, _)) = parse_authority(entry) {
+            let listen_norm = listen_host.trim_end_matches('.');
+            if !listen_norm.is_empty() && normalized.eq_ignore_ascii_case(listen_norm) {
+                return true;
+            }
         }
     }
     false

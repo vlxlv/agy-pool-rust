@@ -708,74 +708,109 @@ pub fn run_doctor(out: &mut impl Write) -> bool {
     }
 
     // 3. Gateway Proxy Daemon
-    let info = crate::daemon::get_daemon_info(None);
-    let default_port = crate::config::DEFAULT_PORT;
-    let listening = crate::daemon::is_port_listening(default_port);
-
-    if let Some(info) = info
-        && listening
-    {
-        if crate::daemon::is_daemon_outdated(None, default_port) {
-            let _ = writeln!(
-                out,
-                "  {}⚠{} Gateway Daemon: RUNNING (PID {}) with {}outdated disk code{}",
-                CLR_YELLOW, CLR_RESET, info.pid, CLR_YELLOW, CLR_RESET
-            );
-            let _ = writeln!(
-                out,
-                "    {}↳ Run 'agy-pool restart' to reload daemon with latest code.{}",
-                CLR_DIM, CLR_RESET
-            );
-            warnings_found += 1;
-        } else {
-            let ver_tag = match &info.version {
-                Some(v) if !v.is_empty() => format!(" [v{}]", v),
-                _ => String::new(),
-            };
-            let _ = writeln!(
-                out,
-                "  {}✓{} Gateway Daemon: RUNNING (PID {}{}) on port {}",
-                CLR_GREEN, CLR_RESET, info.pid, ver_tag, default_port
-            );
+    match crate::daemon::resolve_instance_context(None, None, None, None) {
+        Err(e) => {
+            let _ = writeln!(out, "  {}✖{} Gateway Daemon: config error: {}", CLR_RED, CLR_RESET, e);
+            issues_found += 1;
         }
+        Ok(ctx) => {
+            let info = crate::daemon::get_daemon_info(Some(&ctx.pid_file()));
+            let target_addrs = crate::daemon::resolve_context_socket_addrs(&ctx);
 
-        let ctx = crate::daemon::InstanceContext {
-            data_dir: crate::config::data_dir(),
-            config_path: None,
-            config_hash: None,
-            listen_host: "127.0.0.1".to_string(),
-            listen_port: default_port,
-            binary_path: PathBuf::new(),
-            version: crate::VERSION.to_string(),
-        };
-        if let Ok(stats) = ctx.get_runtime_stats(info.pid) {
-            if lease_fallback_rate_high(stats.snapshot.lease_fallbacks, stats.snapshot.routing_decisions) {
-                let _ = writeln!(
-                    out,
-                    "  {}⚠{} Lease Fallbacks: {} of {} routing decisions could not record an in-flight lease",
-                    CLR_YELLOW, CLR_RESET, stats.snapshot.lease_fallbacks, stats.snapshot.routing_decisions
-                );
-                let _ = writeln!(
-                    out,
-                    "    {}↳ state.db writes are slow or locked (disk I/O, network mount); cross-process balancing is degraded.{}",
-                    CLR_DIM, CLR_RESET
-                );
-                warnings_found += 1;
+            if let Some(info) = info {
+                let listen_disp = ctx.display_listen(Some(&info));
+                match target_addrs {
+                    Err(e) => {
+                        let _ = writeln!(
+                            out,
+                            "  {}✖{} Gateway Daemon: PID {} running, listen target error: {}",
+                            CLR_RED, CLR_RESET, info.pid, e
+                        );
+                        issues_found += 1;
+                    }
+                    Ok(addrs) if crate::daemon::all_addrs_listening(&addrs) => {
+                        if crate::daemon::is_daemon_outdated(Some(&ctx.pid_file()), ctx.listen_port) {
+                            let _ = writeln!(
+                                out,
+                                "  {}⚠{} Gateway Daemon: RUNNING (PID {}) with {}outdated disk code{}",
+                                CLR_YELLOW, CLR_RESET, info.pid, CLR_YELLOW, CLR_RESET
+                            );
+                            let _ = writeln!(
+                                out,
+                                "    {}↳ Run 'agy-pool restart' to reload daemon with latest code.{}",
+                                CLR_DIM, CLR_RESET
+                            );
+                            warnings_found += 1;
+                        } else {
+                            let ver_tag = match &info.version {
+                                Some(v) if !v.is_empty() => format!(" [v{}]", v),
+                                _ => String::new(),
+                            };
+                            let _ = writeln!(
+                                out,
+                                "  {}✓{} Gateway Daemon: RUNNING (PID {}{}) on {}",
+                                CLR_GREEN, CLR_RESET, info.pid, ver_tag, listen_disp
+                            );
+                        }
+
+                        if let Ok(stats) = ctx.get_runtime_stats(info.pid)
+                            && lease_fallback_rate_high(
+                                stats.snapshot.lease_fallbacks,
+                                stats.snapshot.routing_decisions,
+                            )
+                        {
+                            let _ = writeln!(
+                                out,
+                                "  {}⚠{} Lease Fallbacks: {} of {} routing decisions could not record an in-flight lease",
+                                CLR_YELLOW, CLR_RESET, stats.snapshot.lease_fallbacks, stats.snapshot.routing_decisions
+                            );
+                            let _ = writeln!(
+                                out,
+                                "    {}↳ state.db writes are slow or locked (disk I/O, network mount); cross-process balancing is degraded.{}",
+                                CLR_DIM, CLR_RESET
+                            );
+                            warnings_found += 1;
+                        }
+                    }
+                    Ok(_) => {
+                        let _ = writeln!(
+                            out,
+                            "  {}⚠{} Gateway Daemon: PID {} is alive but not listening on all configured endpoints ({})",
+                            CLR_YELLOW, CLR_RESET, info.pid, listen_disp
+                        );
+                        warnings_found += 1;
+                    }
+                }
+            } else {
+                match target_addrs {
+                    Err(e) => {
+                        let _ = writeln!(
+                            out,
+                            "  {}✖{} Gateway Daemon: listen target error: {}",
+                            CLR_RED, CLR_RESET, e
+                        );
+                        issues_found += 1;
+                    }
+                    Ok(addrs) if crate::daemon::any_addr_listening(&addrs) => {
+                        let _ = writeln!(
+                            out,
+                            "  {}⚠{} Gateway Daemon: {} is in use by another process",
+                            CLR_YELLOW,
+                            CLR_RESET,
+                            ctx.display_listen(None)
+                        );
+                        warnings_found += 1;
+                    }
+                    Ok(_) => {
+                        let _ = writeln!(
+                            out,
+                            "  {}○{} Gateway Daemon: STOPPED (will auto-launch on 'agy' run)",
+                            CLR_BLUE, CLR_RESET
+                        );
+                    }
+                }
             }
         }
-    } else if listening {
-        let _ = writeln!(
-            out,
-            "  {}⚠{} Gateway Daemon: Port {} is in use by another process",
-            CLR_YELLOW, CLR_RESET, default_port
-        );
-        warnings_found += 1;
-    } else {
-        let _ = writeln!(
-            out,
-            "  {}○{} Gateway Daemon: STOPPED (will auto-launch on 'agy' run)",
-            CLR_BLUE, CLR_RESET
-        );
     }
 
     // 4. Storage & Account Pool Health

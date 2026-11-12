@@ -291,7 +291,8 @@ pub async fn quota_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
     }
 
     refresh_all_quotas(std::time::Duration::from_secs(10)).await;
-    list_accounts_with_port(target, io, show_email, Some(ctx.listen_port));
+    let width = terminal_width(io.stdout_fd);
+    list_accounts_inner(target, width, io, show_email, Some(ctx.listen_port), Some(&ctx));
     0
 }
 
@@ -375,6 +376,60 @@ pub fn resolve_configured_port(explicit_port: Option<u16>) -> u16 {
     crate::config::DEFAULT_PORT
 }
 
+pub fn resolve_configured_listen_targets(ctx: Option<&crate::daemon::InstanceContext>) -> Vec<String> {
+    if let Some(c) = ctx {
+        return c.effective_listen_targets();
+    }
+    if let Ok(cfg_path) = crate::config::resolve_default_config_file()
+        && !cfg_path.as_os_str().is_empty()
+        && cfg_path.exists()
+        && let Ok(cfg) = crate::config::load_config_file(&cfg_path)
+        && !cfg.server.listen.is_empty()
+    {
+        return cfg.server.listen;
+    }
+    let sc = crate::config::get_static_config();
+    if !sc.server.listen.is_empty() {
+        return sc.server.listen;
+    }
+    vec!["127.0.0.1".to_string()]
+}
+
+fn probe_gateway_display(
+    ctx: Option<&crate::daemon::InstanceContext>,
+    targets: &[String],
+    port: u16,
+) -> (bool, String) {
+    let pid_file = ctx.map(|c| c.pid_file());
+    let live_info = crate::daemon::get_daemon_info(pid_file.as_deref());
+    let addrs = if let Some(ref info) = live_info
+        && !info.listen_addrs.is_empty()
+        && info.port == Some(port)
+    {
+        crate::daemon::resolve_info_socket_addrs(info, port)
+    } else if let Ok(resolved) = crate::daemon::resolve_listen_targets(targets, port) {
+        resolved
+    } else {
+        let fallback = targets.first().map(String::as_str).unwrap_or("127.0.0.1");
+        let disp = if let Ok(ip) = fallback.parse::<std::net::IpAddr>() {
+            std::net::SocketAddr::new(ip, port).to_string()
+        } else {
+            format!("{fallback}:{port}")
+        };
+        return (false, disp);
+    };
+
+    let running = crate::daemon::all_addrs_listening(&addrs);
+    let primary = crate::daemon::pick_primary_connect_addr(&addrs)
+        .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], port)));
+    let disp = if addrs.len() <= 1 {
+        primary.to_string()
+    } else {
+        format!("{primary} (+{})", addrs.len() - 1)
+    };
+    (running, disp)
+}
+
 pub fn list_accounts(target: &str, io: &mut Io<'_>, show_email: bool) {
     list_accounts_with_port(target, io, show_email, None);
 }
@@ -390,10 +445,21 @@ pub fn list_accounts_with_width(target: &str, width: usize, io: &mut Io<'_>, sho
 
 pub fn list_accounts_with_width_and_port(
     target: &str,
+    width: usize,
+    io: &mut Io<'_>,
+    show_email: bool,
+    explicit_port: Option<u16>,
+) {
+    list_accounts_inner(target, width, io, show_email, explicit_port, None);
+}
+
+fn list_accounts_inner(
+    target: &str,
     mut width: usize,
     io: &mut Io<'_>,
     show_email: bool,
     explicit_port: Option<u16>,
+    ctx: Option<&crate::daemon::InstanceContext>,
 ) {
     if width == 0 {
         width = 100;
@@ -453,16 +519,31 @@ pub fn list_accounts_with_width_and_port(
         pool.accounts.iter().collect()
     };
 
-    let port = resolve_configured_port(explicit_port);
+    let port = explicit_port
+        .filter(|&p| p > 0)
+        .or_else(|| ctx.map(|c| c.listen_port).filter(|&p| p > 0))
+        .unwrap_or_else(|| resolve_configured_port(explicit_port));
+    let targets = resolve_configured_listen_targets(ctx);
+    let (daemon_running, listen_disp) = probe_gateway_display(ctx, &targets, port);
     let now_ts = crate::clock::now_unix() as i64;
 
     if width >= 60 {
-        render_wide_quota_dashboard(&acc_list, &pool, port, now_ts, width, show_email, io);
+        render_wide_quota_dashboard(
+            &acc_list,
+            &pool,
+            port,
+            &listen_disp,
+            daemon_running,
+            now_ts,
+            width,
+            show_email,
+            io,
+        );
         return;
     }
 
     if width >= 40 {
-        render_mobile_quota_dashboard(&acc_list, &pool, port, now_ts, width, show_email, io);
+        render_mobile_quota_dashboard(&acc_list, &pool, port, daemon_running, now_ts, width, show_email, io);
         return;
     }
 
@@ -474,14 +555,15 @@ fn render_wide_quota_dashboard(
     acc_list: &[&crate::storage::Account],
     pool: &crate::storage::Pool,
     port: u16,
+    listen_disp: &str,
+    daemon_running: bool,
     now_ts: i64,
     width: usize,
     show_email: bool,
     io: &mut Io<'_>,
 ) {
-    let daemon_running = crate::daemon::is_port_listening(port);
     let gateway_status = if daemon_running {
-        format!("{}RUNNING (127.0.0.1:{}){}", CLR_GREEN, port, CLR_RESET)
+        format!("{}RUNNING ({}){}", CLR_GREEN, listen_disp, CLR_RESET)
     } else {
         format!("{}STOPPED{}", CLR_DIM, CLR_RESET)
     };
@@ -757,12 +839,12 @@ fn render_mobile_quota_dashboard(
     acc_list: &[&crate::storage::Account],
     pool: &crate::storage::Pool,
     port: u16,
+    daemon_running: bool,
     now_ts: i64,
     width: usize,
     show_email: bool,
     io: &mut Io<'_>,
 ) {
-    let daemon_running = crate::daemon::is_port_listening(port);
     let _ = writeln!(io.stdout);
     let next_id = resolve_next_candidate_id(pool, now_ts);
     for (i, acc) in acc_list.iter().enumerate() {

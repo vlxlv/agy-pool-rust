@@ -15,14 +15,15 @@ pub fn stop_with_file(
         Ok(info) => info,
         Err(DaemonError::PIDNotFound) => return Err(DaemonError::NotRunning),
         Err(err) => {
-            // Malformed PID file: safely clean up if port is not listening
-            if !super::server::is_port_listening(ctx.listen_port) {
+            // Malformed PID file: safely clean up if configured listen targets are not listening
+            let addrs = super::server::resolve_context_socket_addrs(ctx).unwrap_or_default();
+            if !super::server::any_addr_listening(&addrs) {
                 let _ = std::fs::remove_file(pid_file);
                 return Ok(());
             }
             return Err(DaemonError::Message(format!(
-                "cannot safely remove malformed PID file while port {} is listening: {err}",
-                ctx.listen_port
+                "cannot safely remove malformed PID file while {} is listening: {err}",
+                ctx.display_listen(None)
             )));
         }
     };
@@ -164,6 +165,9 @@ pub fn restart_instance(
         return Err(DaemonError::Message(format!("cannot restart instance: {msg}")));
     }
 
+    // Resolve new target sockets before restarting/stopping the running daemon so invalid/missing interfaces fail closed.
+    let new_addrs = super::server::resolve_context_socket_addrs(ctx)?;
+
     // A systemd-supervised daemon is restarted by its unit; spawning our own would fight it for the PID lock.
     if let Some(info) = super::pid::get_daemon_info(Some(&pid_file))
         && super::pid::is_process_alive(info.pid)
@@ -180,6 +184,7 @@ pub fn restart_instance(
     let live_info = info.as_ref().filter(|i| super::pid::is_process_alive(i.pid));
     let old_pid = live_info.map(|i| i.pid);
     let mut stop_ctx = ctx.clone();
+    let mut old_addrs = Vec::new();
     if let Some(i) = live_info {
         if let Some(port) = i.port {
             stop_ctx.listen_port = port;
@@ -188,16 +193,25 @@ pub fn restart_instance(
             .config_path
             .as_ref()
             .map(|c| super::instance::canonicalize_file(Path::new(c)).unwrap_or_else(|_| std::path::PathBuf::from(c)));
+        old_addrs = super::server::resolve_info_socket_addrs(i, 0);
     }
 
-    // If moving to a different port, verify the target port is free before stopping the running daemon.
-    if stop_ctx.listen_port != ctx.listen_port
-        && ctx.listen_port > 0
-        && super::server::is_port_listening(ctx.listen_port)
-    {
+    // Verify any new target sockets not already held by the running daemon are free before stopping it.
+    let newly_claimed: Vec<std::net::SocketAddr> = new_addrs
+        .iter()
+        .copied()
+        .filter(|a| {
+            !old_addrs.contains(a)
+                && !old_addrs
+                    .iter()
+                    .any(|old| old.port() == a.port() && (old.ip().is_unspecified() || a.ip().is_unspecified()))
+        })
+        .collect();
+    if !newly_claimed.is_empty() && super::server::any_addr_listening(&newly_claimed) {
         return Err(DaemonError::ForeignPortOccupied(format!(
-            "port {} is occupied by another process; cannot move daemon from port {}",
-            ctx.listen_port, stop_ctx.listen_port
+            "target endpoint(s) {} occupied by another process; cannot move daemon from port {}",
+            super::server::format_socket_addrs(&newly_claimed),
+            stop_ctx.listen_port
         )));
     }
 
@@ -211,11 +225,15 @@ pub fn restart_instance(
         )));
     }
 
-    // 2. Bounded wait for port release
-    let wait_port = stop_ctx.listen_port;
-    if wait_port > 0 {
+    // 2. Bounded wait for socket release
+    let wait_addrs = if !old_addrs.is_empty() {
+        old_addrs
+    } else {
+        super::server::resolve_context_socket_addrs(&stop_ctx).unwrap_or_else(|_| new_addrs.clone())
+    };
+    if !wait_addrs.is_empty() {
         for _ in 0..30 {
-            if !super::server::is_port_listening(wait_port) {
+            if !super::server::any_addr_listening(&wait_addrs) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -239,12 +257,13 @@ fn wait_restarted(
     old_pid: i32,
     scope: &str,
 ) -> Result<super::lifecycle::StartResult, DaemonError> {
+    let expected_addrs = super::server::resolve_context_socket_addrs(ctx)?;
     let max_attempts = if cfg!(test) { 3 } else { 50 };
     for _ in 0..max_attempts {
         if let Some(info) = super::pid::get_daemon_info(Some(pid_file))
             && info.pid != old_pid
             && super::pid::is_process_alive(info.pid)
-            && super::server::is_port_listening(ctx.listen_port)
+            && super::server::all_addrs_listening(&expected_addrs)
         {
             return Ok(super::lifecycle::StartResult {
                 pid: info.pid,
@@ -256,9 +275,9 @@ fn wait_restarted(
     }
 
     Err(DaemonError::Message(format!(
-        "{} restarted but the gateway is not listening on port {}; inspect `systemctl {} status {}` and {:?}",
+        "{} restarted but the gateway is not listening on {}; inspect `systemctl {} status {}` and {:?}",
         super::systemd::SYSTEMD_UNIT_NAME,
-        ctx.listen_port,
+        ctx.display_listen(None),
         scope,
         super::systemd::SYSTEMD_UNIT_NAME,
         ctx.log_file()
@@ -652,5 +671,64 @@ mod tests {
         }
 
         assert!(super::super::pid::is_process_alive(child_pid));
+    }
+
+    #[test]
+    fn test_restart_missing_interface_fails_closed_before_stopping_running_daemon() {
+        let env = crate::daemon::test_env();
+        let data_dir = env.temp_dir.path().join("restart-missing-iface");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let pid_file = data_dir.join("agy-pool.pid");
+        let log_file = data_dir.join("agy-pool.log");
+
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+
+        let cfg_file = env.temp_dir.path().join("restart-missing-iface.json");
+        std::fs::write(
+            &cfg_file,
+            format!(r#"{{"version": 1, "server": {{"listen": "127.0.0.1", "port": {port}}}}}"#),
+        )
+        .unwrap();
+
+        let opts = super::super::lifecycle::LaunchOptions {
+            port,
+            state_dir: Some(data_dir.clone()),
+            config_file: Some(cfg_file.clone()),
+            pid_file: Some(pid_file.clone()),
+            log_file: Some(log_file),
+            entrypoint_path: Some(super::super::pid::get_entrypoint_path()),
+            ..Default::default()
+        };
+        let res = super::super::lifecycle::start_daemon(opts.clone()).unwrap();
+        let mut kill_guard = crate::daemon::lifecycle::ProcessKillGuard::new(res.pid);
+
+        // Update config in place to a missing interface and invoke restart_instance.
+        std::fs::write(
+            &cfg_file,
+            format!(r#"{{"version": 1, "server": {{"listen": ["lo", "agy_no_such0"], "port": {port}}}}}"#),
+        )
+        .unwrap();
+        let bad_ctx =
+            super::super::instance::resolve_instance_context(Some(&data_dir), Some(&cfg_file), Some(port), None)
+                .unwrap();
+
+        let err = restart_instance(&bad_ctx, opts).unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected missing interface error, got: {err}"
+        );
+        assert!(
+            super::super::pid::is_process_alive(res.pid),
+            "existing daemon must remain alive when new listen interface resolution fails"
+        );
+        assert!(
+            super::super::server::is_daemon_running(Some(&pid_file), port),
+            "existing daemon must stay serving cleanly"
+        );
+
+        let _ = stop_daemon(Some(&pid_file), port, Duration::from_secs(3));
+        kill_guard.disarm();
     }
 }
