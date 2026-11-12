@@ -1,5 +1,8 @@
+pub mod auth;
 pub mod dto;
 pub mod telemetry;
+
+pub use auth::PeerAddr;
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
