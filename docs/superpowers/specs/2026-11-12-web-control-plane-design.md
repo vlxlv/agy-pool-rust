@@ -1,7 +1,7 @@
 # agy-pool-rust Web Control Plane Design (`axum` + Auth + Listener Isolation)
 
 - **Date**: 2026-11-12
-- **Status**: Draft for Architecture & Security Review
+- **Status**: Revised 2026-11-13 after review — §9 overrides any conflicting text above
 - **Supersedes / Extends**: [`2026-11-11-monitoring-dashboard-design.md`](2026-11-11-monitoring-dashboard-design.md)
 - **Target Components**: `Cargo.toml`, `src/config/mod.rs`, `src/daemon/server.rs`, `src/proxy/mod.rs`, `src/dashboard/*`, `src/diagnostics/mod.rs`, `tests/dashboard.rs`
 
@@ -364,3 +364,20 @@ src/
 - Exact `axum` 0.8 feature set and `TowerToHyperService` glue in `src/daemon/server.rs`.
 - Specific UI layout refinements (toast stacking, mobile table collapse behavior, row `⋯` action menu styling) inside `src/dashboard/assets/index.html`.
 - Exact diagnostic check structs in `src/diagnostics/mod.rs` to keep CLI `doctor` and `/api/v1/diagnostics` sharing one source of truth.
+
+---
+
+## 9. Revisions After Review (2026-11-13)
+
+These decisions override the sections above wherever they conflict.
+
+1. **Static config loading** — fixed separately in PRs #5 and #6 (0.3.5). The daemon now fails to start on an invalid `config.json` or `AGY_POOL_DASHBOARD_TOKEN` instead of falling back to defaults, so a typo can never silently drop the dashboard token (§4.3.1).
+2. **Mutations always need the token**, including from loopback and Tailscale peers. The trusted-network mode (§4.4 "When NO `auth_token` is configured", CGNAT/ULA ranges) is dropped. Without a token, every mutation returns `403 TOKEN_REQUIRED_FOR_CONTROL` unless `dashboard.allow_unauthenticated_control: true`. Reads stay open without a token (0.3.x behavior); with a token, every `/api/v1/*` route except `GET /api/v1/auth/status` needs it.
+3. **No HTTP/2 / h2c.** Browsers never speak h2c, so it brings no SSE connection-limit relief. The server keeps `http1::Builder`.
+4. **Rollback:** the `dashboard` key stays in `config.json`. Because `StaticConfig` uses `deny_unknown_fields`, 0.3.5 and older reject a file containing it; the README documents removing the key before downgrading.
+5. **Auth transport: Bearer token only.** The browser keeps the token in `sessionStorage` and sends `Authorization: Bearer <token>`; SSE is read through `fetch()` streaming because `EventSource` cannot send headers. No cookies, no HMAC session signing, no `/api/v1/auth/login` or `/logout`. `X-Agy-Pool-Control: 1` and `Content-Type: application/json` remain mandatory on mutations.
+6. **New read endpoints** (`/config`, `/diagnostics`, Phase 3) always require the token, and any proxy URL they show is redacted.
+7. **Token strength:** a configured token must be at least 32 visible ASCII characters. Wrong tokens count against a per-client budget (5 per 60 s; IPv6 counted per /64) and a global budget (100 per 60 s); either one exhausted returns `429` with `Retry-After: 60`. Missing tokens do not count.
+8. **No axum.** With cookies, login endpoints and h2c gone, axum's middleware and protocol benefits no longer apply, and its `!Sync` body type and automatic `Allow: GET,HEAD` header would need adapters. Phase 1 extends the existing hand-written dispatch: `dashboard::owns()` decides which requests the dashboard answers, and `dashboard::serve()` runs the Host/Origin guard, the auth gates and the handlers. Proxy requests never enter the dashboard code. Revisit if Phase 2/3 routing becomes unwieldy.
+
+Phase 1 is therefore: `dashboard.auth_token` / `allow_unauthenticated_control` config + env override, fail-closed startup, Bearer auth + failure limiter, `PeerAddr`, `GET /api/v1/auth/status`, `POST /api/v1/strategy`, and the frontend token prompt + fetch-stream SSE + strategy selector. Split listeners, graceful shutdown, `header_read_timeout`, the `pool_changed` SSE event and all other controls are deferred to later plans.
