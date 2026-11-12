@@ -52,6 +52,23 @@ impl Drop for ProcessKillGuard {
     }
 }
 
+/// Makes get_static_config() (model_mapping, keep_alive_secs, native_agy.binary) return this instance's config.
+/// Only the instance's own config file counts; an invalid file falls back to defaults and is reported.
+fn apply_instance_static_config(ctx: &super::instance::InstanceContext) -> Option<String> {
+    let (cfg, err) = match ctx.config_path.as_deref() {
+        Some(p) => match crate::config::load_config_file(p) {
+            Ok(c) => (c, None),
+            Err(e) => (
+                crate::config::default_static_config(),
+                Some(format!("ignoring invalid config {}: {e}", p.display())),
+            ),
+        },
+        None => (crate::config::default_static_config(), None),
+    };
+    crate::config::set_static_config(cfg);
+    err
+}
+
 /// Starts the reverse proxy gateway for the given InstanceContext.
 pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOptions) -> Result<StartResult, DaemonError> {
     let pid_file = opts.pid_file.clone().unwrap_or_else(|| ctx.pid_file());
@@ -61,7 +78,9 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
     crate::config::assert_safe_write_path(&log_file)?;
 
     if opts.foreground {
-        crate::config::set_static_config(crate::config::load_static_config(ctx.config_path.as_deref()));
+        if let Some(e) = apply_instance_static_config(ctx) {
+            eprintln!("warning: {e}");
+        }
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
         let res = rt.block_on(async {
             super::server::run_foreground(super::server::ServerOptions {
@@ -268,8 +287,9 @@ pub fn run_daemon_child(stderr: &mut impl std::io::Write) -> i32 {
         let _ = writeln!(stderr, "daemon child error: {e}");
         return 1;
     }
-    // The proxy reads model_mapping / keep_alive_secs via get_static_config(); honor this instance's -c config.
-    crate::config::set_static_config(crate::config::load_static_config(ctx.config_path.as_deref()));
+    if let Some(e) = apply_instance_static_config(&ctx) {
+        let _ = writeln!(stderr, "daemon child warning: {e}");
+    }
 
     let pid_file = std::env::var("AGY_TEST_PID_FILE")
         .ok()

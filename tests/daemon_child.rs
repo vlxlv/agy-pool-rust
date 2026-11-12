@@ -333,3 +333,40 @@ fn test_daemon_child_applies_config_model_mapping() {
         "daemon must apply model_mapping from its config file; log:\n{log}"
     );
 }
+
+#[test]
+fn test_daemon_child_reports_invalid_config() {
+    let rust_bin = env!("CARGO_BIN_EXE_agy-pool");
+    let tmp_dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = tmp_dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let port = get_ephemeral_port();
+    let cfg_file = tmp_dir.path().join("config.json");
+    // Typo'd key: deny_unknown_fields rejects the whole file, which used to be dropped silently.
+    std::fs::write(
+        &cfg_file,
+        r#"{"version": 1, "server": {"keep_alive_sec": 10}, "model_mapping": {"a": "b"}}"#,
+    )
+    .unwrap();
+
+    let ctx = agy_pool::daemon::resolve_instance_context(Some(&data_dir), Some(&cfg_file), Some(port), None)
+        .expect("resolve_instance_context");
+    let res = agy_pool::daemon::start_instance(
+        &ctx,
+        agy_pool::daemon::LaunchOptions {
+            entrypoint_path: Some(PathBuf::from(rust_bin)),
+            ..Default::default()
+        },
+    )
+    .expect("start_instance");
+    let mut kill_guard = ProcessGuard::new(res.pid);
+    assert!(wait_for_healthz(port, Duration::from_secs(3)));
+    let log = std::fs::read_to_string(ctx.log_file()).unwrap_or_default();
+    agy_pool::daemon::stop_instance(&ctx, Duration::from_secs(5)).expect("stop_instance");
+    kill_guard.disarm();
+    assert!(
+        log.contains("ignoring invalid config"),
+        "daemon must report a rejected config file; log:\n{log}"
+    );
+}
