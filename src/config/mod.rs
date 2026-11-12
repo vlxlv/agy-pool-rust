@@ -235,6 +235,45 @@ pub struct StaticConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub model_mapping: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
+}
+
+pub const ENV_DASHBOARD_TOKEN: &str = "AGY_POOL_DASHBOARD_TOKEN";
+pub const MIN_DASHBOARD_TOKEN_LEN: usize = 32;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DashboardConfig {
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    /// Lets dashboard mutations run without a token. Only for networks where every peer is trusted.
+    #[serde(default)]
+    pub allow_unauthenticated_control: bool,
+}
+
+/// Browsers can only send visible ASCII in a header, and short tokens are guessable.
+pub fn check_dashboard_token(token: &str) -> Result<(), String> {
+    if !token.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err("token must contain only visible ASCII characters (no spaces)".to_string());
+    }
+    if token.len() < MIN_DASHBOARD_TOKEN_LEN {
+        return Err(format!(
+            "token must be at least {MIN_DASHBOARD_TOKEN_LEN} characters (generate one with `openssl rand -hex 32`)"
+        ));
+    }
+    Ok(())
+}
+
+/// The env var wins over config.json; empty values count as unset.
+pub fn resolve_dashboard_token(env_value: Option<String>, cfg: &DashboardConfig) -> Option<String> {
+    env_value
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.auth_token.clone().filter(|s| !s.is_empty()))
+}
+
+pub fn dashboard_token(cfg: &DashboardConfig) -> Option<String> {
+    resolve_dashboard_token(std::env::var(ENV_DASHBOARD_TOKEN).ok(), cfg)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -297,6 +336,7 @@ pub fn default_static_config() -> StaticConfig {
             audit_max_size_bytes: DEFAULT_AUDIT_MAX_BYTES,
         },
         model_mapping: std::collections::HashMap::new(),
+        dashboard: DashboardConfig::default(),
     }
 }
 
@@ -473,6 +513,13 @@ pub fn load_config_file(path: &Path) -> Result<StaticConfig, ConfigError> {
             "invalid logging backup_count {} (must be >= 0)",
             cfg.logging.backup_count
         )));
+    }
+
+    if let Some(token) = cfg.dashboard.auth_token.as_deref()
+        && !token.is_empty()
+        && let Err(e) = check_dashboard_token(token)
+    {
+        return Err(ConfigError::Validation(format!("invalid dashboard.auth_token: {e}")));
     }
 
     // 4. Resolve relative native_agy.binary relative to config file directory
@@ -856,5 +903,69 @@ mod tests {
             let res = load_config_file(&p);
             assert!(res.is_err(), "case {name} expected validation error, got Ok({res:?})");
         }
+    }
+
+    #[test]
+    fn dashboard_config_parses_and_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("dash.json");
+        std::fs::write(
+            &p,
+            r#"{"version":1,"dashboard":{"auth_token":"0123456789abcdef0123456789abcdef","allow_unauthenticated_control":true}}"#,
+        )
+        .unwrap();
+        let cfg = load_config_file(&p).unwrap();
+        assert_eq!(
+            cfg.dashboard.auth_token.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert!(cfg.dashboard.allow_unauthenticated_control);
+
+        std::fs::write(&p, r#"{"version":1}"#).unwrap();
+        assert_eq!(load_config_file(&p).unwrap().dashboard, DashboardConfig::default());
+        assert_eq!(default_static_config().dashboard, DashboardConfig::default());
+
+        std::fs::write(&p, r#"{"version":1,"dashboard":{"token":"x"}}"#).unwrap();
+        assert!(load_config_file(&p).is_err(), "unknown dashboard keys must be rejected");
+    }
+
+    #[test]
+    fn dashboard_token_rules() {
+        assert!(check_dashboard_token("0123456789abcdef0123456789abcdef").is_ok());
+        assert!(check_dashboard_token("short").is_err());
+        assert!(check_dashboard_token(" 0123456789abcdef0123456789abcdef").is_err());
+        assert!(check_dashboard_token("0123456789abcdef0123456789abcdé").is_err());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("dash.json");
+        std::fs::write(&p, r#"{"version":1,"dashboard":{"auth_token":"too-short"}}"#).unwrap();
+        let err = load_config_file(&p).unwrap_err().to_string();
+        assert!(err.contains("dashboard.auth_token"), "error should name the key: {err}");
+
+        // An empty token means "no token", not an error.
+        std::fs::write(&p, r#"{"version":1,"dashboard":{"auth_token":""}}"#).unwrap();
+        assert!(load_config_file(&p).is_ok());
+    }
+
+    #[test]
+    fn dashboard_token_env_overrides_config() {
+        let cfg = DashboardConfig {
+            auth_token: Some("from-config".to_string()),
+            allow_unauthenticated_control: false,
+        };
+        assert_eq!(
+            resolve_dashboard_token(Some("from-env".to_string()), &cfg).as_deref(),
+            Some("from-env")
+        );
+        assert_eq!(
+            resolve_dashboard_token(Some(String::new()), &cfg).as_deref(),
+            Some("from-config")
+        );
+        assert_eq!(resolve_dashboard_token(None, &cfg).as_deref(), Some("from-config"));
+        let empty = DashboardConfig {
+            auth_token: Some(String::new()),
+            allow_unauthenticated_control: false,
+        };
+        assert_eq!(resolve_dashboard_token(None, &empty), None);
     }
 }

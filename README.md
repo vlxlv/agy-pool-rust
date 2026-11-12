@@ -163,11 +163,18 @@ After `install`, plain `agy` goes through the pool with no flags or environment 
 - `server.keep_alive_secs`: Interval (seconds) for SSE heartbeat frames (`: keep-alive`). `0` disables keep-alive (default).
 - `model_mapping`: Maps requested model names/aliases to target models across URL paths and request payloads.
 - `logging.audit_max_size_bytes`: Maximum file size before `audit-events.jsonl` rotates (defaults to 20 MiB).
+- `dashboard.auth_token`: Token required by the web dashboard API (at least 32 visible ASCII characters; generate one with `openssl rand -hex 32`). When set, every `/api/v1/*` call needs `Authorization: Bearer <token>`; the dashboard page asks for it once per browser tab. When unset, the dashboard stays read-only.
+- `dashboard.allow_unauthenticated_control`: Allow dashboard changes (such as switching strategy) without a token. Off by default; only enable it when every host that can reach the listen address is trusted.
+
+The gateway refuses to start if `config.json` or `AGY_POOL_DASHBOARD_TOKEN` is invalid, so a typo cannot silently turn the token off.
+
+**Downgrading:** agy-pool 0.3.5 and older reject unknown config keys. Remove the `dashboard` block from `config.json` before installing an older release.
 
 Environment variables:
 
 | Variable | Effect |
 |---|---|
+| `AGY_POOL_DASHBOARD_TOKEN` | Dashboard API token; overrides `dashboard.auth_token` |
 | `AGY_CONFIG_FILE`, `AGY_DATA_DIR` | Use another config file or data directory (same as `-c` / `-D`) |
 | `AGY_BIN` | Path of the native `agy` binary to run |
 | `AGY_SHOW_EMAIL=1`, `AGY_PRIVACY=0` | Show account emails instead of labels |
