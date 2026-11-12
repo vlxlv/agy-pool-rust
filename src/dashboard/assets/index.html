@@ -17,6 +17,8 @@
       let saved = 'system';
       try { saved = localStorage.getItem('agy_theme') || 'system'; } catch (_) {}
       window.__applyAgyTheme(saved);
+      window.__agyThemeSaved = saved;
+      window.__agyThemeMedia = mq;
     })();
   </script>
   <style>
@@ -25,7 +27,6 @@
       --bg: #0b0f19;
       --header-bg: #0f172a;
       --card-bg: #111827;
-      --card-hover: #162032;
       --border: #1f293d;
       --border-subtle: #162032;
       --border-hover: #2b3952;
@@ -50,11 +51,9 @@
       --red-dim: rgba(244, 63, 94, 0.15);
       --red-text: #f87171;
       --red-border: rgba(244, 63, 94, 0.3);
-      --purple: #a855f7;
       --purple-dim: rgba(168, 85, 247, 0.15);
       --purple-text: #c084fc;
       --purple-border: rgba(168, 85, 247, 0.3);
-      --blue: #3b82f6;
       --surface-subtle: rgba(255, 255, 255, 0.03);
       --track-bg: rgba(255, 255, 255, 0.06);
       --section-header-bg: rgba(255, 255, 255, 0.015);
@@ -72,9 +71,8 @@
       --bg: #f8fafc;
       --header-bg: #ffffff;
       --card-bg: #ffffff;
-      --card-hover: #f1f5f9;
       --border: #e2e8f0;
-      --border-subtle: #f1f5f9;
+      --border-subtle: #e2e8f0;
       --border-hover: #cbd5e1;
       --text-main: #0f172a;
       --text-muted: #475569;
@@ -97,11 +95,9 @@
       --red-dim: rgba(225, 29, 72, 0.1);
       --red-text: #be123c;
       --red-border: rgba(225, 29, 72, 0.25);
-      --purple: #9333ea;
       --purple-dim: rgba(147, 51, 234, 0.1);
       --purple-text: #7e22ce;
       --purple-border: rgba(147, 51, 234, 0.25);
-      --blue: #2563eb;
       --surface-subtle: rgba(15, 23, 42, 0.03);
       --track-bg: rgba(15, 23, 42, 0.08);
       --section-header-bg: #f8fafc;
@@ -757,8 +753,7 @@
     let showEmail = false;
     try { showEmail = localStorage.getItem('agy_show_email') === 'true'; } catch (_) {}
     let showEmailAllowed = false;
-    let themeMode = 'system';
-    try { themeMode = localStorage.getItem('agy_theme') || 'system'; } catch (_) {}
+    let themeMode = window.__agyThemeSaved;
     let streamPaused = false;
     let eventList = [];
     let accountsData = [];
@@ -773,7 +768,7 @@
 
     const themeSwitcher = document.getElementById('theme-switcher');
     const themeButtons = Array.from(themeSwitcher.querySelectorAll('.theme-btn'));
-    const themeMedia = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+    const themeMedia = window.__agyThemeMedia;
 
     function syncThemeUI() {
       const state = window.__applyAgyTheme(themeMode);

@@ -632,6 +632,12 @@ async fn test_embedded_spa_asset_constraints() {
         "missing light theme CSS override"
     );
     assert!(body_str.contains("agy_theme"), "missing agy_theme persistence key");
+    // The theme must be applied in <head>, before the body paints, or light-mode users see a dark flash.
+    let bootstrap = body_str
+        .find("window.__applyAgyTheme(saved)")
+        .expect("missing theme bootstrap");
+    let head_end = body_str.find("</head>").expect("missing </head>");
+    assert!(bootstrap < head_end, "theme bootstrap must run inside <head>");
     // Blocked storage (privacy mode, sandboxed iframe) throws; one unguarded access halts the whole script.
     for line in body_str.lines().filter(|l| l.contains("localStorage.")) {
         assert!(line.contains("try {"), "unguarded localStorage access: {}", line.trim());
