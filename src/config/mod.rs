@@ -300,20 +300,21 @@ pub fn default_static_config() -> StaticConfig {
     }
 }
 
-/// Loads logging configuration from the given path or default config file if available, falling back to defaults.
-pub fn load_logging_config(path: Option<&Path>) -> LoggingConfig {
+/// Loads the config at the given path or the default config file if available, falling back to defaults.
+pub fn load_static_config(path: Option<&Path>) -> StaticConfig {
     let resolved = match path {
         Some(p) => Some(p.to_path_buf()),
         None => resolve_default_config_file().ok().filter(|p| !p.as_os_str().is_empty()),
     };
-    if let Some(cfg_path) = resolved
-        && cfg_path.exists()
-        && let Ok(cfg) = load_config_file(&cfg_path)
-    {
-        cfg.logging
-    } else {
-        default_logging_config()
-    }
+    resolved
+        .filter(|p| p.exists())
+        .and_then(|p| load_config_file(&p).ok())
+        .unwrap_or_else(default_static_config)
+}
+
+/// Loads logging configuration from the given path or default config file if available, falling back to defaults.
+pub fn load_logging_config(path: Option<&Path>) -> LoggingConfig {
+    load_static_config(path).logging
 }
 
 static ACTIVE_STATIC_CONFIG: RwLock<Option<StaticConfig>> = RwLock::new(None);
@@ -325,7 +326,8 @@ pub fn get_static_config() -> StaticConfig {
     } else {
         drop(read);
         let mut write = ACTIVE_STATIC_CONFIG.write().unwrap_or_else(|e| e.into_inner());
-        let cfg = default_static_config();
+        // Without this, model_mapping, keep_alive_secs and native_agy.binary from config.json were never applied.
+        let cfg = write.clone().unwrap_or_else(|| load_static_config(None));
         *write = Some(cfg.clone());
         cfg
     }
@@ -755,6 +757,28 @@ mod tests {
             let cfg = load_config_file(&cfg_path).unwrap();
             assert_eq!(cfg.scheduler.strategy, STRATEGY_SMART);
         }
+    }
+
+    #[test]
+    fn load_static_config_reads_file_and_falls_back_to_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = tmp.path().join("good.json");
+        std::fs::write(
+            &good,
+            r#"{"version":1,"model_mapping":{"a":"b"},"server":{"keep_alive_secs":7}}"#,
+        )
+        .unwrap();
+        let cfg = load_static_config(Some(&good));
+        assert_eq!(cfg.model_mapping.get("a").map(String::as_str), Some("b"));
+        assert_eq!(cfg.server.keep_alive_secs, 7);
+
+        let bad = tmp.path().join("bad.json");
+        std::fs::write(&bad, r#"{"version":1,"no_such_key":true}"#).unwrap();
+        assert_eq!(load_static_config(Some(&bad)), default_static_config());
+        assert_eq!(
+            load_static_config(Some(&tmp.path().join("missing.json"))),
+            default_static_config()
+        );
     }
 
     #[test]
