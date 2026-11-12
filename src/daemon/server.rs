@@ -1119,6 +1119,27 @@ mod tests {
                 buf.starts_with("HTTP/1.1 200") && buf.contains("{\"status\":\"ok\"}"),
                 "expected 200 /healthz on {host}:{port}, got: {buf}"
             );
+
+            // Dashboard API must accept each bound IP as Host/Origin and report every endpoint.
+            let mut stream = tokio::net::TcpStream::connect(format!("{host}:{port}")).await.unwrap();
+            stream
+                .write_all(
+                    format!(
+                        "GET /api/v1/status HTTP/1.1\r\nHost: {host}:{port}\r\nOrigin: http://{host}:{port}\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut buf = String::new();
+            let _ = tokio::time::timeout(Duration::from_secs(2), stream.read_to_string(&mut buf))
+                .await
+                .expect("timeout reading /api/v1/status response");
+            assert!(
+                buf.starts_with("HTTP/1.1 200")
+                    && buf.contains(&format!("\"listen\":\"127.0.0.1:{port}, 127.0.0.2:{port}\"")),
+                "expected 200 /api/v1/status listing both endpoints on {host}:{port}, got: {buf}"
+            );
         }
 
         let info = super::super::pid::read_pid_file(&pid_file).unwrap();
