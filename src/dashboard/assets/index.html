@@ -600,7 +600,7 @@
         <span id="header-status-dot" class="status-dot pulse"></span>
         <span>agy-pool dashboard</span>
       </div>
-      <div id="endpoint-pill" class="pill pill-mono">127.0.0.1:8899 · smart</div>
+      <div id="endpoint-pill" class="pill pill-mono">—</div>
       <div id="version-pill" class="pill pill-mono">v...</div>
       <div id="uptime-pill" class="pill">up —</div>
     </div>
@@ -909,7 +909,11 @@
         statusData = await res.json();
 
         // Update pills
-        document.getElementById('endpoint-pill').textContent = `${statusData.listen} · ${statusData.strategy}`;
+        const endpointPill = document.getElementById('endpoint-pill');
+        endpointPill.textContent = `${window.location.host || statusData.listen} · ${statusData.strategy}`;
+        if (statusData.listen) {
+          endpointPill.title = `Listening: ${statusData.listen}`;
+        }
         document.getElementById('version-pill').textContent = `v${statusData.version}`;
         const upFormatted = formatDuration(statusData.uptime_secs);
         document.getElementById('uptime-pill').textContent = `up ${upFormatted}`;

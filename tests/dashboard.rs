@@ -642,6 +642,10 @@ async fn test_embedded_spa_asset_constraints() {
     for line in body_str.lines().filter(|l| l.contains("localStorage.")) {
         assert!(line.contains("try {"), "unguarded localStorage access: {}", line.trim());
     }
+    assert!(
+        body_str.contains("window.location.host"),
+        "missing window.location.host endpoint pill formatting"
+    );
 
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
