@@ -159,7 +159,7 @@ After `install`, plain `agy` goes through the pool with no flags or environment 
 }
 ```
 
-- `server.listen`: Bind address, interface name, or array of addresses/interfaces (e.g. `"127.0.0.1"`, `"tailscale0"`, or `["lo", "tailscale0"]`). Defaults to `"127.0.0.1"`.
+- `server.listen`: Bind address, interface name, or array of addresses/interfaces (e.g. `"127.0.0.1"`, `"tailscale0"`, or `["lo", "tailscale0"]`). Defaults to `"127.0.0.1"`. `"0.0.0.0"` or `"::"` must be the only entry; `"localhost"` binds 127.0.0.1 only.
 - `server.keep_alive_secs`: Interval (seconds) for SSE heartbeat frames (`: keep-alive`). `0` disables keep-alive (default).
 - `model_mapping`: Maps requested model names/aliases to target models across URL paths and request payloads.
 - `logging.audit_max_size_bytes`: Maximum file size before `audit-events.jsonl` rotates (defaults to 20 MiB).

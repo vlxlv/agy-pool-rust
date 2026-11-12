@@ -292,13 +292,14 @@ pub fn resolve_instance_context(
             .filter(|p| !p.as_os_str().is_empty())
     };
 
-    if let Some(cfg_p) = target_cfg {
-        let can = canonicalize_file(&cfg_p)?;
-        if can.exists() {
-            cfg_hash = Some(crate::config::compute_config_file_hash(&can)?);
-            static_cfg = Some(crate::config::load_config_file(&can)?);
-            can_config_path = Some(can);
-        }
+    // Stay lenient on a broken config (as before) so stop/status keep working while the user fixes it.
+    if let Some(cfg_p) = target_cfg
+        && let Ok(can) = canonicalize_file(&cfg_p)
+        && can.exists()
+    {
+        cfg_hash = crate::config::compute_config_file_hash(&can).ok();
+        static_cfg = crate::config::load_config_file(&can).ok();
+        can_config_path = Some(can);
     }
 
     let mut final_port = port.unwrap_or(0);
@@ -566,22 +567,14 @@ pub fn check_status_with_file(
             format!("daemon running (PID {}) has legacy unverified metadata", info.pid),
         ),
         MatchResult::Exact => {
-            let addrs = match resolved_addrs_res {
-                Ok(a) => a,
-                Err(e) => {
-                    return (
-                        InstanceStatus::StalePID,
-                        Some(info.clone()),
-                        format!("daemon PID {} is alive but listen target unavailable: {e}", info.pid),
-                    );
-                }
-            };
-            if !super::server::all_addrs_listening(&addrs) {
+            // Probe what the daemon actually bound; one interface going down must not mark a serving daemon stale.
+            let addrs = super::server::resolve_info_socket_addrs(&info, ctx.listen_port);
+            if !super::server::any_addr_listening(&addrs) {
                 return (
                     InstanceStatus::StalePID,
                     Some(info.clone()),
                     format!(
-                        "daemon PID {} is alive but not all configured endpoints ({}) are listening",
+                        "daemon PID {} is alive but none of its endpoints ({}) are listening",
                         info.pid,
                         ctx.display_listen(Some(&info))
                     ),

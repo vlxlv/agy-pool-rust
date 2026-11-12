@@ -89,23 +89,24 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
     }
 
     let entrypoint = opts.entrypoint_path.clone().unwrap_or_else(super::pid::entrypoint);
-    let target_addrs = super::server::resolve_context_socket_addrs(ctx)?;
 
     // 1. Check current instance status
     let mut was_restarted = false;
-    if super::server::is_daemon_running(Some(&pid_file), ctx.listen_port) {
-        if super::server::is_daemon_outdated(Some(&pid_file), ctx.listen_port) {
-            was_restarted = true;
-            super::control::stop_with_file(ctx, &pid_file, Duration::from_secs(5))?;
-            std::thread::sleep(Duration::from_millis(300));
-        } else {
-            let pid = super::pid::get_daemon_pid(Some(&pid_file));
-            return Ok(StartResult {
-                pid,
-                already_run: true,
-                was_restarted: false,
-            });
-        }
+    let running = super::server::is_daemon_running(Some(&pid_file), ctx.listen_port);
+    if running && !super::server::is_daemon_outdated(Some(&pid_file), ctx.listen_port) {
+        let pid = super::pid::get_daemon_pid(Some(&pid_file));
+        return Ok(StartResult {
+            pid,
+            already_run: true,
+            was_restarted: false,
+        });
+    }
+    // Resolve only when we must spawn, and before stopping an outdated daemon so a missing interface fails closed.
+    let target_addrs = super::server::resolve_context_socket_addrs(ctx)?;
+    if running {
+        was_restarted = true;
+        super::control::stop_with_file(ctx, &pid_file, Duration::from_secs(5))?;
+        std::thread::sleep(Duration::from_millis(300));
     } else if super::server::any_addr_listening(&target_addrs) {
         return Err(DaemonError::ForeignPortOccupied(format!(
             "{} is occupied by another process or instance",

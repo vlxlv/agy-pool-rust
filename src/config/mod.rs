@@ -154,8 +154,17 @@ pub fn is_valid_listen_target(target: &str) -> bool {
     if target.eq_ignore_ascii_case("localhost") || target.parse::<std::net::IpAddr>().is_ok() {
         return true;
     }
-    // Reject malformed IP-like values (e.g. 999.999.999.999, host:port, bare port) instead of treating as interface names.
-    if target.contains(':') || target.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+    // Linux IPv4 alias labels look like "eth0:1"; any other ':' is a malformed IP or host:port.
+    if let Some((base, label)) = target.split_once(':') {
+        return target.len() <= 15
+            && !base.eq_ignore_ascii_case("localhost")
+            && base.parse::<std::net::IpAddr>().is_err()
+            && !label.is_empty()
+            && label.bytes().all(|b| b.is_ascii_alphanumeric())
+            && is_valid_listen_target(base);
+    }
+    // Reject malformed IP-like values (e.g. 999.999.999.999, bare port) instead of treating as interface names.
+    if target.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
         return false;
     }
     // POSIX/Linux IFNAMSIZ is 16 bytes including NUL terminator.
@@ -773,6 +782,11 @@ mod tests {
                 r#"{"version":1,"server":{"listen":["lo","tailscale0","eth0.100","::1"]}}"#,
                 vec!["lo", "tailscale0", "eth0.100", "::1"],
             ),
+            (
+                "iface_alias_label",
+                r#"{"version":1,"server":{"listen":"eth0:1"}}"#,
+                vec!["eth0:1"],
+            ),
         ];
 
         for (name, json_str, expected) in valid_cases {
@@ -798,6 +812,10 @@ mod tests {
                 r#"{"version":1,"server":{"listen":"127.0.0.1:8899"}}"#,
             ),
             ("iface_with_slash", r#"{"version":1,"server":{"listen":"bad/iface"}}"#),
+            (
+                "localhost_with_port",
+                r#"{"version":1,"server":{"listen":"localhost:8899"}}"#,
+            ),
             (
                 "iface_too_long",
                 r#"{"version":1,"server":{"listen":"too_long_iface_16"}}"#,

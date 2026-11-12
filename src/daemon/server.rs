@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -152,7 +152,7 @@ pub fn resolve_interface_ips(if_name: &str) -> Result<Vec<IpAddr>, DaemonError> 
 
     if !found_iface {
         return Err(DaemonError::Message(format!(
-            "listen interface \"{if_name}\" not found"
+            "listen interface \"{if_name}\" not found (hostnames are not supported; use an IP address or interface name)"
         )));
     }
     if !any_up {
@@ -201,29 +201,20 @@ pub fn resolve_listen_targets(targets: &[String], port: u16) -> Result<Vec<Socke
         if let Ok(ip) = target.parse::<IpAddr>() {
             push_unique(SocketAddr::new(ip, port));
         } else if target.eq_ignore_ascii_case("localhost") {
-            let addrs: Vec<SocketAddr> = ("localhost", port)
-                .to_socket_addrs()
-                .map_err(|e| DaemonError::Message(format!("failed to resolve \"localhost\": {e}")))?
-                .collect();
-            let lo_has_v6 = resolve_interface_ips("lo")
-                .map(|ips| ips.contains(&IpAddr::V6(Ipv6Addr::LOCALHOST)))
-                .unwrap_or(false);
-            let mut count = 0;
-            for sa in addrs {
-                if sa.ip() == IpAddr::V6(Ipv6Addr::LOCALHOST) && !lo_has_v6 {
-                    continue;
-                }
-                push_unique(sa);
-                count += 1;
-            }
-            if count == 0 {
-                push_unique(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
-            }
+            // Single address, matching what 0.3.x bound; list "::1" explicitly for IPv6 loopback.
+            push_unique(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
         } else {
             for ip in resolve_interface_ips(target)? {
                 push_unique(SocketAddr::new(ip, port));
             }
         }
+    }
+
+    // Linux refuses a specific bind on a port held by 0.0.0.0/:: (and :: is dual-stack), so a wildcard must stand alone.
+    if resolved.len() > 1 && resolved.iter().any(|a| a.ip().is_unspecified()) {
+        return Err(DaemonError::Config(crate::config::ConfigError::Validation(
+            "invalid server listen address: 0.0.0.0 or :: cannot be combined with other listen targets".to_string(),
+        )));
     }
 
     Ok(resolved)
@@ -332,7 +323,7 @@ pub fn is_daemon_running(pid_file: Option<&Path>, port: u16) -> bool {
         _ => return false,
     };
     let addrs = resolve_info_socket_addrs(&info, port);
-    all_addrs_listening(&addrs)
+    any_addr_listening(&addrs)
 }
 
 /// Checks if the running daemon has an older version or older binary mtime.
@@ -348,7 +339,7 @@ pub fn is_daemon_outdated(pid_file: Option<&Path>, port: u16) -> bool {
     };
 
     let addrs = resolve_info_socket_addrs(&info, port);
-    if !all_addrs_listening(&addrs) {
+    if !any_addr_listening(&addrs) {
         return false;
     }
 
@@ -617,9 +608,8 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     }
 
     tokio::select! {
-        _ = async {
-            while accept_tasks.join_next().await.is_some() {}
-        } => {}
+        // Any accept loop ending means an accept error: exit so the supervisor restarts us (as the single-listener loop did).
+        _ = accept_tasks.join_next() => {}
         _ = async {
             if let Some(rx) = shutdown_rx.as_mut() {
                 let _ = rx.await;
@@ -1025,6 +1015,16 @@ mod tests {
             let dedup = resolve_listen_targets(&["lo".to_string(), "127.0.0.1".to_string()], 8890).unwrap();
             assert_eq!(dedup, lo_addrs, "duplicate 127.0.0.1 must be deduplicated");
         }
+
+        for combo in [["0.0.0.0", "::"], ["0.0.0.0", "127.0.0.1"], ["::", "localhost"]] {
+            let targets: Vec<String> = combo.iter().map(|s| s.to_string()).collect();
+            let err = resolve_listen_targets(&targets, 8890).unwrap_err();
+            assert!(err.to_string().contains("cannot be combined"), "{combo:?}: {err}");
+        }
+        assert_eq!(
+            resolve_listen_targets(&["localhost".to_string()], 8890).unwrap(),
+            vec![SocketAddr::from(([127, 0, 0, 1], 8890))]
+        );
 
         let err = resolve_listen_targets(&["agy_no_such0".to_string()], 8890).unwrap_err();
         assert!(

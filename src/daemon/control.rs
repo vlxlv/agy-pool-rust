@@ -15,9 +15,12 @@ pub fn stop_with_file(
         Ok(info) => info,
         Err(DaemonError::PIDNotFound) => return Err(DaemonError::NotRunning),
         Err(err) => {
-            // Malformed PID file: safely clean up if configured listen targets are not listening
-            let addrs = super::server::resolve_context_socket_addrs(ctx).unwrap_or_default();
-            if !super::server::any_addr_listening(&addrs) {
+            // Malformed PID file: clean up only if nothing listens; unresolvable targets fall back to the loopback probe.
+            let listening = match super::server::resolve_context_socket_addrs(ctx) {
+                Ok(addrs) => super::server::any_addr_listening(&addrs),
+                Err(_) => super::server::is_port_listening(ctx.listen_port),
+            };
+            if !listening {
                 let _ = std::fs::remove_file(pid_file);
                 return Ok(());
             }
