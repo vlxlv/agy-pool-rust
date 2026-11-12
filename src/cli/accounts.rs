@@ -376,50 +376,21 @@ pub fn resolve_configured_port(explicit_port: Option<u16>) -> u16 {
     crate::config::DEFAULT_PORT
 }
 
-pub fn resolve_configured_listen_targets(ctx: Option<&crate::daemon::InstanceContext>) -> Vec<String> {
-    if let Some(c) = ctx {
-        return c.effective_listen_targets();
-    }
-    if let Ok(cfg_path) = crate::config::resolve_default_config_file()
-        && !cfg_path.as_os_str().is_empty()
-        && cfg_path.exists()
-        && let Ok(cfg) = crate::config::load_config_file(&cfg_path)
-        && !cfg.server.listen.is_empty()
-    {
-        return cfg.server.listen;
-    }
-    let sc = crate::config::get_static_config();
-    if !sc.server.listen.is_empty() {
-        return sc.server.listen;
-    }
-    vec!["127.0.0.1".to_string()]
-}
-
-fn probe_gateway_display(
-    ctx: Option<&crate::daemon::InstanceContext>,
-    targets: &[String],
-    port: u16,
-) -> (bool, String) {
+/// Live gateway status for the list header; uses the daemon's recorded endpoints, else the context's targets.
+fn probe_gateway_display(ctx: Option<&crate::daemon::InstanceContext>, port: u16) -> (bool, String) {
     let pid_file = ctx.map(|c| c.pid_file());
-    let live_info = crate::daemon::get_daemon_info(pid_file.as_deref());
-    let addrs = if let Some(ref info) = live_info
-        && !info.listen_addrs.is_empty()
-        && info.port == Some(port)
-    {
-        crate::daemon::resolve_info_socket_addrs(info, port)
-    } else if let Ok(resolved) = crate::daemon::resolve_listen_targets(targets, port) {
-        resolved
-    } else {
-        let fallback = targets.first().map(String::as_str).unwrap_or("127.0.0.1");
-        let disp = if let Ok(ip) = fallback.parse::<std::net::IpAddr>() {
-            std::net::SocketAddr::new(ip, port).to_string()
-        } else {
-            format!("{fallback}:{port}")
-        };
-        return (false, disp);
+    let info = crate::daemon::get_daemon_info(pid_file.as_deref())
+        .filter(|i| !i.listen_addrs.is_empty() && i.port == Some(port));
+    let addrs = match (&info, ctx) {
+        (Some(i), _) => crate::daemon::resolve_info_socket_addrs(i, port),
+        (None, Some(c)) => match crate::daemon::resolve_context_socket_addrs(c) {
+            Ok(addrs) => addrs,
+            Err(_) => return (false, c.display_listen(None)),
+        },
+        (None, None) => vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))],
     };
 
-    let running = crate::daemon::all_addrs_listening(&addrs);
+    let running = crate::daemon::any_addr_listening(&addrs);
     let primary = crate::daemon::pick_primary_connect_addr(&addrs)
         .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], port)));
     let disp = if addrs.len() <= 1 {
@@ -523,8 +494,7 @@ fn list_accounts_inner(
         .filter(|&p| p > 0)
         .or_else(|| ctx.map(|c| c.listen_port).filter(|&p| p > 0))
         .unwrap_or_else(|| resolve_configured_port(explicit_port));
-    let targets = resolve_configured_listen_targets(ctx);
-    let (daemon_running, listen_disp) = probe_gateway_display(ctx, &targets, port);
+    let (daemon_running, listen_disp) = probe_gateway_display(ctx, port);
     let now_ts = crate::clock::now_unix() as i64;
 
     if width >= 60 {

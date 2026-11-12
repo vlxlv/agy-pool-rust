@@ -248,7 +248,12 @@ pub fn format_socket_addrs(addrs: &[SocketAddr]) -> String {
 }
 
 pub fn resolve_context_socket_addrs(ctx: &super::instance::InstanceContext) -> Result<Vec<SocketAddr>, DaemonError> {
-    resolve_listen_targets(&ctx.effective_listen_targets(), ctx.listen_port)
+    match &ctx.resolved_listen {
+        // Re-apply the port: callers such as restart's stop_ctx override listen_port after resolution.
+        Some(Ok(addrs)) => Ok(addrs.iter().map(|a| SocketAddr::new(a.ip(), ctx.listen_port)).collect()),
+        Some(Err(e)) => Err(DaemonError::Message(e.clone())),
+        None => resolve_listen_targets(&ctx.effective_listen_targets(), ctx.listen_port),
+    }
 }
 
 pub fn resolve_info_socket_addrs(info: &super::pid::DaemonInfo, port_override: u16) -> Vec<SocketAddr> {
@@ -490,7 +495,7 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     let start_time = jiff::Timestamp::now();
     let primary_host = pick_primary_connect_addr(&bound_addrs)
         .map(|sa| sa.ip().to_string())
-        .unwrap_or_else(|| ctx_inst.listen_host.clone());
+        .unwrap_or_else(|| "127.0.0.1".to_string());
     let listen_addrs: Vec<String> = bound_addrs.iter().map(ToString::to_string).collect();
     let runtime_listen = format_socket_addrs(&bound_addrs);
     crate::dashboard::dto::set_runtime_meta(runtime_listen, start_time);

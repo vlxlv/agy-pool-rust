@@ -49,9 +49,11 @@ pub struct InstanceContext {
     pub config_path: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
-    pub listen_host: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub listen_targets: Vec<String>,
+    /// listen_targets resolved once at context creation (Err holds the message); None means resolve on demand.
+    #[serde(skip)]
+    pub resolved_listen: Option<Result<Vec<std::net::SocketAddr>, String>>,
     pub listen_port: u16,
     pub binary_path: PathBuf,
     pub version: String,
@@ -61,8 +63,6 @@ impl InstanceContext {
     pub fn effective_listen_targets(&self) -> Vec<String> {
         if !self.listen_targets.is_empty() {
             self.listen_targets.clone()
-        } else if !self.listen_host.is_empty() {
-            vec![self.listen_host.clone()]
         } else {
             vec!["127.0.0.1".to_string()]
         }
@@ -82,13 +82,10 @@ impl InstanceContext {
                 return primary;
             }
         }
-        if let Ok(addrs) = super::server::resolve_listen_targets(&self.effective_listen_targets(), port)
+        if let Ok(addrs) = super::server::resolve_context_socket_addrs(self)
             && let Some(primary) = super::server::pick_primary_connect_addr(&addrs)
         {
-            return primary;
-        }
-        if let Ok(ip) = self.listen_host.parse::<std::net::IpAddr>() {
-            return super::server::connectable_socket_addr(std::net::SocketAddr::new(ip, port));
+            return std::net::SocketAddr::new(primary.ip(), port);
         }
         std::net::SocketAddr::from(([127, 0, 0, 1], port))
     }
@@ -103,7 +100,7 @@ impl InstanceContext {
         {
             return i.listen_addrs.join(", ");
         }
-        if let Ok(addrs) = super::server::resolve_listen_targets(&self.effective_listen_targets(), self.listen_port)
+        if let Ok(addrs) = super::server::resolve_context_socket_addrs(self)
             && !addrs.is_empty()
         {
             return super::server::format_socket_addrs(&addrs);
@@ -342,20 +339,15 @@ pub fn resolve_instance_context(
         }
     }
 
-    let final_listen_host = if let Ok(addrs) = super::server::resolve_listen_targets(&final_listen_targets, final_port)
-        && let Some(primary) = super::server::pick_primary_connect_addr(&addrs)
-    {
-        primary.ip().to_string()
-    } else {
-        final_listen_targets[0].clone()
-    };
+    let resolved_listen =
+        super::server::resolve_listen_targets(&final_listen_targets, final_port).map_err(|e| e.to_string());
 
     Ok(InstanceContext {
         data_dir: can_data_dir,
         config_path: can_config_path,
         config_hash: cfg_hash,
-        listen_host: final_listen_host,
         listen_targets: final_listen_targets,
+        resolved_listen: Some(resolved_listen),
         listen_port: final_port,
         binary_path: super::pid::entrypoint(),
         version: crate::VERSION.to_string(),
@@ -653,7 +645,7 @@ mod tests {
         assert_eq!(ctx.config_path, Some(can_cfg_path));
         assert!(ctx.config_hash.is_some());
         assert_eq!(ctx.listen_port, 9199);
-        assert_eq!(ctx.listen_host, "127.0.0.1");
+        assert_eq!(ctx.listen_targets, vec!["127.0.0.1".to_string()]);
         assert_eq!(ctx.pid_file(), can_data_dir.join("agy-pool.pid"));
         assert_eq!(ctx.log_file(), can_data_dir.join("agy-pool.log"));
         assert_eq!(ctx.state_db(), can_data_dir.join("state.db"));
@@ -685,7 +677,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -698,7 +690,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -711,7 +703,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(9102),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -725,7 +717,7 @@ mod tests {
             config_path: Some(can_cfg_b.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -741,7 +733,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: Some("different-hash".to_string()),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -757,7 +749,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };

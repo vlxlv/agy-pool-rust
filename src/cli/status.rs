@@ -519,8 +519,8 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
             ..Default::default()
@@ -594,8 +594,8 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
             ..Default::default()
@@ -666,8 +666,8 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
             ..Default::default()
@@ -879,8 +879,8 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
             ..Default::default()
