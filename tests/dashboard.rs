@@ -621,6 +621,18 @@ async fn test_embedded_spa_asset_constraints() {
     // Assert body includes the email visibility toggle control (show_email)
     assert!(body_str.contains("show_email"), "missing show_email toggle control");
 
+    // Assert body includes system/manual theme switching support
+    assert!(body_str.contains("theme-switcher"), "missing theme-switcher control");
+    assert!(
+        body_str.contains("prefers-color-scheme: light"),
+        "missing prefers-color-scheme: light detection"
+    );
+    assert!(
+        body_str.contains(r#"data-theme="light""#),
+        "missing light theme CSS override"
+    );
+    assert!(body_str.contains("agy_theme"), "missing agy_theme persistence key");
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
