@@ -325,11 +325,14 @@ pub fn get_static_config() -> StaticConfig {
         cfg.clone()
     } else {
         drop(read);
+        // Load outside the lock. Tests skip the host's config file so they stay hermetic.
+        let loaded = if is_test_mode() {
+            default_static_config()
+        } else {
+            load_static_config(None)
+        };
         let mut write = ACTIVE_STATIC_CONFIG.write().unwrap_or_else(|e| e.into_inner());
-        // Without this, model_mapping, keep_alive_secs and native_agy.binary from config.json were never applied.
-        let cfg = write.clone().unwrap_or_else(|| load_static_config(None));
-        *write = Some(cfg.clone());
-        cfg
+        write.get_or_insert(loaded).clone()
     }
 }
 
