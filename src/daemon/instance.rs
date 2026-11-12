@@ -49,13 +49,76 @@ pub struct InstanceContext {
     pub config_path: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
-    pub listen_host: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listen_targets: Vec<String>,
+    /// listen_targets resolved once at context creation (Err holds the message); None means resolve on demand.
+    #[serde(skip)]
+    pub resolved_listen: Option<Result<Vec<std::net::SocketAddr>, String>>,
     pub listen_port: u16,
     pub binary_path: PathBuf,
     pub version: String,
 }
 
 impl InstanceContext {
+    pub fn effective_listen_targets(&self) -> Vec<String> {
+        if !self.listen_targets.is_empty() {
+            self.listen_targets.clone()
+        } else {
+            vec!["127.0.0.1".to_string()]
+        }
+    }
+
+    pub fn primary_connect_addr(&self, info: Option<&super::pid::DaemonInfo>) -> std::net::SocketAddr {
+        let port = if self.listen_port > 0 {
+            self.listen_port
+        } else {
+            info.and_then(|i| i.port).unwrap_or(crate::config::DEFAULT_PORT)
+        };
+        if let Some(i) = info
+            && !i.listen_addrs.is_empty()
+        {
+            let addrs = super::server::resolve_info_socket_addrs(i, port);
+            if let Some(primary) = super::server::pick_primary_connect_addr(&addrs) {
+                return primary;
+            }
+        }
+        if let Ok(addrs) = super::server::resolve_context_socket_addrs(self)
+            && let Some(primary) = super::server::pick_primary_connect_addr(&addrs)
+        {
+            return std::net::SocketAddr::new(primary.ip(), port);
+        }
+        std::net::SocketAddr::from(([127, 0, 0, 1], port))
+    }
+
+    pub fn gateway_url(&self, info: Option<&super::pid::DaemonInfo>) -> String {
+        format!("http://{}", self.primary_connect_addr(info))
+    }
+
+    pub fn display_listen(&self, info: Option<&super::pid::DaemonInfo>) -> String {
+        if let Some(i) = info
+            && !i.listen_addrs.is_empty()
+        {
+            return i.listen_addrs.join(", ");
+        }
+        if let Ok(addrs) = super::server::resolve_context_socket_addrs(self)
+            && !addrs.is_empty()
+        {
+            return super::server::format_socket_addrs(&addrs);
+        }
+        let targets = self.effective_listen_targets();
+        targets
+            .into_iter()
+            .map(|t| {
+                if let Ok(ip) = t.parse::<std::net::IpAddr>() {
+                    std::net::SocketAddr::new(ip, self.listen_port).to_string()
+                } else {
+                    format!("{t}:{}", self.listen_port)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn pid_file(&self) -> PathBuf {
         self.data_dir.join("agy-pool.pid")
     }
@@ -221,24 +284,23 @@ pub fn resolve_instance_context(
             None
         }
     } else {
-        crate::config::resolve_default_config_file().ok()
+        crate::config::resolve_default_config_file()
+            .ok()
+            .filter(|p| !p.as_os_str().is_empty())
     };
 
+    // Stay lenient on a broken config (as before) so stop/status keep working while the user fixes it.
     if let Some(cfg_p) = target_cfg
         && let Ok(can) = canonicalize_file(&cfg_p)
         && can.exists()
     {
-        if let Ok(h) = crate::config::compute_config_file_hash(&can) {
-            cfg_hash = Some(h);
-        }
-        if let Ok(c) = crate::config::load_config_file(&can) {
-            static_cfg = Some(c);
-        }
+        cfg_hash = crate::config::compute_config_file_hash(&can).ok();
+        static_cfg = crate::config::load_config_file(&can).ok();
         can_config_path = Some(can);
     }
 
     let mut final_port = port.unwrap_or(0);
-    let mut final_listen_host = listen_host.unwrap_or("").to_string();
+    let explicit_listen = listen_host.unwrap_or("").trim();
 
     if final_port == 0
         && let Ok(p_str) = std::env::var(super::lifecycle::ENV_DAEMON_PORT)
@@ -247,27 +309,45 @@ pub fn resolve_instance_context(
         final_port = p;
     }
 
+    let mut final_listen_targets: Vec<String> = if !explicit_listen.is_empty() {
+        vec![explicit_listen.to_string()]
+    } else {
+        Vec::new()
+    };
+
     if let Some(sc) = &static_cfg {
         if final_port == 0 && sc.server.port > 0 {
             final_port = sc.server.port as u16;
         }
-        if final_listen_host.is_empty() && !sc.server.listen.is_empty() {
-            final_listen_host = sc.server.listen.clone();
+        if final_listen_targets.is_empty() && !sc.server.listen.is_empty() {
+            final_listen_targets = sc.server.listen.clone();
         }
     }
 
     if final_port == 0 {
         final_port = crate::config::DEFAULT_PORT;
     }
-    if final_listen_host.is_empty() {
-        final_listen_host = "127.0.0.1".to_string();
+    if final_listen_targets.is_empty() {
+        final_listen_targets = vec!["127.0.0.1".to_string()];
     }
+
+    for target in &final_listen_targets {
+        if !crate::config::is_valid_listen_target(target) {
+            return Err(DaemonError::Config(crate::config::ConfigError::Validation(format!(
+                "invalid server listen address \"{target}\""
+            ))));
+        }
+    }
+
+    let resolved_listen =
+        super::server::resolve_listen_targets(&final_listen_targets, final_port).map_err(|e| e.to_string());
 
     Ok(InstanceContext {
         data_dir: can_data_dir,
         config_path: can_config_path,
         config_hash: cfg_hash,
-        listen_host: final_listen_host,
+        listen_targets: final_listen_targets,
+        resolved_listen: Some(resolved_listen),
         listen_port: final_port,
         binary_path: super::pid::entrypoint(),
         version: crate::VERSION.to_string(),
@@ -369,27 +449,34 @@ pub fn check_status_with_file(
     ctx: &InstanceContext,
     pid_file: &Path,
 ) -> (InstanceStatus, Option<super::pid::DaemonInfo>, String) {
+    let resolved_addrs_res = super::server::resolve_context_socket_addrs(ctx);
+    let any_target_listening = |res: &Result<Vec<std::net::SocketAddr>, DaemonError>| -> bool {
+        res.as_ref()
+            .map(|addrs| super::server::any_addr_listening(addrs))
+            .unwrap_or(false)
+    };
+
     let info = match super::pid::read_pid_file(pid_file) {
         Ok(info) => info,
         Err(DaemonError::PIDNotFound) => {
-            if super::server::is_port_listening(ctx.listen_port) {
+            if any_target_listening(&resolved_addrs_res) {
                 return (
                     InstanceStatus::PortOccupiedForeign,
                     None,
                     format!(
-                        "port {} occupied by another process, no PID file for this instance",
-                        ctx.listen_port
+                        "{} occupied by another process, no PID file for this instance",
+                        ctx.display_listen(None)
                     ),
                 );
             }
             return (InstanceStatus::Stopped, None, "instance stopped".to_string());
         }
         Err(err) => {
-            if super::server::is_port_listening(ctx.listen_port) {
+            if any_target_listening(&resolved_addrs_res) {
                 return (
                     InstanceStatus::PortOccupiedForeign,
                     None,
-                    format!("malformed PID file and port {} occupied", ctx.listen_port),
+                    format!("malformed PID file and {} occupied", ctx.display_listen(None)),
                 );
             }
             return (InstanceStatus::StalePID, None, format!("malformed PID file: {err}"));
@@ -397,13 +484,14 @@ pub fn check_status_with_file(
     };
 
     if !super::pid::is_process_alive(info.pid) {
-        if super::server::is_port_listening(ctx.listen_port) {
+        if any_target_listening(&resolved_addrs_res) {
             return (
                 InstanceStatus::PortOccupiedForeign,
                 Some(info.clone()),
                 format!(
-                    "daemon PID {} dead but port {} occupied by another process",
-                    info.pid, ctx.listen_port
+                    "daemon PID {} dead but {} occupied by another process",
+                    info.pid,
+                    ctx.display_listen(None)
                 ),
             );
         }
@@ -471,13 +559,16 @@ pub fn check_status_with_file(
             format!("daemon running (PID {}) has legacy unverified metadata", info.pid),
         ),
         MatchResult::Exact => {
-            if !super::server::is_port_listening(ctx.listen_port) {
+            // Probe what the daemon actually bound; one interface going down must not mark a serving daemon stale.
+            let addrs = super::server::resolve_info_socket_addrs(&info, ctx.listen_port);
+            if !super::server::any_addr_listening(&addrs) {
                 return (
                     InstanceStatus::StalePID,
                     Some(info.clone()),
                     format!(
-                        "daemon PID {} is alive but port {} is not listening",
-                        info.pid, ctx.listen_port
+                        "daemon PID {} is alive but none of its endpoints ({}) are listening",
+                        info.pid,
+                        ctx.display_listen(Some(&info))
                     ),
                 );
             }
@@ -492,8 +583,9 @@ pub fn check_status_with_file(
                 InstanceStatus::RunningSameInstance,
                 Some(info.clone()),
                 format!(
-                    "daemon running (PID {}) on http://{}:{}",
-                    info.pid, ctx.listen_host, ctx.listen_port
+                    "daemon running (PID {}) on {}",
+                    info.pid,
+                    ctx.display_listen(Some(&info))
                 ),
             )
         }
@@ -553,7 +645,7 @@ mod tests {
         assert_eq!(ctx.config_path, Some(can_cfg_path));
         assert!(ctx.config_hash.is_some());
         assert_eq!(ctx.listen_port, 9199);
-        assert_eq!(ctx.listen_host, "127.0.0.1");
+        assert_eq!(ctx.listen_targets, vec!["127.0.0.1".to_string()]);
         assert_eq!(ctx.pid_file(), can_data_dir.join("agy-pool.pid"));
         assert_eq!(ctx.log_file(), can_data_dir.join("agy-pool.log"));
         assert_eq!(ctx.state_db(), can_data_dir.join("state.db"));
@@ -585,7 +677,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -598,7 +690,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -611,7 +703,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(9102),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -625,7 +717,7 @@ mod tests {
             config_path: Some(can_cfg_b.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -641,7 +733,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: Some("different-hash".to_string()),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };
@@ -657,7 +749,7 @@ mod tests {
             config_path: ctx_a.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx_a.config_hash.clone(),
             port: Some(ctx_a.listen_port),
-            listen_host: Some(ctx_a.listen_host.clone()),
+            listen_host: Some(ctx_a.primary_connect_addr(None).ip().to_string()),
             version: Some(ctx_a.version.clone()),
             ..Default::default()
         };

@@ -180,3 +180,93 @@ fn test_daemon_child_production_lifecycle() {
     assert!(agy_pool::daemon::is_port_listening(port));
     drop(foreign_listener);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_daemon_child_listen_interface_and_fail_closed() {
+    let rust_bin = env!("CARGO_BIN_EXE_agy-pool");
+    let tmp_dir = tempfile::tempdir().expect("tempdir");
+
+    // Pick a port free across all addresses resolved from `lo`.
+    let mut port = 0;
+    for _ in 0..20 {
+        let p = get_ephemeral_port();
+        if p == 8890 || p == 8899 || p == 8901 {
+            continue;
+        }
+        if let Ok(addrs) = agy_pool::daemon::resolve_listen_targets(&["lo".to_string()], p)
+            && !addrs.is_empty()
+            && addrs.iter().all(|sa| std::net::TcpListener::bind(sa).is_ok())
+        {
+            port = p;
+            break;
+        }
+    }
+    assert_ne!(port, 0, "could not find free port across lo addresses");
+
+    let data_dir = tmp_dir.path().join("lo-data");
+    let config_dir = tmp_dir.path().join("lo-config");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+
+    let cfg_file = config_dir.join("config.json");
+    std::fs::write(
+        &cfg_file,
+        format!(r#"{{"version": 1, "server": {{"listen": ["lo"], "port": {port}}}}}"#),
+    )
+    .unwrap();
+
+    let ctx = agy_pool::daemon::resolve_instance_context(Some(&data_dir), Some(&cfg_file), Some(port), None)
+        .expect("resolve lo context");
+    assert_eq!(ctx.listen_targets, vec!["lo".to_string()]);
+
+    let res = agy_pool::daemon::start_instance(
+        &ctx,
+        agy_pool::daemon::LaunchOptions {
+            entrypoint_path: Some(PathBuf::from(rust_bin)),
+            ..Default::default()
+        },
+    )
+    .expect("start_instance on lo");
+    let mut kill_guard = ProcessGuard::new(res.pid);
+
+    assert!(wait_for_healthz(port, Duration::from_secs(3)));
+    let info = agy_pool::daemon::get_daemon_info(Some(&ctx.pid_file())).expect("pid info");
+    assert!(
+        info.listen_addrs.contains(&format!("127.0.0.1:{port}")),
+        "PID info should record bound 127.0.0.1:{port}, got {:?}",
+        info.listen_addrs
+    );
+    let expected_addrs = agy_pool::daemon::resolve_context_socket_addrs(&ctx).unwrap();
+    assert_eq!(
+        info.listen_addrs.len(),
+        expected_addrs.len(),
+        "PID info should record every resolved lo socket address"
+    );
+
+    agy_pool::daemon::stop_instance(&ctx, Duration::from_secs(5)).expect("stop_instance on lo");
+    kill_guard.disarm();
+    assert!(!agy_pool::daemon::is_port_listening(port));
+
+    // Missing interface must fail closed without spawning or creating a PID file.
+    let bad_data = tmp_dir.path().join("bad-iface-data");
+    std::fs::create_dir_all(&bad_data).unwrap();
+    let bad_cfg = config_dir.join("bad-iface.json");
+    std::fs::write(
+        &bad_cfg,
+        format!(r#"{{"version": 1, "server": {{"listen": ["agy_no_such0"], "port": {port}}}}}"#),
+    )
+    .unwrap();
+    let bad_ctx = agy_pool::daemon::resolve_instance_context(Some(&bad_data), Some(&bad_cfg), Some(port), None)
+        .expect("resolve syntax-valid missing interface context");
+    let err = agy_pool::daemon::start_instance(
+        &bad_ctx,
+        agy_pool::daemon::LaunchOptions {
+            entrypoint_path: Some(PathBuf::from(rust_bin)),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("not found"), "unexpected error: {err}");
+    assert!(!bad_ctx.pid_file().exists());
+}

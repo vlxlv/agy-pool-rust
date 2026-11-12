@@ -624,3 +624,32 @@ async fn test_embedded_spa_asset_constraints() {
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_host_validation_accepts_multi_listen_runtime_meta() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+
+    agy_pool::dashboard::dto::set_runtime_meta(
+        "127.0.0.1:8890, custom-gw.internal:8890".to_string(),
+        jiff::Timestamp::now(),
+    );
+
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let mut allowed = HeaderMap::new();
+    allowed.insert(hyper::header::HOST, "custom-gw.internal:8890".parse().unwrap());
+    let (status, _, body) = send_request(addr, Method::GET, "/api/v1/status", allowed, Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK, "expected multi-listen host entry to be allowed");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["listen"], "127.0.0.1:8890, custom-gw.internal:8890");
+
+    let mut denied = HeaderMap::new();
+    denied.insert(hyper::header::HOST, "evil.internal:8890".parse().unwrap());
+    let (status, _, _) = send_request(addr, Method::GET, "/api/v1/status", denied, Bytes::new()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}

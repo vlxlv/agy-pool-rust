@@ -81,8 +81,101 @@ impl From<&str> for ConfigError {
     }
 }
 
-fn default_server_listen() -> String {
-    "127.0.0.1".to_string()
+fn default_server_listen() -> Vec<String> {
+    vec!["127.0.0.1".to_string()]
+}
+
+fn deserialize_server_listen<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrVec;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a listen address/interface string or list of strings")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if v.is_empty() {
+                Ok(default_server_listen())
+            } else {
+                Ok(vec![v.to_owned()])
+            }
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if v.is_empty() {
+                Ok(default_server_listen())
+            } else {
+                Ok(vec![v])
+            }
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut items = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                items.push(item);
+            }
+            Ok(items)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
+}
+
+fn serialize_server_listen<S>(listen: &[String], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if listen.len() == 1 {
+        serializer.serialize_str(&listen[0])
+    } else {
+        use serde::Serialize;
+        listen.serialize(serializer)
+    }
+}
+
+pub fn is_valid_listen_target(target: &str) -> bool {
+    if target.is_empty() {
+        return false;
+    }
+    if target.eq_ignore_ascii_case("localhost") || target.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    // Linux IPv4 alias labels look like "eth0:1"; any other ':' is a malformed IP or host:port.
+    if let Some((base, label)) = target.split_once(':') {
+        return target.len() <= 15
+            && !base.eq_ignore_ascii_case("localhost")
+            && base.parse::<std::net::IpAddr>().is_err()
+            && !label.is_empty()
+            && label.bytes().all(|b| b.is_ascii_alphanumeric())
+            && is_valid_listen_target(base);
+    }
+    // Reject malformed IP-like values (e.g. 999.999.999.999, bare port) instead of treating as interface names.
+    if target.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return false;
+    }
+    // POSIX/Linux IFNAMSIZ is 16 bytes including NUL terminator.
+    if target.len() > 15 || target.starts_with('.') || target.ends_with('.') || target == ".." {
+        return false;
+    }
+    target.bytes().all(|b| {
+        !b.is_ascii_control()
+            && !b.is_ascii_whitespace()
+            && !matches!(b, b'/' | b'\\' | b'@' | b'[' | b']' | b'?' | b'#' | b',' | b'*')
+    })
 }
 
 fn default_server_port() -> i64 {
@@ -147,8 +240,12 @@ pub struct StaticConfig {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
-    #[serde(default = "default_server_listen")]
-    pub listen: String,
+    #[serde(
+        default = "default_server_listen",
+        deserialize_with = "deserialize_server_listen",
+        serialize_with = "serialize_server_listen"
+    )]
+    pub listen: Vec<String>,
     #[serde(default = "default_server_port")]
     pub port: i64,
     /// Seconds before a slow SSE request gets an early 200 and heartbeats; 0 = off.
@@ -186,7 +283,7 @@ pub fn default_static_config() -> StaticConfig {
     StaticConfig {
         version: 1,
         server: ServerConfig {
-            listen: "127.0.0.1".to_string(),
+            listen: default_server_listen(),
             port: DEFAULT_PORT as i64,
             keep_alive_secs: 0,
         },
@@ -330,12 +427,17 @@ pub fn load_config_file(path: &Path) -> Result<StaticConfig, ConfigError> {
         )));
     }
     if cfg.server.listen.is_empty() {
-        cfg.server.listen = "127.0.0.1".to_string();
-    } else if cfg.server.listen != "localhost" && cfg.server.listen.parse::<std::net::IpAddr>().is_err() {
-        return Err(ConfigError::Validation(format!(
-            "invalid server listen address \"{}\"",
-            cfg.server.listen
-        )));
+        return Err(ConfigError::Validation(
+            "invalid server listen address: list must not be empty".to_string(),
+        ));
+    }
+    for target in &cfg.server.listen {
+        if !is_valid_listen_target(target) {
+            return Err(ConfigError::Validation(format!(
+                "invalid server listen address \"{}\"",
+                target
+            )));
+        }
     }
 
     cfg.scheduler.strategy = migrate_legacy_strategy(&cfg.scheduler.strategy);
@@ -622,7 +724,7 @@ mod tests {
         let cfg = load_config_file(example_path).unwrap();
 
         assert_eq!(cfg.version, 1);
-        assert_eq!(cfg.server.listen, "127.0.0.1");
+        assert_eq!(cfg.server.listen, vec!["127.0.0.1".to_string()]);
         assert_eq!(cfg.server.port, 8899);
         assert_eq!(cfg.scheduler.strategy, STRATEGY_MAX_QUOTA);
         assert!(cfg.native_agy.binary.is_none());
@@ -652,6 +754,80 @@ mod tests {
             std::fs::write(&cfg_path, content).unwrap();
             let cfg = load_config_file(&cfg_path).unwrap();
             assert_eq!(cfg.scheduler.strategy, STRATEGY_SMART);
+        }
+    }
+
+    #[test]
+    fn server_listen_string_array_and_validation() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let valid_cases = [
+            (
+                "empty_string_defaults",
+                r#"{"version":1,"server":{"listen":""}}"#,
+                vec!["127.0.0.1"],
+            ),
+            (
+                "single_ip",
+                r#"{"version":1,"server":{"listen":"127.0.0.1"}}"#,
+                vec!["127.0.0.1"],
+            ),
+            (
+                "single_iface",
+                r#"{"version":1,"server":{"listen":"tailscale0"}}"#,
+                vec!["tailscale0"],
+            ),
+            (
+                "multi_targets",
+                r#"{"version":1,"server":{"listen":["lo","tailscale0","eth0.100","::1"]}}"#,
+                vec!["lo", "tailscale0", "eth0.100", "::1"],
+            ),
+            (
+                "iface_alias_label",
+                r#"{"version":1,"server":{"listen":"eth0:1"}}"#,
+                vec!["eth0:1"],
+            ),
+        ];
+
+        for (name, json_str, expected) in valid_cases {
+            let p = tmp.path().join(format!("{name}.json"));
+            std::fs::write(&p, json_str).unwrap();
+            let cfg = load_config_file(&p).unwrap();
+            assert_eq!(
+                cfg.server.listen,
+                expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "case {name}"
+            );
+        }
+
+        let invalid_cases = [
+            ("empty_array", r#"{"version":1,"server":{"listen":[]}}"#),
+            ("array_with_empty", r#"{"version":1,"server":{"listen":["lo",""]}}"#),
+            (
+                "malformed_ip",
+                r#"{"version":1,"server":{"listen":["999.999.999.999"]}}"#,
+            ),
+            (
+                "host_with_port",
+                r#"{"version":1,"server":{"listen":"127.0.0.1:8899"}}"#,
+            ),
+            ("iface_with_slash", r#"{"version":1,"server":{"listen":"bad/iface"}}"#),
+            (
+                "localhost_with_port",
+                r#"{"version":1,"server":{"listen":"localhost:8899"}}"#,
+            ),
+            (
+                "iface_too_long",
+                r#"{"version":1,"server":{"listen":"too_long_iface_16"}}"#,
+            ),
+            ("wrong_type_number", r#"{"version":1,"server":{"listen":123}}"#),
+        ];
+
+        for (name, json_str) in invalid_cases {
+            let p = tmp.path().join(format!("bad_{name}.json"));
+            std::fs::write(&p, json_str).unwrap();
+            let res = load_config_file(&p);
+            assert!(res.is_err(), "case {name} expected validation error, got Ok({res:?})");
         }
     }
 }

@@ -104,18 +104,20 @@ pub async fn status_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
     match status {
         crate::daemon::InstanceStatus::RunningSameInstance => {
             let pid = info.as_ref().map(|i| i.pid).unwrap_or(0);
+            let listen_disp = ctx.display_listen(info.as_ref());
             let _ = writeln!(
                 io.stdout,
-                "Gateway : {}RUNNING{}  PID {}  {}:{}",
-                CLR_GREEN, CLR_RESET, pid, ctx.listen_host, ctx.listen_port
+                "Gateway : {}RUNNING{}  PID {}  {}",
+                CLR_GREEN, CLR_RESET, pid, listen_disp
             );
         }
         crate::daemon::InstanceStatus::OutdatedBinary => {
             let pid = info.as_ref().map(|i| i.pid).unwrap_or(0);
+            let listen_disp = ctx.display_listen(info.as_ref());
             let _ = writeln!(
                 io.stdout,
-                "Gateway : {}RUNNING (Outdated Code){}  PID {}  {}:{}",
-                CLR_YELLOW, CLR_RESET, pid, ctx.listen_host, ctx.listen_port
+                "Gateway : {}RUNNING (Outdated Code){}  PID {}  {}",
+                CLR_YELLOW, CLR_RESET, pid, listen_disp
             );
         }
         crate::daemon::InstanceStatus::ConfigMismatch => {
@@ -517,10 +519,11 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
+            ..Default::default()
         };
         crate::daemon::write_pid_file(&ctx.pid_file(), pid_info).unwrap();
 
@@ -591,10 +594,11 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
+            ..Default::default()
         };
         crate::daemon::write_pid_file(&ctx.pid_file(), pid_info).unwrap();
 
@@ -662,10 +666,11 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
+            ..Default::default()
         };
         crate::daemon::write_pid_file(&ctx.pid_file(), pid_info).unwrap();
 
@@ -776,6 +781,7 @@ mod tests {
             listen: Some("127.0.0.1".to_string()),
             port: Some(port_a),
             runtime: None,
+            ..Default::default()
         };
         crate::daemon::write_pid_file(&ctx_a.pid_file(), pid_info_a).unwrap();
 
@@ -873,10 +879,11 @@ mod tests {
             config_path: ctx.config_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             config_hash: ctx.config_hash.clone(),
             data_dir: Some(ctx.data_dir.to_string_lossy().to_string()),
-            listen_host: Some(ctx.listen_host.clone()),
-            listen: Some(ctx.listen_host.clone()),
+            listen_host: Some(ctx.primary_connect_addr(None).ip().to_string()),
+            listen: Some(ctx.primary_connect_addr(None).ip().to_string()),
             port: Some(port),
             runtime: None,
+            ..Default::default()
         };
         crate::daemon::write_pid_file(&ctx.pid_file(), pid_info).unwrap();
 

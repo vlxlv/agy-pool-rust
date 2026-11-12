@@ -181,7 +181,8 @@ pub async fn run_agy_with_lb(io: &mut Io<'_>, extra: &[String]) -> i32 {
     }
 
     let mut env: Vec<(String, String)> = std::env::vars().filter(|(k, _)| k != "CLOUD_CODE_URL").collect();
-    let gateway_url = format!("http://{}:{}", ctx.listen_host, ctx.listen_port);
+    let live_info = crate::daemon::get_daemon_info(Some(&ctx.pid_file()));
+    let gateway_url = ctx.gateway_url(live_info.as_ref());
     env.push(("CLOUD_CODE_URL".to_string(), gateway_url));
 
     if let Err(e) = crate::accounts::sync_active_agy_token_file().await {
@@ -885,5 +886,114 @@ mod tests {
         assert_ne!(code, 0);
         assert!(CAPTURED_EXEC.lock().unwrap().is_none());
         assert!(!stderr.contains("access-secret"));
+    }
+
+    #[tokio::test]
+    async fn test_run_agy_with_lb_cloud_code_url_listen_variants() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let env = cli_test_env();
+        let tmp_dir = env.dir.path();
+
+        let mut pool = crate::storage::Pool::new_empty();
+        pool.accounts = vec![crate::storage::Account {
+            id: "acc_1".to_string(),
+            name: "Main".to_string(),
+            email: "user@example.com".to_string(),
+            access_token: "valid-access-token".to_string(),
+            ..Default::default()
+        }];
+        pool.active_account_id = Some("acc_1".to_string());
+        crate::storage::save_pool(&pool).unwrap();
+
+        let fake_agy = tmp_dir.join("agy");
+        std::fs::write(&fake_agy, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&fake_agy, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fake_agy_str = fake_agy.to_string_lossy().to_string();
+        crate::diagnostics::set_agy_binary_finder(Some(Arc::new(move || fake_agy_str.clone())));
+
+        let listener_v4 = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
+        let port_v4 = listener_v4.local_addr().unwrap().port();
+        let listener_wild = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port_wild = listener_wild.local_addr().unwrap().port();
+
+        let cases = [
+            (
+                "non_loopback_v4",
+                r#""127.0.0.2""#,
+                port_v4,
+                format!("http://127.0.0.2:{port_v4}"),
+            ),
+            (
+                "wildcard_v4",
+                r#""0.0.0.0""#,
+                port_wild,
+                format!("http://127.0.0.1:{port_wild}"),
+            ),
+            (
+                "loopback_if",
+                r#"["lo"]"#,
+                port_wild,
+                format!("http://127.0.0.1:{port_wild}"),
+            ),
+        ];
+
+        for (name, listen_json, port, expected_url) in cases {
+            let data_dir = tmp_dir.join(format!("data-{name}"));
+            std::fs::create_dir_all(&data_dir).unwrap();
+            let cfg_file = tmp_dir.join(format!("cfg-{name}.json"));
+            std::fs::write(
+                &cfg_file,
+                format!(r#"{{"version": 1, "server": {{"listen": {listen_json}, "port": {port}}}}}"#),
+            )
+            .unwrap();
+
+            *CAPTURED_EXEC.lock().unwrap() = None;
+            crate::cli::set_exec_handler(Some(recording_exec));
+
+            let dd = data_dir.to_string_lossy().to_string();
+            let cf = cfg_file.to_string_lossy().to_string();
+            let (code, _, stderr) = run_cli(&["run", "-D", &dd, "-c", &cf, "--", "-p", "hi"], "").await;
+            assert_eq!(code, 0, "case {name} failed: {stderr}");
+
+            let captured = CAPTURED_EXEC.lock().unwrap().take().unwrap();
+            let url = captured
+                .env
+                .iter()
+                .find(|(k, _)| k == "CLOUD_CODE_URL")
+                .map(|(_, v)| v.as_str());
+            assert_eq!(url, Some(expected_url.as_str()), "case {name} wrong CLOUD_CODE_URL");
+        }
+
+        // Also check IPv6 loopback bracket formatting when binding [::1] is supported on host.
+        if let Ok(listener_v6) = std::net::TcpListener::bind("[::1]:0") {
+            let port_v6 = listener_v6.local_addr().unwrap().port();
+            let data_dir = tmp_dir.join("data-v6");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            let cfg_file = tmp_dir.join("cfg-v6.json");
+            std::fs::write(
+                &cfg_file,
+                format!(r#"{{"version": 1, "server": {{"listen": "::1", "port": {port_v6}}}}}"#),
+            )
+            .unwrap();
+
+            *CAPTURED_EXEC.lock().unwrap() = None;
+            crate::cli::set_exec_handler(Some(recording_exec));
+            let dd = data_dir.to_string_lossy().to_string();
+            let cf = cfg_file.to_string_lossy().to_string();
+            let (code, _, stderr) = run_cli(&["run", "-D", &dd, "-c", &cf, "--", "-p", "hi"], "").await;
+            assert_eq!(code, 0, "ipv6 case failed: {stderr}");
+            let captured = CAPTURED_EXEC.lock().unwrap().take().unwrap();
+            let url = captured
+                .env
+                .iter()
+                .find(|(k, _)| k == "CLOUD_CODE_URL")
+                .map(|(_, v)| v.as_str());
+            assert_eq!(url, Some(format!("http://[::1]:{port_v6}").as_str()));
+            drop(listener_v6);
+        }
+
+        drop(listener_v4);
+        drop(listener_wild);
     }
 }

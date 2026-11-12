@@ -92,23 +92,25 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
 
     // 1. Check current instance status
     let mut was_restarted = false;
-    if super::server::is_daemon_running(Some(&pid_file), ctx.listen_port) {
-        if super::server::is_daemon_outdated(Some(&pid_file), ctx.listen_port) {
-            was_restarted = true;
-            super::control::stop_with_file(ctx, &pid_file, Duration::from_secs(5))?;
-            std::thread::sleep(Duration::from_millis(300));
-        } else {
-            let pid = super::pid::get_daemon_pid(Some(&pid_file));
-            return Ok(StartResult {
-                pid,
-                already_run: true,
-                was_restarted: false,
-            });
-        }
-    } else if super::server::is_port_listening(ctx.listen_port) {
+    let running = super::server::is_daemon_running(Some(&pid_file), ctx.listen_port);
+    if running && !super::server::is_daemon_outdated(Some(&pid_file), ctx.listen_port) {
+        let pid = super::pid::get_daemon_pid(Some(&pid_file));
+        return Ok(StartResult {
+            pid,
+            already_run: true,
+            was_restarted: false,
+        });
+    }
+    // Resolve only when we must spawn, and before stopping an outdated daemon so a missing interface fails closed.
+    let target_addrs = super::server::resolve_context_socket_addrs(ctx)?;
+    if running {
+        was_restarted = true;
+        super::control::stop_with_file(ctx, &pid_file, Duration::from_secs(5))?;
+        std::thread::sleep(Duration::from_millis(300));
+    } else if super::server::any_addr_listening(&target_addrs) {
         return Err(DaemonError::ForeignPortOccupied(format!(
-            "port {} is occupied by another process or instance",
-            ctx.listen_port
+            "{} is occupied by another process or instance",
+            super::server::format_socket_addrs(&target_addrs)
         )));
     }
 
@@ -142,13 +144,20 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
         None => {
             let auto_cfg = ctx.data_dir.join("config.json");
             if !auto_cfg.exists() {
-                let _ = std::fs::write(
-                    &auto_cfg,
-                    format!(
-                        r#"{{"version": 1, "server": {{"listen": "127.0.0.1", "port": {}}}}}"#,
-                        ctx.listen_port
-                    ),
-                );
+                let targets = ctx.effective_listen_targets();
+                let listen_val = if targets.len() == 1 {
+                    serde_json::Value::String(targets[0].clone())
+                } else {
+                    serde_json::Value::Array(targets.into_iter().map(serde_json::Value::String).collect())
+                };
+                let cfg_json = serde_json::json!({
+                    "version": 1,
+                    "server": {
+                        "listen": listen_val,
+                        "port": ctx.listen_port,
+                    }
+                });
+                let _ = std::fs::write(&auto_cfg, cfg_json.to_string());
             }
             auto_cfg
         }
@@ -182,7 +191,7 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
         if let Some(info) = super::pid::get_daemon_info(Some(&pid_file))
             && info.pid > 0
             && super::pid::is_process_alive(info.pid)
-            && super::server::is_port_listening(ctx.listen_port)
+            && super::server::all_addrs_listening(&target_addrs)
         {
             started = true;
             break;
@@ -204,7 +213,7 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
 
     if let Some(info) = super::pid::get_daemon_info(Some(&pid_file))
         && info.pid > 0
-        && super::server::is_port_listening(ctx.listen_port)
+        && super::server::all_addrs_listening(&target_addrs)
     {
         return Ok(StartResult {
             pid: info.pid,
@@ -215,8 +224,10 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
 
     let log_content = std::fs::read_to_string(&log_file).unwrap_or_else(|_| "<unreadable>".to_string());
     Err(DaemonError::Message(format!(
-        "failed to start gateway daemon on port {}; inspect log file at {:?}: {}",
-        ctx.listen_port, log_file, log_content
+        "failed to start gateway daemon on {}; inspect log file at {:?}: {}",
+        ctx.display_listen(None),
+        log_file,
+        log_content
     )))
 }
 
@@ -855,5 +866,87 @@ mod tests {
         let _ = super::super::control::stop_daemon(Some(&ctx_b.pid_file()), port_b, Duration::from_secs(3));
         kill_a2.disarm();
         kill_b2.disarm();
+    }
+
+    #[test]
+    fn test_start_instance_missing_interface_fails_closed() {
+        let env = crate::daemon::test_env();
+        let data_dir = env.temp_dir.path().join("missing-iface");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let cfg_path = env.temp_dir.path().join("missing-iface.json");
+        let port = get_free_port();
+        std::fs::write(
+            &cfg_path,
+            format!(r#"{{"version": 1, "server": {{"listen": ["agy_no_such0"], "port": {port}}}}}"#),
+        )
+        .unwrap();
+
+        let ctx = super::super::instance::resolve_instance_context(Some(&data_dir), Some(&cfg_path), Some(port), None)
+            .unwrap();
+        let res = start_instance(
+            &ctx,
+            LaunchOptions {
+                port,
+                entrypoint_path: Some(super::super::pid::get_entrypoint_path()),
+                ..Default::default()
+            },
+        );
+        assert!(res.is_err(), "missing listen interface must fail closed");
+        assert!(res.unwrap_err().to_string().contains("not found"));
+        assert!(
+            !ctx.pid_file().exists(),
+            "no PID file should be written on failed start"
+        );
+        assert!(
+            !ctx.log_file().exists(),
+            "no log file should be created before listen resolution"
+        );
+    }
+
+    #[test]
+    fn test_partial_foreign_port_occupation_blocks_multi_listen_start() {
+        let env = crate::daemon::test_env();
+        let mut port = 0;
+        let mut foreign = None;
+        for _ in 0..20 {
+            let p = get_free_port();
+            if p != crate::config::DEFAULT_PORT
+                && p != 8899
+                && p != 8901
+                && let Ok(l) = std::net::TcpListener::bind(("127.0.0.2", p))
+            {
+                port = p;
+                foreign = Some(l);
+                break;
+            }
+        }
+        let foreign = foreign.expect("free port on 127.0.0.2");
+
+        let data_dir = env.temp_dir.path().join("partial-foreign");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let cfg_path = env.temp_dir.path().join("partial-foreign.json");
+        std::fs::write(
+            &cfg_path,
+            format!(r#"{{"version": 1, "server": {{"listen": ["127.0.0.1", "127.0.0.2"], "port": {port}}}}}"#),
+        )
+        .unwrap();
+
+        let ctx = super::super::instance::resolve_instance_context(Some(&data_dir), Some(&cfg_path), Some(port), None)
+            .unwrap();
+
+        let (status, _, _) = super::super::instance::check_instance_status(&ctx);
+        assert_eq!(status, super::super::instance::InstanceStatus::PortOccupiedForeign);
+
+        let res = start_instance(
+            &ctx,
+            LaunchOptions {
+                port,
+                entrypoint_path: Some(super::super::pid::get_entrypoint_path()),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(res, Err(DaemonError::ForeignPortOccupied(_))));
+        assert!(!ctx.pid_file().exists());
+        drop(foreign);
     }
 }
