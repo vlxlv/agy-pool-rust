@@ -1,0 +1,317 @@
+//! Account controls for the dashboard API. Accounts are addressed by exact id only: the CLI resolver
+//! also matches list positions and name substrings, which would be racy and ambiguous over HTTP.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use http_body_util::BodyExt;
+use hyper::{Request, Response, StatusCode};
+
+use super::{api_error, internal_error, json_response};
+use crate::proxy::body::ProxyBody;
+use crate::storage::{Account, STATUS_DISABLED, STATUS_VALIDATION_REQUIRED};
+
+const MAX_NAME_CHARS: usize = 64;
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(15);
+static REFRESH_ALL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Handles `POST /api/v1/accounts/<rest>` after `control_gate` allowed it.
+pub async fn handle(rest: &str, req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
+    match rest {
+        "refresh-all" => refresh_all().await,
+        "reorder" => reorder(req).await,
+        _ => match rest.split_once('/') {
+            Some((id, "enable")) => set_disabled(id, false).await,
+            Some((id, "disable")) => set_disabled(id, true).await,
+            Some((id, "rename")) => rename(id, req).await,
+            Some((id, "refresh")) => refresh(id).await,
+            Some((id, "switch")) => switch(id).await,
+            _ => api_error(StatusCode::NOT_FOUND, "NOT_FOUND", "unknown dashboard API path"),
+        },
+    }
+}
+
+fn ok(extra: serde_json::Value) -> Response<ProxyBody> {
+    let mut body = serde_json::json!({ "ok": true });
+    if let (Some(obj), serde_json::Value::Object(more)) = (body.as_object_mut(), extra) {
+        obj.extend(more);
+    }
+    json_response(serde_json::to_vec(&body).unwrap_or_default())
+}
+
+fn account_not_found() -> Response<ProxyBody> {
+    api_error(StatusCode::NOT_FOUND, "ACCOUNT_NOT_FOUND", "no account with this id")
+}
+
+fn invalid(message: &str) -> Response<ProxyBody> {
+    api_error(StatusCode::BAD_REQUEST, "INVALID_ARGUMENT", message)
+}
+
+fn log_error(message: String) {
+    crate::observability::log_message_level(crate::observability::LogLevel::Error, "DASHBOARD", &message);
+}
+
+fn storage_failure(what: &str, err: impl std::fmt::Display) -> Response<ProxyBody> {
+    log_error(format!("failed to {what}: {err}"));
+    api_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "STORAGE_ERROR",
+        &format!("failed to {what}"),
+    )
+}
+
+async fn read_json<T: serde::de::DeserializeOwned>(req: Request<hyper::body::Incoming>) -> Option<T> {
+    let body = http_body_util::Limited::new(req.into_body(), 4096)
+        .collect()
+        .await
+        .ok()?
+        .to_bytes();
+    serde_json::from_slice(&body).ok()
+}
+
+#[allow(clippy::result_large_err)]
+async fn load_account(id: &str) -> Result<Option<Account>, Response<ProxyBody>> {
+    let id = id.to_owned();
+    match tokio::task::spawn_blocking(crate::storage::load_pool).await {
+        Ok(Ok(pool)) => Ok(pool.accounts.into_iter().find(|a| a.id == id)),
+        Ok(Err(e)) => Err(storage_failure("load the account pool", e)),
+        Err(_) => Err(internal_error()),
+    }
+}
+
+/// Applies `f` to the account with exactly this id inside one pool transaction; `false` if it does not exist.
+#[allow(clippy::result_large_err)]
+async fn update_account(
+    id: &str,
+    what: &'static str,
+    f: impl FnOnce(&mut Account) + Send + 'static,
+) -> Result<bool, Response<ProxyBody>> {
+    let id = id.to_owned();
+    let res = tokio::task::spawn_blocking(move || {
+        let mut found = false;
+        crate::storage::pool_transaction(|pool| {
+            if let Some(acc) = pool.accounts.iter_mut().find(|a| a.id == id) {
+                f(acc);
+                found = true;
+            }
+            Ok(())
+        })
+        .map(|()| found)
+    })
+    .await;
+    match res {
+        Ok(Ok(found)) => Ok(found),
+        Ok(Err(e)) => Err(storage_failure(what, e)),
+        Err(_) => Err(internal_error()),
+    }
+}
+
+async fn set_disabled(id: &str, disabled: bool) -> Response<ProxyBody> {
+    let what = if disabled {
+        "disable the account"
+    } else {
+        "enable the account"
+    };
+    // Same rules as `agy-pool disable` / `enable`: enabling only lifts a manual disable.
+    match update_account(id, what, move |acc| {
+        if disabled {
+            acc.status = STATUS_DISABLED.to_string();
+        } else if acc.status == STATUS_DISABLED {
+            acc.status.clear();
+        }
+    })
+    .await
+    {
+        Ok(true) => ok(serde_json::json!({})),
+        Ok(false) => account_not_found(),
+        Err(resp) => resp,
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenameRequest {
+    name: String,
+}
+
+async fn rename(id: &str, req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
+    let Some(body) = read_json::<RenameRequest>(req).await else {
+        return invalid("body must be {\"name\": \"...\"}");
+    };
+    let name = body.name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) {
+        return invalid(&format!(
+            "name must be 1-{MAX_NAME_CHARS} characters without control characters"
+        ));
+    }
+    match update_account(id, "rename the account", move |acc| acc.name = name).await {
+        Ok(true) => ok(serde_json::json!({})),
+        Ok(false) => account_not_found(),
+        Err(resp) => resp,
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReorderRequest {
+    ordered_ids: Vec<String>,
+}
+
+async fn reorder(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
+    let Some(ReorderRequest { ordered_ids }) = read_json(req).await else {
+        return invalid("body must be {\"ordered_ids\": [\"acc_1\", ...]}");
+    };
+    let res = tokio::task::spawn_blocking(move || {
+        let mut applied = false;
+        crate::storage::pool_transaction(|pool| {
+            let unique: std::collections::HashSet<&String> = ordered_ids.iter().collect();
+            // Only a full permutation of the current ids is applied; anything else means the page is stale.
+            if unique.len() != ordered_ids.len()
+                || ordered_ids.len() != pool.accounts.len()
+                || !pool.accounts.iter().all(|a| unique.contains(&a.id))
+            {
+                return Ok(());
+            }
+            pool.accounts
+                .sort_by_key(|a| ordered_ids.iter().position(|id| *id == a.id));
+            applied = true;
+            Ok(())
+        })
+        .map(|()| applied)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => ok(serde_json::json!({})),
+        Ok(Ok(false)) => api_error(
+            StatusCode::CONFLICT,
+            "POOL_CHANGED",
+            "ordered_ids must list every account exactly once; reload and try again",
+        ),
+        Ok(Err(e)) => storage_failure("reorder the accounts", e),
+        Err(_) => internal_error(),
+    }
+}
+
+async fn switch(id: &str) -> Response<ProxyBody> {
+    // Check first so an unknown id is a 404 rather than a switch failure.
+    match load_account(id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return account_not_found(),
+        Err(resp) => return resp,
+    }
+    match crate::accounts::switch_account_id(id).await {
+        Ok(_) => ok(serde_json::json!({})),
+        Err(e) => {
+            log_error(format!("failed to switch the CLI account to {id}: {e}"));
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "SWITCH_FAILED",
+                "could not switch the CLI account; see the gateway log",
+            )
+        }
+    }
+}
+
+/// Queries upstream quota for one account and persists a validation restriction the probe cleared.
+/// query_quota runs in its own task: cancelling it would leave its single-flight entry behind and hang
+/// every later refresh of this account, so only the wait is bounded.
+async fn refresh_account(before: Account) -> Result<(), String> {
+    let id = before.id.clone();
+    let task = tokio::spawn(async move {
+        let mut acc = before.clone();
+        let quota = crate::quota::query_quota(&mut acc).await.map_err(|e| e.to_string())?;
+        if before.status == STATUS_VALIDATION_REQUIRED && acc.status.is_empty() {
+            let cleared = tokio::task::spawn_blocking(move || {
+                crate::accounts::persist_cleared_restriction(&before, &acc, &quota)
+            })
+            .await;
+            if let Ok(Err(e)) = cleared {
+                return Err(format!("quota refreshed but clearing the restriction failed: {e}"));
+            }
+        }
+        Ok::<(), String>(())
+    });
+    let res = match tokio::time::timeout(REFRESH_TIMEOUT, task).await {
+        Ok(Ok(res)) => res,
+        Ok(Err(_)) => Err("refresh task panicked".to_string()),
+        Err(_) => Err(format!(
+            "timed out after {}s (still running)",
+            REFRESH_TIMEOUT.as_secs()
+        )),
+    };
+    if let Err(e) = &res {
+        log_error(format!("quota refresh for {id} failed: {e}"));
+    }
+    res
+}
+
+async fn refresh(id: &str) -> Response<ProxyBody> {
+    let before = match load_account(id).await {
+        Ok(Some(acc)) => acc,
+        Ok(None) => return account_not_found(),
+        Err(resp) => return resp,
+    };
+    if before.status == STATUS_DISABLED {
+        return api_error(
+            StatusCode::CONFLICT,
+            "ACCOUNT_DISABLED",
+            "enable the account before refreshing its quota",
+        );
+    }
+    let res = refresh_account(before).await;
+    let stored = match load_account(id).await {
+        Ok(Some(acc)) => acc,
+        Ok(None) => return account_not_found(),
+        Err(resp) => return resp,
+    };
+    // A still-restricted account is a normal outcome: hand back the link the operator must open.
+    if stored.status == STATUS_VALIDATION_REQUIRED {
+        let url = stored.validation_url.filter(|u| u.starts_with("https://"));
+        return ok(serde_json::json!({ "status": stored.status, "validation_url": url }));
+    }
+    match res {
+        Ok(()) => ok(serde_json::json!({ "status": stored.status, "validation_url": null })),
+        Err(_) => api_error(
+            StatusCode::BAD_GATEWAY,
+            "QUOTA_REFRESH_FAILED",
+            "quota refresh failed; see the gateway log",
+        ),
+    }
+}
+
+/// Clears REFRESH_ALL_IN_FLIGHT even when the client disconnects and the handler future is dropped.
+struct RefreshAllGuard;
+
+impl Drop for RefreshAllGuard {
+    fn drop(&mut self) {
+        REFRESH_ALL_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+async fn refresh_all() -> Response<ProxyBody> {
+    if REFRESH_ALL_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return api_error(
+            StatusCode::CONFLICT,
+            "REFRESH_ALREADY_IN_PROGRESS",
+            "a refresh of all accounts is already running",
+        );
+    }
+    let _guard = RefreshAllGuard;
+    let pool = match tokio::task::spawn_blocking(crate::storage::load_pool).await {
+        Ok(Ok(pool)) => pool,
+        Ok(Err(e)) => return storage_failure("load the account pool", e),
+        Err(_) => return internal_error(),
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    for acc in pool.accounts.into_iter().filter(|a| a.status != STATUS_DISABLED) {
+        tasks.spawn(refresh_account(acc));
+    }
+    let (mut refreshed, mut failed) = (0u32, 0u32);
+    while let Some(res) = tasks.join_next().await {
+        match res {
+            Ok(Ok(())) => refreshed += 1,
+            _ => failed += 1,
+        }
+    }
+    ok(serde_json::json!({ "refreshed": refreshed, "failed": failed }))
+}

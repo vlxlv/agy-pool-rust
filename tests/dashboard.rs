@@ -718,6 +718,20 @@ async fn test_embedded_spa_asset_constraints() {
         );
     }
 
+    // Account controls (Phase 2).
+    for needle in [
+        "/api/v1/accounts/refresh-all",
+        "/api/v1/accounts/reorder",
+        "data-act=",
+        "refresh-all-btn",
+        "verify-dialog",
+        "toast",
+        "Disable the last enabled account?",
+    ] {
+        assert!(body_str.contains(needle), "missing {needle}");
+    }
+    assert!(!body_str.contains("alert("), "use the toast instead of alert()");
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
@@ -775,10 +789,7 @@ async fn test_trailing_slash_and_unknown_api_paths() {
     assert_eq!(json["accounts"][0]["email"], "alice@example.com");
 
     // Unknown /api/v1/* paths are answered locally (JSON 404), never proxied upstream.
-    for (method, path) in [
-        (Method::GET, "/api/v1/nope"),
-        (Method::POST, "/api/v1/accounts/acc_1/enable"),
-    ] {
+    for (method, path) in [(Method::GET, "/api/v1/nope"), (Method::POST, "/api/v1/nope/deeper")] {
         let (status, headers, body) = send_request(addr, method, path, HeaderMap::new(), Bytes::new()).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
         assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
@@ -1044,6 +1055,299 @@ async fn test_auth_failures_are_throttled() {
     assert_eq!(
         get("/api/v1/status", Some(TEST_TOKEN)).await.0,
         StatusCode::TOO_MANY_REQUESTS
+    );
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+fn control_headers() -> HeaderMap {
+    hdrs(&[
+        ("x-agy-pool-control", "1"),
+        ("content-type", "application/json"),
+        ("authorization", bearer(TEST_TOKEN).as_str()),
+    ])
+}
+
+async fn post_control(addr: SocketAddr, path: &str, body: &str) -> (StatusCode, Bytes) {
+    let (status, _, body) = send_request(
+        addr,
+        Method::POST,
+        path,
+        control_headers(),
+        Bytes::copy_from_slice(body.as_bytes()),
+    )
+    .await;
+    (status, body)
+}
+
+fn stored_account(id: &str) -> agy_pool::storage::Account {
+    agy_pool::storage::load_pool()
+        .unwrap()
+        .accounts
+        .into_iter()
+        .find(|a| a.id == id)
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_account_mutations() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    // Gate: no control header / no token are refused before anything changes.
+    let (status, _, _) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/accounts/acc_1/disable",
+        hdrs(&[("content-type", "application/json")]),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, headers, _) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/accounts/acc_1/disable",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(headers.get(hyper::header::ALLOW).unwrap(), "POST");
+    assert_eq!(stored_account("acc_1").status, "");
+
+    // Disable / enable.
+    assert_eq!(
+        post_control(addr, "/api/v1/accounts/acc_1/disable", "{}").await.0,
+        StatusCode::OK
+    );
+    assert_eq!(stored_account("acc_1").status, agy_pool::storage::STATUS_DISABLED);
+    assert_eq!(
+        post_control(addr, "/api/v1/accounts/acc_1/enable", "{}").await.0,
+        StatusCode::OK
+    );
+    assert_eq!(stored_account("acc_1").status, "");
+
+    // Unknown id and unknown action.
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_9/disable", "{}").await;
+    assert_eq!(
+        (status, error_code(&body).as_str()),
+        (StatusCode::NOT_FOUND, "ACCOUNT_NOT_FOUND")
+    );
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_1/explode", "{}").await;
+    assert_eq!(
+        (status, error_code(&body).as_str()),
+        (StatusCode::NOT_FOUND, "NOT_FOUND")
+    );
+    // A list position or an email is not an id.
+    let (status, _) = post_control(addr, "/api/v1/accounts/1/disable", "{}").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Rename trims and validates.
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_2/rename", r#"{"name":"  Work  "}"#).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(stored_account("acc_2").name, "Work");
+    let long = format!(r#"{{"name":"{}"}}"#, "a".repeat(65));
+    for bad in [
+        r#"{"name":"   "}"#,
+        long.as_str(),
+        r#"{"name":"a\nb"}"#,
+        r#"{"title":"x"}"#,
+        "nope",
+    ] {
+        let (status, body) = post_control(addr, "/api/v1/accounts/acc_2/rename", bad).await;
+        assert_eq!(
+            (status, error_code(&body).as_str()),
+            (StatusCode::BAD_REQUEST, "INVALID_ARGUMENT"),
+            "{bad}"
+        );
+    }
+    assert_eq!(stored_account("acc_2").name, "Work");
+
+    // Reorder: a full permutation is applied; anything else means the page is stale.
+    let ids = || -> Vec<String> {
+        agy_pool::storage::load_pool()
+            .unwrap()
+            .accounts
+            .into_iter()
+            .map(|a| a.id)
+            .collect()
+    };
+    assert_eq!(
+        post_control(addr, "/api/v1/accounts/reorder", r#"{"ordered_ids":["acc_2","acc_1"]}"#)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(ids(), vec!["acc_2", "acc_1"]);
+    for stale in [
+        r#"{"ordered_ids":["acc_1"]}"#,
+        r#"{"ordered_ids":["acc_1","acc_1"]}"#,
+        r#"{"ordered_ids":["acc_1","acc_3"]}"#,
+        r#"{"ordered_ids":["acc_1","acc_2","acc_3"]}"#,
+    ] {
+        let (status, body) = post_control(addr, "/api/v1/accounts/reorder", stale).await;
+        assert_eq!(
+            (status, error_code(&body).as_str()),
+            (StatusCode::CONFLICT, "POOL_CHANGED"),
+            "{stale}"
+        );
+    }
+    assert_eq!(ids(), vec!["acc_2", "acc_1"]);
+
+    // Without a configured token, controls stay off.
+    set_dashboard_config(None, false);
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_1/disable", "{}").await;
+    assert_eq!(
+        (status, error_code(&body).as_str()),
+        (StatusCode::FORBIDDEN, "TOKEN_REQUIRED_FOR_CONTROL")
+    );
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_switch_account_by_exact_id() {
+    let _guard = lock_test().await;
+    let tmp = setup_test_env();
+    let native = tmp.path().join("native_gemini");
+    std::fs::create_dir_all(&native).unwrap();
+    agy_pool::config::set_native_agy_dir(&native);
+    let expiry = Some(agy_pool::clock::now_unix() + 3600.0);
+    let pool = agy_pool::storage::Pool {
+        accounts: vec![
+            // Named like the other account's id: an exact id must still win.
+            agy_pool::storage::Account {
+                id: "acc_1".to_string(),
+                name: "acc_2".to_string(),
+                access_token: "tok1".to_string(),
+                token_expiry: expiry,
+                ..Default::default()
+            },
+            agy_pool::storage::Account {
+                id: "acc_2".to_string(),
+                access_token: "tok2".to_string(),
+                token_expiry: expiry,
+                ..Default::default()
+            },
+        ],
+        active_account_id: Some("acc_1".to_string()),
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    agy_pool::storage::save_pool(&pool).unwrap();
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_2/switch", "{}").await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        agy_pool::storage::load_pool().unwrap().active_account_id.as_deref(),
+        Some("acc_2")
+    );
+    let (_, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/accounts",
+        hdrs(&[("authorization", bearer(TEST_TOKEN).as_str())]),
+        Bytes::new(),
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["accounts"][0]["is_cli_base"], false);
+    assert_eq!(json["accounts"][1]["is_cli_base"], true);
+
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_9/switch", "{}").await;
+    assert_eq!(
+        (status, error_code(&body).as_str()),
+        (StatusCode::NOT_FOUND, "ACCOUNT_NOT_FOUND")
+    );
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_quota_refresh_controls() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    let pool = agy_pool::storage::Pool {
+        accounts: vec![
+            agy_pool::storage::Account {
+                id: "acc_1".to_string(),
+                ..Default::default()
+            },
+            agy_pool::storage::Account {
+                id: "acc_2".to_string(),
+                status: agy_pool::storage::STATUS_DISABLED.to_string(),
+                ..Default::default()
+            },
+            agy_pool::storage::Account {
+                id: "acc_3".to_string(),
+                status: agy_pool::storage::STATUS_VALIDATION_REQUIRED.to_string(),
+                validation_url: Some("https://accounts.google.com/signin/continue?x=1".to_string()),
+                ..Default::default()
+            },
+            agy_pool::storage::Account {
+                id: "acc_4".to_string(),
+                status: agy_pool::storage::STATUS_VALIDATION_REQUIRED.to_string(),
+                validation_url: Some("javascript:alert(1)".to_string()),
+                ..Default::default()
+            },
+        ],
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    agy_pool::storage::save_pool(&pool).unwrap();
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_2/refresh", "{}").await;
+    assert_eq!(
+        (status, error_code(&body).as_str()),
+        (StatusCode::CONFLICT, "ACCOUNT_DISABLED")
+    );
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_9/refresh", "{}").await;
+    assert_eq!(
+        (status, error_code(&body).as_str()),
+        (StatusCode::NOT_FOUND, "ACCOUNT_NOT_FOUND")
+    );
+
+    // Test mode has no upstream: query_quota fails fast and the error text stays out of the response.
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_1/refresh", "{}").await;
+    assert_eq!(
+        (status, error_code(&body).as_str()),
+        (StatusCode::BAD_GATEWAY, "QUOTA_REFRESH_FAILED")
+    );
+    assert!(!String::from_utf8_lossy(&body).contains("TEST GUARD"));
+
+    // A still-restricted account reports its https verification link; other schemes are dropped.
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_3/refresh", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "validation_required");
+    assert_eq!(
+        json["validation_url"],
+        "https://accounts.google.com/signin/continue?x=1"
+    );
+    let (status, body) = post_control(addr, "/api/v1/accounts/acc_4/refresh", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["validation_url"], serde_json::Value::Null);
+
+    // Refresh all skips disabled accounts.
+    let (status, body) = post_control(addr, "/api/v1/accounts/refresh-all", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(
+        json["refreshed"].as_u64().unwrap() + json["failed"].as_u64().unwrap(),
+        3
     );
 
     let _ = shutdown_tx.send(());

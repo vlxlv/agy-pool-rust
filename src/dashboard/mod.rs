@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod control;
 pub mod dto;
 pub mod telemetry;
 
@@ -461,6 +462,14 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
                 _ => events_response(),
             }
         }
+        r if r.starts_with("/api/v1/accounts/") && !is_post => method_not_allowed("POST"),
+        r if r.starts_with("/api/v1/accounts/") => match control_gate(&req, &cfg, token) {
+            Some(denied) => denied,
+            None => {
+                let rest = r.strip_prefix("/api/v1/accounts/").unwrap_or_default().to_owned();
+                control::handle(&rest, req).await
+            }
+        },
         _ => api_error(StatusCode::NOT_FOUND, "NOT_FOUND", "unknown dashboard API path"),
     }
 }

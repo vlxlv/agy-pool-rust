@@ -624,6 +624,41 @@
     }
     .token-card button { cursor: pointer; border-color: var(--accent-border); }
     .token-card .token-error { color: var(--red-text); min-height: 1em; }
+    .row-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+    .row-btn, #refresh-all-btn {
+      font: inherit;
+      font-size: 11px;
+      color: var(--text-main);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px 6px;
+      cursor: pointer;
+    }
+    .row-btn:hover, #refresh-all-btn:hover { border-color: var(--accent-border); }
+    .row-btn:disabled, #refresh-all-btn:disabled { opacity: 0.5; cursor: wait; }
+    #toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 60;
+      max-width: min(420px, 90vw);
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--text-main);
+      font-size: 13px;
+    }
+    #toast.error { border-color: var(--red-border); color: var(--red-text); }
+    #verify-dialog {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--card-bg);
+      color: var(--text-main);
+      max-width: min(480px, 90vw);
+    }
+    #verify-dialog a { color: var(--accent-text); word-break: break-all; }
   </style>
 </head>
 <body>
@@ -636,6 +671,12 @@
       <p id="token-error" class="token-error" role="alert"></p>
     </form>
   </div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="verify-dialog">
+    <p>Google wants this account verified. Open the link while signed in to that account, then refresh again.</p>
+    <p><a id="verify-link" href="#" target="_blank" rel="noopener noreferrer"></a></p>
+    <form method="dialog"><button class="row-btn" type="submit">Close</button></form>
+  </dialog>
   <!-- Header Bar -->
   <header>
     <div class="brand-section">
@@ -734,6 +775,7 @@
           <span>Account Quota &amp; Health</span>
           <span class="pill pill-mono" id="accounts-count-badge">0 accounts</span>
         </div>
+        <button id="refresh-all-btn" type="button" hidden>↻ Refresh all</button>
       </div>
       <div class="table-container">
         <table>
@@ -745,11 +787,12 @@
               <th>5H Reset</th>
               <th>Weekly Quota</th>
               <th>Hits / In-Flight</th>
+              <th id="actions-col" hidden>Actions</th>
             </tr>
           </thead>
           <tbody id="accounts-table-body">
             <tr>
-              <td colspan="6" class="empty-state">Loading accounts...</td>
+              <td colspan="7" class="empty-state">Loading accounts...</td>
             </tr>
           </tbody>
         </table>
@@ -814,6 +857,7 @@
     try { authToken = sessionStorage.getItem(TOKEN_KEY) || ''; } catch (_) {}
     let authOk = false;
     let started = false;
+    let controlEnabled = false;
 
     function saveToken(t) {
       authToken = t;
@@ -843,6 +887,40 @@
       if (res.status === 401) showTokenCard('Token rejected. Enter the dashboard token again.');
       if (res.status === 429) showTokenCard('Too many wrong tokens. Wait a minute, then try again.', true);
       return res;
+    }
+
+    let toastTimer = null;
+    function showToast(message, isError) {
+      const el = document.getElementById('toast');
+      el.textContent = message;
+      el.className = isError ? 'error' : '';
+      el.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { el.hidden = true; }, isError ? 6000 : 3000);
+    }
+
+    // POSTs a control action; returns the parsed body on success, or null after showing the error.
+    async function control(path, body) {
+      try {
+        const res = await agyFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
+        let data = null;
+        try { data = await res.json(); } catch (_) {}
+        if (res.ok) return data || {};
+        if (res.status !== 401 && res.status !== 429) {
+          showToast((data && data.error && data.error.message) || `HTTP ${res.status}`, true);
+        }
+      } catch (err) {
+        showToast(`Request failed: ${err}`, true);
+      }
+      return null;
+    }
+
+    function showVerifyLink(url) {
+      if (!/^https:\/\//.test(url)) return;
+      const link = document.getElementById('verify-link');
+      link.href = url;
+      link.textContent = url;
+      document.getElementById('verify-dialog').showModal();
     }
 
     // DOM Elements
@@ -1101,14 +1179,14 @@
     function renderAccountsTable() {
       const tbody = document.getElementById('accounts-table-body');
       if (!accountsData || accountsData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No accounts configured</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No accounts configured</td></tr>';
         return;
       }
 
       const nowMs = Date.now();
       let html = '';
 
-      for (const acc of accountsData) {
+      for (const [i, acc] of accountsData.entries()) {
         const safeId = sanitizeId(acc.id);
         const emailDisplay = showEmailAllowed && showEmail && acc.email ? acc.email : (acc.email_masked || '—');
         const badgeClass = getBadgeClass(acc.scheduler_state);
@@ -1160,7 +1238,7 @@
           <tr>
             <td>
               <div class="acc-col">
-                <span class="acc-name">${escapeHtml(acc.name)}</span>
+                <span class="acc-name">${escapeHtml(acc.name)}${acc.is_cli_base ? ' <span class="pill pill-mono" title="Used by the agy CLI">CLI</span>' : ''}</span>
                 <span class="acc-email">${escapeHtml(emailDisplay)}</span>
               </div>
             </td>
@@ -1175,6 +1253,16 @@
               <span class="text-dim"> / </span>
               <span class="num ${acc.in_flight > 0 ? 'text-main font-bold' : 'text-dim'}">${acc.in_flight}</span>
             </td>
+            ${controlEnabled ? `<td><div class="row-actions">
+              ${acc.storage_status === 'disabled'
+                ? `<button class="row-btn" data-act="enable" data-id="${escapeHtml(acc.id)}">Enable</button>`
+                : `<button class="row-btn" data-act="disable" data-id="${escapeHtml(acc.id)}">Disable</button>
+                   <button class="row-btn" data-act="refresh" data-id="${escapeHtml(acc.id)}" title="Refresh quota">↻</button>`}
+              <button class="row-btn" data-act="rename" data-id="${escapeHtml(acc.id)}" title="Rename">✎</button>
+              <button class="row-btn" data-act="up" data-id="${escapeHtml(acc.id)}" title="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
+              <button class="row-btn" data-act="down" data-id="${escapeHtml(acc.id)}" title="Move down" ${i === accountsData.length - 1 ? 'disabled' : ''}>↓</button>
+              ${acc.is_cli_base ? '' : `<button class="row-btn" data-act="switch" data-id="${escapeHtml(acc.id)}" title="Use this account in the agy CLI">Use in CLI</button>`}
+            </div></td>` : ''}
           </tr>`;
       }
 
@@ -1352,14 +1440,7 @@
       const wanted = strategySelect.value;
       strategySelect.disabled = true;
       try {
-        const res = await agyFetch('/api/v1/strategy', { method: 'POST', body: JSON.stringify({ strategy: wanted }) });
-        if (!res.ok && res.status !== 401 && res.status !== 429) {
-          let msg = `HTTP ${res.status}`;
-          try { msg = (await res.json()).error.message || msg; } catch (_) {}
-          alert(`Could not change strategy: ${msg}`);
-        }
-      } catch (err) {
-        alert(`Could not change strategy: ${err}`);
+        await control('/api/v1/strategy', { strategy: wanted });
       } finally {
         strategySelect.disabled = false;
         fetchStatus();
@@ -1394,7 +1475,10 @@
       document.getElementById('token-card').hidden = true;
       document.getElementById('token-input').value = '';
       authOk = true;
-      strategySelect.hidden = !s.control_enabled;
+      controlEnabled = Boolean(s.control_enabled);
+      strategySelect.hidden = !controlEnabled;
+      document.getElementById('refresh-all-btn').hidden = !controlEnabled;
+      document.getElementById('actions-col').hidden = !controlEnabled;
       start();
     }
 
@@ -1415,6 +1499,61 @@
       // 1s local tick for countdowns
       setInterval(updateLocalCountdowns, 1000);
     }
+
+    document.getElementById('accounts-table-body').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn || btn.disabled) return;
+      const act = btn.dataset.act;
+      const id = btn.dataset.id;
+      const acc = accountsData.find((a) => a.id === id);
+      if (!acc) return;
+      const base = `/api/v1/accounts/${encodeURIComponent(id)}`;
+      let body = {};
+      let path = `${base}/${act}`;
+
+      if (act === 'disable') {
+        const enabled = accountsData.filter((a) => a.storage_status !== 'disabled').length;
+        if (enabled <= 1 && !confirm('Disable the last enabled account? The gateway will have no account to route to.')) return;
+      } else if (act === 'rename') {
+        const name = prompt('New name for this account', acc.name);
+        if (name === null || name.trim() === '' || name.trim() === acc.name) return;
+        body = { name: name.trim() };
+      } else if (act === 'switch') {
+        if (!confirm(`Use "${acc.name}" for the agy CLI? This replaces the CLI's current login token.`)) return;
+      } else if (act === 'up' || act === 'down') {
+        const ids = accountsData.map((a) => a.id);
+        const i = ids.indexOf(id);
+        const j = act === 'up' ? i - 1 : i + 1;
+        if (j < 0 || j >= ids.length) return;
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        path = '/api/v1/accounts/reorder';
+        body = { ordered_ids: ids };
+      }
+
+      btn.disabled = true;
+      const data = await control(path, body);
+      btn.disabled = false;
+      if (data) {
+        if (act === 'refresh' && data.validation_url) {
+          showVerifyLink(data.validation_url);
+        } else if (act === 'refresh' && data.status === 'validation_required') {
+          showToast('Google still wants this account verified; no link was returned. Use `agy-pool verify`.', true);
+        } else {
+          showToast('Done.', false);
+        }
+      }
+      fetchAccounts();
+      fetchStatus();
+    });
+
+    document.getElementById('refresh-all-btn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const data = await control('/api/v1/accounts/refresh-all', {});
+      btn.disabled = false;
+      if (data) showToast(`Refreshed ${data.refreshed}, failed ${data.failed}.`, data.failed > 0);
+      fetchAccounts();
+    });
 
     function init() {
       checkAuthAndStart();

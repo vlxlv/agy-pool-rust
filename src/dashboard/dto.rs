@@ -39,6 +39,8 @@ pub struct AccountDto {
     pub weekly: Option<QuotaWindowDto>,
     pub hits: i64,
     pub in_flight: i64,
+    /// The account the native `agy` CLI currently uses (`pool.active_account_id`).
+    pub is_cli_base: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -225,6 +227,7 @@ pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f6
             weekly,
             hits,
             in_flight,
+            is_cli_base: pool.active_account_id.as_deref() == Some(acc.id.as_str()),
         });
     }
 
@@ -552,5 +555,26 @@ mod tests {
 
         let sse = build_sse_stats_event();
         assert!(sse.rss_mb >= 0.0);
+    }
+
+    #[test]
+    fn accounts_response_marks_cli_base() {
+        let pool = crate::storage::Pool {
+            accounts: vec![
+                crate::storage::Account {
+                    id: "acc_1".to_string(),
+                    ..Default::default()
+                },
+                crate::storage::Account {
+                    id: "acc_2".to_string(),
+                    ..Default::default()
+                },
+            ],
+            active_account_id: Some("acc_2".to_string()),
+            ..Default::default()
+        };
+        let resp = build_accounts_response(&pool, false, 0.0);
+        let flags: Vec<(String, bool)> = resp.accounts.iter().map(|a| (a.id.clone(), a.is_cli_base)).collect();
+        assert_eq!(flags, vec![("acc_1".to_string(), false), ("acc_2".to_string(), true)]);
     }
 }
