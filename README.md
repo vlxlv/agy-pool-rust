@@ -22,6 +22,7 @@ Release binaries and `.deb` packages are on the [releases page](https://github.c
 - **Dual-Track Logging & Structured Audit Events.** Separates operational gateway logs (`agy-pool.log`) from high-resolution, secure request audit events (`audit-events.jsonl`, `0600` permissions) tracking latency, TTFB, token metrics, upstream quota state, and failover reasons (including `ClientDisconnected`). Searchable via `agy-pool logs --audit` (with `-f` to follow).
 - **Zero-Downtime Daemon Restart.** `agy-pool restart` seamlessly migrates between different configurations or ports without "port mismatch" errors, dangling PIDs, or manual cleanup.
 - **Dashboards.** `quota` shows per-account quota bars and reset times, `top` is a live terminal dashboard, `stats` and `forecast` report routing effectiveness and quota runway.
+- **Token usage.** Prompt, cached, output and thinking tokens of successful generations are counted per account in hourly buckets. `agy-pool tokens [--range 1h|24h|7d|total]`, the web dashboard's Token Usage panel and `GET /api/v1/tokens` show them per account and for the whole pool; `status -v` and `stats` print a 24h summary line. Cached tokens are part of prompt tokens, so total = prompt + output + thinking. Usage of removed accounts is kept as "(removed accounts)".
 - **Static release binaries** for Linux (amd64, arm64; musl, so they also run on Termux and old glibc), plus `.deb` packages with systemd units.
 - **Encrypted backups.** `export` / `import` move the account pool between machines, optionally encrypted (PBKDF2-HMAC-SHA256).
 
@@ -114,6 +115,7 @@ After `install`, plain `agy` goes through the pool with no flags or environment 
 | `login`, `import-current` | Add an account by browser login, or import the account native `agy` is signed in with |
 | `list`, `quota`, `top` | Show the pool, quota bars, or a live dashboard (`-e` shows emails) |
 | `status`, `stats`, `forecast` | Gateway process summary, routing effectiveness, quota runway |
+| `tokens [--range 1h\|24h\|7d\|total]` | Token usage per account and for the pool |
 | `start`, `stop`, `restart`, `logs` | Control the gateway daemon, hot-restart across port/config changes, and inspect logs (`--audit` to view structured audit events, `-f` to follow) |
 | `run [-- agy args]` | Start the gateway if needed and run native `agy` through it |
 | `strategy`, `switch` | Choose the routing strategy, or the account native `agy` uses directly |

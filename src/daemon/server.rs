@@ -670,6 +670,8 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     stats_writer.stop().await;
     token_flush_task.abort();
     let _ = token_flush_task.await;
+    // shortcut: connections are not drained, so streams cut by shutdown record after this flush and their
+    // partial usage is lost; drain connections first if restarts mid-stream become common.
     let _ = tokio::task::spawn_blocking(crate::storage::tokens::flush_token_usage_logged).await;
     crate::observability::clear_on_in_flight_change();
     crate::proxy::save_affinities();

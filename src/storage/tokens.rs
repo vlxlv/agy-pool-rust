@@ -160,6 +160,9 @@ pub fn clear_pending() {
 
 /// Writes pending usage to state.db in one transaction and returns how many (hour, account) rows it
 /// touched. On failure the usage is put back for the next flush.
+// shortcut: usage is attributed by account id at flush time, so if an id is removed and reused within one
+// flush interval (or during a stream that outlives the removal) that usage lands on the new account; key
+// pending entries by a never-reused account identity if that matters.
 pub fn flush_token_usage() -> Result<usize, StorageError> {
     let batch = std::mem::take(&mut *pending());
     if batch.is_empty() {

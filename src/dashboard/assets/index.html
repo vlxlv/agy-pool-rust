@@ -1429,9 +1429,11 @@
 
     async function fetchTokens() {
       try {
-        const res = await agyFetch('/api/v1/tokens?range=' + encodeURIComponent(tokenRange));
+        const range = tokenRange;
+        const res = await agyFetch('/api/v1/tokens?range=' + encodeURIComponent(range));
         if (!res.ok) return;
-        renderTokens(await res.json());
+        const data = await res.json();
+        if (range === tokenRange) renderTokens(data); // a slower reply for an older range must not win
       } catch (err) {
         console.error('Failed to fetch token usage:', err);
       }
@@ -1478,7 +1480,7 @@
       // Cached is a part of prompt: the bar shows uncached prompt + cached + output + thinking = total.
       const bar = document.getElementById('token-bar');
       bar.textContent = '';
-      const cached = Number(s.cached_tokens) || 0;
+      const cached = Math.min(Number(s.cached_tokens) || 0, Number(s.prompt_tokens) || 0);
       const segments = [
         ['seg-prompt', (Number(s.prompt_tokens) || 0) - cached],
         ['seg-cached', cached],
