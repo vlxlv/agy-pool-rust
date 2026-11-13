@@ -223,7 +223,7 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) runs `cargo fmt --check`, `cargo clipp
 
 ### Releasing
 
-Bump `version` in `Cargo.toml` (and `Cargo.lock`) in the change commit, wait for CI on `main`, then tag that commit `v<version>` (e.g. `v0.2.2`) and push the tag. [`release.yml`](.github/workflows/release.yml) triggers only on `v*` tags, verifies that the tag matches `Cargo.toml`, gates on the test suite and security audit before starting builds, packages and verifies all assets, and publishes the GitHub release titled with the version number (without leading `v`).
+Bump `version` in `Cargo.toml` (and `Cargo.lock`) in the change commit, wait for CI on `main`, then tag that commit `v<version>` (e.g. `v0.2.2`) and push the tag. Each CI run on `main` builds, packages and smoke-tests the release binaries and uploads them as an artifact. [`release.yml`](.github/workflows/release.yml) triggers only on `v*` tags and rebuilds nothing: it verifies that the tag matches `Cargo.toml`, downloads the assets from the green CI run for exactly the tagged commit (it fails if there is none, so tag only after CI passes), writes `SHA256SUMS`, and publishes the GitHub release titled with the version number (without leading `v`). Running it manually (`workflow_dispatch`) does the same without publishing.
 
 ## Acknowledgments
 
