@@ -2,6 +2,7 @@ pub mod auth;
 pub mod dto;
 pub mod telemetry;
 
+use auth::BearerCheck;
 pub use auth::PeerAddr;
 
 use std::pin::Pin;
@@ -13,6 +14,7 @@ use http_body_util::BodyExt;
 use hyper::body::{Body, Frame};
 use hyper::{Method, Request, Response, StatusCode};
 
+use crate::config::DashboardConfig;
 use crate::proxy::body::{ProxyBody, full_body};
 
 pub fn dashboard_html() -> &'static str {
@@ -250,6 +252,148 @@ fn api_error(status: StatusCode, code: &str, message: &str) -> Response<ProxyBod
     resp
 }
 
+fn unauthorized() -> Response<ProxyBody> {
+    let mut resp = api_error(
+        StatusCode::UNAUTHORIZED,
+        "UNAUTHORIZED",
+        "missing or invalid dashboard token",
+    );
+    resp.headers_mut().insert(
+        hyper::header::WWW_AUTHENTICATE,
+        hyper::header::HeaderValue::from_static("Bearer"),
+    );
+    resp
+}
+
+fn too_many_failures() -> Response<ProxyBody> {
+    let mut resp = api_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        "TOO_MANY_AUTH_FAILURES",
+        "too many invalid dashboard tokens; retry in 60 seconds",
+    );
+    resp.headers_mut().insert(
+        hyper::header::RETRY_AFTER,
+        hyper::header::HeaderValue::from_static("60"),
+    );
+    resp
+}
+
+/// None = allowed. Without a configured token, reads stay open as in 0.3.x.
+fn read_gate(req: &Request<hyper::body::Incoming>, token: Option<&str>) -> Option<Response<ProxyBody>> {
+    let token = token?;
+    match auth::check_bearer(req.headers(), auth::peer_ip(req.extensions()), token) {
+        BearerCheck::Ok => None,
+        BearerCheck::Throttled => Some(too_many_failures()),
+        BearerCheck::Missing | BearerCheck::Invalid => Some(unauthorized()),
+    }
+}
+
+/// Mutations need the custom header (forces a CORS preflight, which is never granted),
+/// a JSON content type, and the token unless the operator opted out.
+fn control_gate(
+    req: &Request<hyper::body::Incoming>,
+    cfg: &DashboardConfig,
+    token: Option<&str>,
+) -> Option<Response<ProxyBody>> {
+    let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
+    if header("x-agy-pool-control") != Some("1") {
+        return Some(api_error(
+            StatusCode::FORBIDDEN,
+            "CONTROL_HEADER_REQUIRED",
+            "missing X-Agy-Pool-Control: 1 header",
+        ));
+    }
+    let is_json = header(hyper::header::CONTENT_TYPE.as_str()).is_some_and(|v| {
+        v.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .eq_ignore_ascii_case("application/json")
+    });
+    if !is_json {
+        return Some(api_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "JSON_REQUIRED",
+            "Content-Type must be application/json",
+        ));
+    }
+    match token {
+        Some(_) => read_gate(req, token),
+        None if cfg.allow_unauthenticated_control => None,
+        None => Some(api_error(
+            StatusCode::FORBIDDEN,
+            "TOKEN_REQUIRED_FOR_CONTROL",
+            "set dashboard.auth_token or AGY_POOL_DASHBOARD_TOKEN to enable dashboard controls",
+        )),
+    }
+}
+
+fn auth_status_response(
+    req: &Request<hyper::body::Incoming>,
+    cfg: &DashboardConfig,
+    token: Option<&str>,
+) -> Response<ProxyBody> {
+    let authenticated = match token {
+        None => true,
+        Some(t) => match auth::check_bearer(req.headers(), auth::peer_ip(req.extensions()), t) {
+            BearerCheck::Ok => true,
+            BearerCheck::Throttled => return too_many_failures(),
+            BearerCheck::Missing | BearerCheck::Invalid => false,
+        },
+    };
+    let body = serde_json::json!({
+        "auth_required": token.is_some(),
+        "authenticated": authenticated,
+        "control_enabled": token.is_some() || cfg.allow_unauthenticated_control,
+    });
+    json_response(serde_json::to_vec(&body).unwrap_or_default())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrategyRequest {
+    strategy: String,
+}
+
+async fn set_strategy(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
+    let invalid = || {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "body must be {\"strategy\": \"smart\" | \"max_quota\"}",
+        )
+    };
+    let Ok(body) = http_body_util::Limited::new(req.into_body(), 4096).collect().await else {
+        return invalid();
+    };
+    let strategy = match serde_json::from_slice::<StrategyRequest>(&body.to_bytes()) {
+        Ok(r)
+            if matches!(
+                r.strategy.as_str(),
+                crate::config::STRATEGY_SMART | crate::config::STRATEGY_MAX_QUOTA
+            ) =>
+        {
+            r.strategy
+        }
+        _ => return invalid(),
+    };
+    let to_save = strategy.clone();
+    let saved = tokio::task::spawn_blocking(move || {
+        crate::storage::pool_transaction(move |p| {
+            p.strategy = to_save;
+            Ok(())
+        })
+    })
+    .await;
+    match saved {
+        Ok(Ok(())) => json_response(
+            serde_json::to_vec(&serde_json::json!({ "ok": true, "strategy": strategy })).unwrap_or_default(),
+        ),
+        Ok(Err(e)) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "STORAGE_ERROR", &e.to_string()),
+        Err(_) => internal_error(),
+    }
+}
+
 /// Requests the dashboard answers; everything else goes to the proxy. `POST /` stays a proxy call.
 pub fn owns(method: &Method, path: &str) -> bool {
     (path == "/" && method == Method::GET)
@@ -270,16 +414,41 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
         return forbidden();
     }
 
+    let cfg = crate::config::get_static_config().dashboard;
+    let token = crate::config::dashboard_token(&cfg);
+    let token = token.as_deref();
     let is_get = req.method() == Method::GET;
+    let is_post = req.method() == Method::POST;
+
     match route.as_str() {
         "/" | "/dashboard" if is_get => html_response(),
-        "/dashboard" | "/api/v1/status" | "/api/v1/accounts" | "/api/v1/forecast" | "/api/v1/events" if !is_get => {
+        "/dashboard"
+        | "/api/v1/auth/status"
+        | "/api/v1/status"
+        | "/api/v1/accounts"
+        | "/api/v1/forecast"
+        | "/api/v1/events"
+            if !is_get =>
+        {
             method_not_allowed("GET")
         }
-        "/api/v1/status" => status_response().await,
-        "/api/v1/accounts" => accounts_response(req.uri().query()).await,
-        "/api/v1/forecast" => forecast_response().await,
-        "/api/v1/events" => events_response(),
+        "/api/v1/auth/status" => auth_status_response(&req, &cfg, token),
+        "/api/v1/strategy" if !is_post => method_not_allowed("POST"),
+        "/api/v1/strategy" => match control_gate(&req, &cfg, token) {
+            Some(denied) => denied,
+            None => set_strategy(req).await,
+        },
+        "/api/v1/status" | "/api/v1/accounts" | "/api/v1/forecast" | "/api/v1/events" => {
+            if let Some(denied) = read_gate(&req, token) {
+                return denied;
+            }
+            match route.as_str() {
+                "/api/v1/status" => status_response().await,
+                "/api/v1/accounts" => accounts_response(req.uri().query()).await,
+                "/api/v1/forecast" => forecast_response().await,
+                _ => events_response(),
+            }
+        }
         _ => api_error(StatusCode::NOT_FOUND, "NOT_FOUND", "unknown dashboard API path"),
     }
 }
