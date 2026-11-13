@@ -1280,7 +1280,7 @@
           updateBanner.hidden = false;
           updateBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           const targetBtn = (upgradeBtn && !upgradeBtn.hidden) ? upgradeBtn : document.getElementById('update-deb-copy');
-          if (targetBtn) targetBtn.focus();
+          if (targetBtn) targetBtn.focus({ preventScroll: true });
         } else {
           showToast('Checking for updates...');
           const result = await checkForUpdate(true);
@@ -1390,13 +1390,14 @@
     }
 
     function fmtDurationParts(ms) {
-      if (ms === null || ms === undefined || isNaN(ms)) return { val: '—', unit: '' };
-      ms = Number(ms);
-      if (ms < 1000) return { val: String(ms), unit: 'ms' };
-      if (ms < 60000) return { val: (ms / 1000).toFixed(2), unit: 's' };
-      const m = Math.floor(ms / 60000);
-      const s = ((ms % 60000) / 1000).toFixed(1);
-      return { val: `${m}m ${s}s`, unit: '' };
+      const n = Number(ms);
+      if (ms == null || !Number.isFinite(n)) return { val: '—', unit: '' };
+      if (n < 1000) return { val: String(Math.round(n)), unit: 'ms' };
+      // Round once, then pick the unit, so 59999 ms is "1m 0.0s" rather than "60.00s".
+      const cs = Math.round(n / 10);
+      if (cs < 6000) return { val: (cs / 100).toFixed(2), unit: 's' };
+      const ds = Math.round(n / 100);
+      return { val: `${Math.floor(ds / 600)}m ${((ds % 600) / 10).toFixed(1)}s`, unit: '' };
     }
 
     function fmtMs(ms) {
