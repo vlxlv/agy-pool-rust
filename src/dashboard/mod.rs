@@ -422,7 +422,11 @@ async fn update_check_response(query: Option<&str>) -> Response<ProxyBody> {
                 "DASHBOARD",
                 &format!("update check failed: {e}"),
             );
-            api_error(StatusCode::BAD_GATEWAY, "UPDATE_CHECK_FAILED", &e)
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "UPDATE_CHECK_FAILED",
+                "could not check for updates; see the gateway log",
+            )
         }
     }
 }
@@ -431,7 +435,8 @@ async fn update_apply_response() -> Response<ProxyBody> {
     match crate::cli::update::apply_latest_update(crate::cli::update::RestartMode::Delayed(Duration::from_millis(500)))
         .await
     {
-        Ok(latest_version) => {
+        Ok(None) => api_error(StatusCode::CONFLICT, "UP_TO_DATE", "already running the latest release"),
+        Ok(Some(latest_version)) => {
             let body = serde_json::json!({
                 "ok": true,
                 "version": latest_version,
@@ -445,7 +450,11 @@ async fn update_apply_response() -> Response<ProxyBody> {
                 "DASHBOARD",
                 &format!("update apply failed: {e}"),
             );
-            api_error(StatusCode::INTERNAL_SERVER_ERROR, "UPDATE_APPLY_FAILED", &e)
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "UPDATE_APPLY_FAILED",
+                "update failed; see the gateway log",
+            )
         }
     }
 }

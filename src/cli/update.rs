@@ -4,6 +4,7 @@ use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const DEFAULT_RELEASES_API: &str = "https://api.github.com/repos/vlxlv/agy-pool-rust/releases?per_page=1";
 const DEFAULT_DPKG_FILE_LIST: &str = "/var/lib/dpkg/info/agy-pool.list";
@@ -227,19 +228,45 @@ pub enum RestartMode {
 static UPDATE_CACHE: Mutex<Option<(std::time::Instant, UpdateCheckResult)>> = Mutex::new(None);
 const UPDATE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
+// Even forced checks query GitHub at most once a minute: the unauthenticated API allows 60 calls an hour.
+static LAST_RELEASE_QUERY: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const MIN_RELEASE_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+static APPLY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
 pub fn clear_update_cache() {
-    let mut lock = UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    *lock = None;
+    *UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *LAST_RELEASE_QUERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    APPLY_IN_FLIGHT.store(false, Ordering::Release);
+}
+
+/// Reports whether release version `latest` is newer than `current` ("X.Y.Z", pre-release suffixes ignored).
+/// Unparsable versions fall back to "differs", the old behaviour.
+pub fn is_newer(latest: &str, current: &str) -> bool {
+    fn parse(v: &str) -> Option<(u64, u64, u64)> {
+        let core = v.split(['-', '+']).next()?;
+        let mut it = core.split('.').map(|p| p.parse::<u64>().ok());
+        let parsed = (it.next()??, it.next()??, it.next()??);
+        it.next().is_none().then_some(parsed)
+    }
+    match (parse(latest), parse(current)) {
+        (Some(l), Some(c)) => l > c,
+        _ => latest != current,
+    }
 }
 
 pub async fn check_latest_update(force_refresh: bool) -> Result<UpdateCheckResult, String> {
-    if !force_refresh {
-        let lock = UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((ts, ref res)) = *lock
-            && ts.elapsed() < UPDATE_CACHE_TTL
-        {
+    if let Some((ts, ref res)) = *UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) {
+        let age = ts.elapsed();
+        if age < UPDATE_CACHE_TTL && (!force_refresh || age < MIN_RELEASE_QUERY_INTERVAL) {
             return Ok(res.clone());
         }
+    }
+    {
+        let mut last = LAST_RELEASE_QUERY.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|t| t.elapsed() < MIN_RELEASE_QUERY_INTERVAL) {
+            return Err("release check rate-limited; try again in a minute".to_string());
+        }
+        *last = Some(std::time::Instant::now());
     }
 
     let token = github_token();
@@ -256,7 +283,7 @@ pub async fn check_latest_update(force_refresh: bool) -> Result<UpdateCheckResul
     let rel = &releases[0];
     let latest = rel.tag_name.strip_prefix('v').unwrap_or(&rel.tag_name).to_string();
     let current = crate::VERSION.to_string();
-    let has_update = latest != current;
+    let has_update = is_newer(&latest, &current);
     let release_url = format!("https://github.com/vlxlv/agy-pool-rust/releases/tag/{}", rel.tag_name);
 
     let res = UpdateCheckResult {
@@ -271,7 +298,13 @@ pub async fn check_latest_update(force_refresh: bool) -> Result<UpdateCheckResul
     Ok(res)
 }
 
-pub async fn apply_latest_update(restart: RestartMode) -> Result<String, String> {
+/// Replaces the binary with the latest release when it is newer. Returns the installed version, or `None` when
+/// already up to date.
+pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>, String> {
+    if APPLY_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return Err("an update is already in progress".to_string());
+    }
+    let guard = ApplyGuard;
     let token = github_token();
     let api_url = releases_api();
     let body = download(&api_url, &token)
@@ -286,8 +319,8 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<String, String>
     let rel = &releases[0];
     let latest = rel.tag_name.strip_prefix('v').unwrap_or(&rel.tag_name);
 
-    if latest == crate::VERSION {
-        return Ok(crate::VERSION.to_string());
+    if !is_newer(latest, crate::VERSION) {
+        return Ok(None);
     }
 
     let exe = update_target_path();
@@ -372,18 +405,36 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<String, String>
             }
         }
         RestartMode::Delayed(delay) if was_running => {
+            // Keep APPLY_IN_FLIGHT set until the restart replaces this process, so a second click cannot
+            // download again and queue a second restart.
+            std::mem::forget(guard);
             let exe_clone = exe.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
-                let mut cmd = std::process::Command::new(&exe_clone);
-                cmd.arg("restart");
-                let _ = cmd.status();
+                let status =
+                    tokio::task::spawn_blocking(move || std::process::Command::new(&exe_clone).arg("restart").status())
+                        .await;
+                if !matches!(status, Ok(Ok(ref s)) if s.success()) {
+                    crate::observability::log_message_level(
+                        crate::observability::LogLevel::Error,
+                        "UPDATE",
+                        &format!("binary updated but gateway restart failed ({status:?}); run `agy-pool restart`"),
+                    );
+                }
             });
         }
         _ => {}
     }
 
-    Ok(latest.to_string())
+    Ok(Some(latest.to_string()))
+}
+
+struct ApplyGuard;
+
+impl Drop for ApplyGuard {
+    fn drop(&mut self) {
+        APPLY_IN_FLIGHT.store(false, Ordering::Release);
+    }
 }
 
 pub async fn update_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
@@ -430,7 +481,15 @@ pub async fn update_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
 
     let exe = update_target_path();
     match apply_latest_update(RestartMode::Immediate).await {
-        Ok(latest) => {
+        Ok(None) => {
+            let _ = writeln!(
+                io.stdout,
+                "{}✓ agy-pool {} is up to date{}",
+                CLR_GREEN, check.current_version, CLR_RESET
+            );
+            0
+        }
+        Ok(Some(latest)) => {
             let _ = writeln!(
                 io.stdout,
                 "{}✓ Updated {} to {}{}",
@@ -451,6 +510,20 @@ pub async fn update_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_newer_compares_versions_not_strings() {
+        assert!(is_newer("0.3.7", "0.3.6"));
+        assert!(is_newer("0.10.0", "0.9.9"));
+        assert!(!is_newer("0.3.6", "0.3.7"), "never offer a downgrade");
+        assert!(!is_newer("0.3.7", "0.3.7"));
+        assert!(!is_newer("0.3.7", "0.3.7-dev"), "same core version is not an update");
+        assert!(is_newer("1.0.0", "0.1.1-alpha.2"));
+        assert!(
+            is_newer("nightly", "0.3.7"),
+            "unparsable versions fall back to 'differs'"
+        );
+    }
     use crate::cli::test_support::{cli_test_env, run_cli};
     use std::sync::Arc;
 
