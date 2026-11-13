@@ -578,6 +578,16 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
         let _ = trigger_tx.try_send(());
     })));
 
+    // 5b. Token usage: write the in-memory hourly counters to state.db off the request path.
+    let token_flush_task = tokio::spawn(async {
+        let mut ticker = tokio::time::interval(crate::storage::tokens::FLUSH_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            let _ = tokio::task::spawn_blocking(crate::storage::tokens::flush_token_usage_logged).await;
+        }
+    });
+
     // 6. Signal readiness
     if let Some(tx) = opts.ready_tx.take() {
         let _ = tx.send(());
@@ -658,6 +668,11 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     let _ = sweep_stop_tx.send(());
     let _ = sweep_task.await;
     stats_writer.stop().await;
+    token_flush_task.abort();
+    let _ = token_flush_task.await;
+    // shortcut: connections are not drained, so streams cut by shutdown record after this flush and their
+    // partial usage is lost; drain connections first if restarts mid-stream become common.
+    let _ = tokio::task::spawn_blocking(crate::storage::tokens::flush_token_usage_logged).await;
     crate::observability::clear_on_in_flight_change();
     crate::proxy::save_affinities();
 

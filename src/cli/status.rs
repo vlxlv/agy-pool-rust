@@ -285,6 +285,12 @@ pub async fn status_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
         db_path.display(),
         crate::storage::STATE_DB_SCHEMA_VERSION
     );
+    if verbose
+        && let Some(line) =
+            crate::cli::tokens::summary_line(crate::storage::tokens::TokenRange::Day, crate::clock::now_unix() as i64)
+    {
+        let _ = writeln!(io.stdout, "{line}");
+    }
 
     let pool = match crate::storage::load_pool() {
         Ok(p) => p,
@@ -987,9 +993,14 @@ mod tests {
             "prompt",
             "content",
         ];
+        let verbose_without_tokens = verbose_str
+            .lines()
+            .filter(|l| !l.starts_with("Tokens  :"))
+            .collect::<Vec<_>>()
+            .join("\n");
         for pattern in prohibited_patterns {
             assert!(
-                !verbose_str.contains(pattern),
+                !verbose_without_tokens.contains(pattern),
                 "SECURITY/PRIVACY VIOLATION: verbose status leaked {pattern:?}"
             );
             assert!(

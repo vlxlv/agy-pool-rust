@@ -11,6 +11,7 @@ pub mod stats;
 pub mod status;
 pub mod term;
 pub mod test_support;
+pub mod tokens;
 pub mod top;
 pub mod update;
 pub mod width;
@@ -200,7 +201,7 @@ fn print_help(out: &mut dyn Write) {
         out,
         "{}",
         concat!(
-            "usage: agy-pool [-h] [-v] {login,add,import-current,list,ls,quota,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,forecast,runway,predict,top,watch,monitor,update,version,run} ...\n\n",
+            "usage: agy-pool [-h] [-v] {login,add,import-current,list,ls,quota,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,tokens,forecast,runway,predict,top,watch,monitor,update,version,run} ...\n\n",
             "Antigravity Multi-Account Pool & Load Balancer for Termux & Linux\n\n",
             "Examples:\n",
             "  agy-pool login            Add/login a new Google account\n",
@@ -208,6 +209,7 @@ fn print_help(out: &mut dyn Write) {
             "  agy-pool quota [-e]       Display per-account quota progress bars (-e to show email)\n",
             "  agy-pool top [-e]         Interactive real-time quota & activity dashboard (-e to show email)\n",
             "  agy-pool stats [--json]   Track and evaluate algorithm routing and rotation effectiveness\n",
+            "  agy-pool tokens [-r 24h]  Show token usage per account (ranges: 1h, 24h, 7d, total)\n",
             "  agy-pool forecast         Predict quota endurance and runway based on usage\n",
             "  agy-pool status           Show gateway process and runtime summary\n",
             "  agy-pool update [--check] Update agy-pool to the latest GitHub release\n",
@@ -503,6 +505,7 @@ pub async fn main(args: &[String], io: &mut Io<'_>) -> i32 {
         "restart" => daemon_cmd::restart_daemon_cmd(io, &args[1..]).await,
         "status" => status::status_cmd(io, &args[1..]).await,
         "stats" | "audit" | "effectiveness" => stats::stats_cmd(io, &args[1..]).await,
+        "tokens" => tokens::tokens_cmd(io, &args[1..]).await,
         "forecast" | "runway" | "predict" => {
             if let Err(e) = forecast::forecast_cmd(io, &args[1..]).await {
                 let _ = writeln!(io.stderr, "{}[Error] {}{}", CLR_RED, e, CLR_RESET);
@@ -519,7 +522,7 @@ pub async fn main(args: &[String], io: &mut Io<'_>) -> i32 {
         _ => {
             let _ = writeln!(
                 io.stderr,
-                "usage: agy-pool [-h] [-v] {{login,add,import-current,list,ls,quota,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,forecast,runway,predict,top,watch,monitor,update,version,run}} ..."
+                "usage: agy-pool [-h] [-v] {{login,add,import-current,list,ls,quota,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,tokens,forecast,runway,predict,top,watch,monitor,update,version,run}} ..."
             );
             let _ = writeln!(io.stderr, "agy-pool: error: argument command: invalid choice: '{cmd}'");
             2
