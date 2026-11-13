@@ -2,6 +2,7 @@ pub mod db;
 pub mod inflight;
 pub mod model;
 pub mod pool;
+pub mod tokens;
 
 pub use db::*;
 pub use inflight::{

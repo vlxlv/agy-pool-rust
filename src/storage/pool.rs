@@ -510,6 +510,7 @@ pub fn save_pool_to_tx(tx: &rusqlite::Transaction, pool: &Pool) -> Result<(), St
     let new_id_set: std::collections::HashSet<&str> = pool.accounts.iter().map(|a| a.id.as_str()).collect();
     for existing_id in existing_ids {
         if !new_id_set.contains(existing_id.as_str()) {
+            super::tokens::fold_removed_account_tx(tx, &existing_id)?;
             tx.execute("DELETE FROM accounts WHERE id = ?1", [&existing_id])?;
         }
     }

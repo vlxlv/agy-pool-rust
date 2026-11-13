@@ -358,6 +358,7 @@ impl StateDb {
         }
 
         test_conn.execute_batch(INFLIGHT_LEASE_DDL)?;
+        test_conn.execute_batch(super::tokens::TOKEN_USAGE_DDL)?;
         ensure_lease_columns(&test_conn)?;
         ensure_file_permissions(db_path)?;
 
