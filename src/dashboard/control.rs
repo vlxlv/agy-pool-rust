@@ -193,13 +193,13 @@ async fn reorder(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
 }
 
 async fn switch(id: &str) -> Response<ProxyBody> {
-    // Check the exact id first: switch_account falls back to name and substring matches.
+    // Check first so an unknown id is a 404 rather than a switch failure.
     match load_account(id).await {
         Ok(Some(_)) => {}
         Ok(None) => return account_not_found(),
         Err(resp) => return resp,
     }
-    match crate::accounts::switch_account(id).await {
+    match crate::accounts::switch_account_id(id).await {
         Ok(_) => ok(serde_json::json!({})),
         Err(e) => {
             log_error(format!("failed to switch the CLI account to {id}: {e}"));

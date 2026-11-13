@@ -738,10 +738,28 @@ pub async fn switch_account(target: &str) -> Result<crate::storage::Account, Acc
         }
     };
 
+    activate_account(&pool, selected).await
+}
+
+/// Switches the native CLI to the account with exactly this id; unlike `switch_account` it never matches
+/// names, positions or substrings.
+pub async fn switch_account_id(id: &str) -> Result<crate::storage::Account, AccountsError> {
+    let pool = crate::storage::load_pool()?;
+    let selected = match pool.accounts.iter().find(|a| a.id == id) {
+        Some(a) => a.clone(),
+        None => return Err(AccountsError::Message(format!("account '{}' not found", id))),
+    };
+    activate_account(&pool, selected).await
+}
+
+async fn activate_account(
+    pool: &crate::storage::Pool,
+    selected: crate::storage::Account,
+) -> Result<crate::storage::Account, AccountsError> {
     let previous = pool
         .active_account_id
         .as_ref()
-        .and_then(|aid| find_account_by_target(&pool.accounts, aid).cloned());
+        .and_then(|aid| pool.accounts.iter().find(|a| a.id == *aid).cloned());
 
     let mut selected_to_sync = selected.clone();
     sync_account_to_agy(&mut selected_to_sync).await?;
@@ -2717,8 +2735,12 @@ mod tests {
 
         assert_eq!(switch_account("acc_2").await.unwrap().id, "acc_2");
         assert_eq!(switch_account("1").await.unwrap().id, "1");
+        // "2" is a list position and "acc" a substring for switch_account; switch_account_id matches neither.
+        assert!(switch_account_id("2").await.is_err());
+        assert!(switch_account_id("acc").await.is_err());
+        assert_eq!(switch_account_id("acc_2").await.unwrap().id, "acc_2");
         let loaded = crate::storage::load_pool().unwrap();
-        assert_eq!(loaded.active_account_id.as_deref(), Some("1"));
+        assert_eq!(loaded.active_account_id.as_deref(), Some("acc_2"));
     }
 
     #[test]

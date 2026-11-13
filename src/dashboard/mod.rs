@@ -466,7 +466,7 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
         r if r.starts_with("/api/v1/accounts/") => match control_gate(&req, &cfg, token) {
             Some(denied) => denied,
             None => {
-                let rest = r.trim_start_matches("/api/v1/accounts/").to_owned();
+                let rest = r.strip_prefix("/api/v1/accounts/").unwrap_or_default().to_owned();
                 control::handle(&rest, req).await
             }
         },

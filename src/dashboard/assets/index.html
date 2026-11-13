@@ -916,6 +916,7 @@
     }
 
     function showVerifyLink(url) {
+      if (!/^https:\/\//.test(url)) return;
       const link = document.getElementById('verify-link');
       link.href = url;
       link.textContent = url;
