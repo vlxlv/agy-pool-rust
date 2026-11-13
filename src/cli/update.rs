@@ -50,6 +50,20 @@ fn dpkg_file_list() -> PathBuf {
     lock.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_DPKG_FILE_LIST))
 }
 
+/// Reports whether the binary `update` would replace is owned by the agy-pool Debian package.
+pub fn is_dpkg_managed() -> bool {
+    let Ok(list) = std::fs::read_to_string(dpkg_file_list()) else {
+        return false;
+    };
+    let exe = update_target_path();
+    let exe = exe.to_string_lossy();
+    list.lines().any(|l| l == exe)
+}
+
+fn deb_asset_name(version: &str) -> String {
+    format!("agy-pool_{version}_{}.deb", current_go_arch())
+}
+
 pub fn current_go_os() -> &'static str {
     match std::env::consts::OS {
         "macos" => "darwin",
@@ -216,6 +230,12 @@ pub struct UpdateCheckResult {
     pub latest_version: String,
     pub has_update: bool,
     pub release_url: String,
+    /// The binary belongs to the Debian package, so the one-click upgrade cannot replace it.
+    #[serde(default)]
+    pub package_managed: bool,
+    /// The release's `.deb` for this architecture, when package-managed and an update exists.
+    #[serde(default)]
+    pub deb_package_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,12 +305,17 @@ pub async fn check_latest_update(force_refresh: bool) -> Result<UpdateCheckResul
     let current = crate::VERSION.to_string();
     let has_update = is_newer(&latest, &current);
     let release_url = format!("https://github.com/vlxlv/agy-pool-rust/releases/tag/{}", rel.tag_name);
+    let package_managed = is_dpkg_managed();
+    let deb = deb_asset_name(&latest);
+    let deb_package_name = (package_managed && has_update && rel.assets.iter().any(|a| a.name == deb)).then_some(deb);
 
     let res = UpdateCheckResult {
         current_version: current,
         latest_version: latest,
         has_update,
         release_url,
+        package_managed,
+        deb_package_name,
     };
 
     let mut lock = UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -324,18 +349,13 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
     }
 
     let exe = update_target_path();
-    let dpkg_path = dpkg_file_list();
-    if let Ok(list) = std::fs::read_to_string(&dpkg_path) {
-        let exe_str = exe.to_string_lossy();
-        if list.lines().any(|l| l == exe_str) {
-            return Err(format!(
-                "{} is installed by the agy-pool Debian package; install agy-pool_{}_{}.deb from release {} with `sudo apt install ./<file>.deb`",
-                exe.display(),
-                latest,
-                current_go_arch(),
-                rel.tag_name
-            ));
-        }
+    if is_dpkg_managed() {
+        let deb = deb_asset_name(latest);
+        return Err(format!(
+            "{} is installed by the agy-pool Debian package; download {deb} from release {} and run `sudo apt install ./{deb}`",
+            exe.display(),
+            rel.tag_name
+        ));
     }
 
     let bin_name = format!("agy-pool-{}-{}", current_go_os(), current_go_arch());
@@ -590,8 +610,9 @@ mod tests {
                     };
 
                     if path.contains("/releases") {
+                        let deb = deb_asset_name(tag.trim_start_matches('v'));
                         let body = format!(
-                            r#"[{{"tag_name":"{tag}","assets":[{{"name":"{bin_name}","url":"http://127.0.0.1:{port}/bin"}},{{"name":"SHA256SUMS","url":"http://127.0.0.1:{port}/sums"}}]}}]"#
+                            r#"[{{"tag_name":"{tag}","assets":[{{"name":"{bin_name}","url":"http://127.0.0.1:{port}/bin"}},{{"name":"SHA256SUMS","url":"http://127.0.0.1:{port}/sums"}},{{"name":"{deb}","url":"http://127.0.0.1:{port}/deb"}}]}}]"#
                         );
                         let resp = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -698,12 +719,25 @@ mod tests {
 
         // dpkgFileList check
         let dpkg_file = temp_dir.path().join("agy-pool.list");
+        std::fs::write(&dpkg_file, "/.\n/usr/bin/other\n").unwrap();
+        set_dpkg_file_list(Some(dpkg_file.clone()));
+        assert!(!is_dpkg_managed(), "a dpkg list without the target must not count");
         std::fs::write(&dpkg_file, format!("/.\n{}\n", target.display())).unwrap();
-        set_dpkg_file_list(Some(dpkg_file));
+        assert!(is_dpkg_managed());
+
+        let deb = format!("agy-pool_9.9.9_{}.deb", current_go_arch());
+        clear_update_cache();
+        let check = check_latest_update(true).await.unwrap();
+        assert!(check.package_managed && check.has_update, "{check:?}");
+        assert_eq!(check.deb_package_name.as_deref(), Some(deb.as_str()));
 
         let (code, out) = run_update(&target, &[]).await;
         assert_eq!(code, 1, "dpkg-owned code mismatch: {out}");
         assert!(out.contains("Debian package"), "dpkg message missing: {out}");
+        assert!(
+            out.contains(&format!("sudo apt install ./{deb}")),
+            "dpkg message lacks the .deb: {out}"
+        );
         assert!(out.ends_with("|old binary"), "dpkg replaced binary: {out}");
 
         set_dpkg_file_list(None);

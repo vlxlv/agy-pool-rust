@@ -1377,6 +1377,7 @@ async fn test_dashboard_update_endpoints() {
         fn drop(&mut self) {
             agy_pool::cli::update::set_releases_api(None);
             agy_pool::cli::update::set_update_target_path(None);
+            agy_pool::cli::update::set_dpkg_file_list(None);
             agy_pool::cli::update::clear_update_cache();
         }
     }
@@ -1432,8 +1433,13 @@ async fn test_dashboard_update_endpoints() {
                 };
 
                 if path.contains("/releases") {
+                    let deb = format!(
+                        "agy-pool_{}_{}.deb",
+                        tag.trim_start_matches('v'),
+                        agy_pool::cli::update::current_go_arch()
+                    );
                     let body = format!(
-                        r#"[{{"tag_name":"{tag}","assets":[{{"name":"{bin_name}","url":"http://127.0.0.1:{port}/bin"}},{{"name":"SHA256SUMS","url":"http://127.0.0.1:{port}/sums"}}]}}]"#
+                        r#"[{{"tag_name":"{tag}","assets":[{{"name":"{bin_name}","url":"http://127.0.0.1:{port}/bin"}},{{"name":"SHA256SUMS","url":"http://127.0.0.1:{port}/sums"}},{{"name":"{deb}","url":"http://127.0.0.1:{port}/deb"}}]}}]"#
                     );
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1480,6 +1486,9 @@ async fn test_dashboard_update_endpoints() {
 
     *DASHBOARD_TEST_BIN.lock().unwrap() = Some(target_bin.clone());
     agy_pool::cli::update::set_update_target_path(Some(test_bin_provider));
+    // Never consult the host's real /var/lib/dpkg list.
+    let dpkg_list = temp_target_dir.path().join("agy-pool.list");
+    agy_pool::cli::update::set_dpkg_file_list(Some(dpkg_list.clone()));
 
     // Dashboard configured with auth token
     set_dashboard_config(Some(TEST_TOKEN), false);
@@ -1506,6 +1515,8 @@ async fn test_dashboard_update_endpoints() {
     assert_eq!(json["has_update"], true);
     assert_eq!(json["latest_version"], "9.9.9");
     assert_eq!(json["current_version"], agy_pool::VERSION);
+    assert_eq!(json["package_managed"], false);
+    assert!(json["deb_package_name"].is_null());
 
     // 3. POST /api/v1/update controls gating:
     // a) Missing X-Agy-Pool-Control header -> 403 Forbidden
@@ -1550,10 +1561,45 @@ async fn test_dashboard_update_endpoints() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    // d) Valid POST with all headers -> 200 OK and target binary is replaced!
     let mut valid_post = authed_headers.clone();
     valid_post.insert("x-agy-pool-control", "1".parse().unwrap());
     valid_post.insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+
+    // d) Binary owned by the Debian package: the check says so, and the apply error carries the apt command.
+    std::fs::write(&dpkg_list, format!("/.\n{}\n", target_bin.display())).unwrap();
+    agy_pool::cli::update::clear_update_cache();
+    let deb = format!("agy-pool_9.9.9_{}.deb", agy_pool::cli::update::current_go_arch());
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/update?refresh=true",
+        authed_headers.clone(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["package_managed"], true);
+    assert_eq!(json["deb_package_name"], deb.as_str());
+    let (status, _, body) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/update",
+        valid_post.clone(),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error_code(&body), "UPDATE_APPLY_FAILED");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let msg = json["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("Debian package"), "{msg}");
+    assert!(msg.contains(&format!("sudo apt install ./{deb}")), "{msg}");
+    assert_eq!(std::fs::read(&target_bin).unwrap(), b"old binary");
+    std::fs::remove_file(&dpkg_list).unwrap();
+    agy_pool::cli::update::clear_update_cache();
+
+    // e) Valid POST with all headers -> 200 OK and target binary is replaced!
     let (status, _, body) = send_request(
         addr,
         Method::POST,
