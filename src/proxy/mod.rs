@@ -860,14 +860,13 @@ impl Handler {
     }
 
     pub async fn serve(&self, req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
+        if crate::dashboard::owns(req.method(), req.uri().path()) {
+            return crate::dashboard::serve(req).await;
+        }
         self.handle_proxy(req).await
     }
 
     pub async fn handle_proxy(&self, req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
-        if let Some(resp) = crate::dashboard::try_handle_request(&req).await {
-            return resp;
-        }
-
         if req.method() == Method::GET {
             let path = req.uri().path();
             if path == "/metrics" || path == "/metrics/" {

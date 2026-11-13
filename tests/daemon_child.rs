@@ -335,7 +335,7 @@ fn test_daemon_child_applies_config_model_mapping() {
 }
 
 #[test]
-fn test_daemon_child_reports_invalid_config() {
+fn test_daemon_child_refuses_invalid_config() {
     let rust_bin = env!("CARGO_BIN_EXE_agy-pool");
     let tmp_dir = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp_dir.path().join("data");
@@ -343,7 +343,8 @@ fn test_daemon_child_reports_invalid_config() {
 
     let port = get_ephemeral_port();
     let cfg_file = tmp_dir.path().join("config.json");
-    // Typo'd key: deny_unknown_fields rejects the whole file, which used to be dropped silently.
+    // Typo'd key: deny_unknown_fields rejects the whole file. Falling back to defaults could
+    // silently drop dashboard.auth_token, so the daemon must refuse to start instead.
     std::fs::write(
         &cfg_file,
         r#"{"version": 1, "server": {"keep_alive_sec": 10}, "model_mapping": {"a": "b"}}"#,
@@ -358,15 +359,15 @@ fn test_daemon_child_reports_invalid_config() {
             entrypoint_path: Some(PathBuf::from(rust_bin)),
             ..Default::default()
         },
-    )
-    .expect("start_instance");
-    let mut kill_guard = ProcessGuard::new(res.pid);
-    assert!(wait_for_healthz(port, Duration::from_secs(3)));
+    );
     let log = std::fs::read_to_string(ctx.log_file()).unwrap_or_default();
-    agy_pool::daemon::stop_instance(&ctx, Duration::from_secs(5)).expect("stop_instance");
-    kill_guard.disarm();
+    assert!(res.is_err(), "daemon must refuse an invalid config; log:\n{log}");
     assert!(
-        log.contains("ignoring invalid config"),
-        "daemon must report a rejected config file; log:\n{log}"
+        log.contains("invalid config"),
+        "daemon must name the rejected config file; log:\n{log}"
+    );
+    assert!(
+        !wait_for_healthz(port, Duration::from_millis(500)),
+        "no gateway may be listening"
     );
 }

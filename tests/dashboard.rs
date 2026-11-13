@@ -17,6 +17,7 @@ pub struct DashboardTestGuard<'a> {
 
 impl<'a> Drop for DashboardTestGuard<'a> {
     fn drop(&mut self) {
+        agy_pool::config::set_static_config(agy_pool::config::default_static_config());
         agy_pool::config::reset_data_dir();
         agy_pool::config::set_test_mode(false);
     }
@@ -26,6 +27,7 @@ async fn lock_test() -> DashboardTestGuard<'static> {
     let async_guard = DASHBOARD_TEST_LOCK.lock().await;
     let sync_guard = agy_pool::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     agy_pool::config::set_test_mode(true);
+    agy_pool::dashboard::auth::reset_auth_failures();
     DashboardTestGuard {
         _async_guard: async_guard,
         _sync_guard: sync_guard,
@@ -75,10 +77,11 @@ async fn start_server() -> (
                     break;
                 }
                 accept_res = listener.accept() => {
-                    if let Ok((stream, _)) = accept_res {
+                    if let Ok((stream, peer)) = accept_res {
                         let io = hyper_util::rt::TokioIo::new(stream);
                         let h = handler.clone();
-                        let service = hyper::service::service_fn(move |req| {
+                        let service = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
+                            req.extensions_mut().insert(agy_pool::dashboard::PeerAddr(peer));
                             let h = h.clone();
                             async move { Ok::<_, std::convert::Infallible>(h.serve(req).await) }
                         });
@@ -138,6 +141,43 @@ async fn send_request(
     }
     drop(sender);
     (status, resp_headers, body_bytes.freeze())
+}
+
+const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+fn set_dashboard_config(token: Option<&str>, allow_unauthenticated_control: bool) {
+    let mut cfg = agy_pool::config::default_static_config();
+    cfg.dashboard.auth_token = token.map(str::to_string);
+    cfg.dashboard.allow_unauthenticated_control = allow_unauthenticated_control;
+    agy_pool::config::set_static_config(cfg);
+}
+
+fn hdrs(pairs: &[(&'static str, &str)]) -> HeaderMap {
+    let mut h = HeaderMap::new();
+    for (k, v) in pairs {
+        h.append(*k, v.parse().unwrap());
+    }
+    h
+}
+
+fn bearer(token: &str) -> String {
+    format!("Bearer {token}")
+}
+
+fn error_code(body: &Bytes) -> String {
+    let json: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    json["error"]["code"].as_str().unwrap_or_default().to_string()
+}
+
+async fn post_strategy(addr: SocketAddr, headers: HeaderMap, body: &'static str) -> (StatusCode, HeaderMap, Bytes) {
+    send_request(
+        addr,
+        Method::POST,
+        "/api/v1/strategy",
+        headers,
+        Bytes::from_static(body.as_bytes()),
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -647,6 +687,31 @@ async fn test_embedded_spa_asset_constraints() {
         "missing window.location.host endpoint pill formatting"
     );
 
+    // Auth: the token stays per tab and goes out as a Bearer header; EventSource cannot send headers.
+    for needle in [
+        "agy_dashboard_token",
+        "Authorization",
+        "X-Agy-Pool-Control",
+        "/api/v1/auth/status",
+        "/api/v1/strategy",
+        "token-card",
+        "strategy-select",
+        "getReader()",
+    ] {
+        assert!(body_str.contains(needle), "missing {needle}");
+    }
+    assert!(
+        !body_str.contains("new EventSource("),
+        "EventSource cannot send the Bearer token"
+    );
+    for line in body_str.lines().filter(|l| l.contains("sessionStorage.")) {
+        assert!(
+            line.contains("try {"),
+            "unguarded sessionStorage access: {}",
+            line.trim()
+        );
+    }
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
@@ -675,6 +740,305 @@ async fn test_host_validation_accepts_multi_listen_runtime_meta() {
     denied.insert(hyper::header::HOST, "evil.internal:8890".parse().unwrap());
     let (status, _, _) = send_request(addr, Method::GET, "/api/v1/status", denied, Bytes::new()).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_trailing_slash_and_unknown_api_paths() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    let mut pool = agy_pool::storage::load_pool().unwrap();
+    pool.show_email = Some(true);
+    agy_pool::storage::save_pool(&pool).unwrap();
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    // A trailing slash must not drop the query string.
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/accounts/?show_email=true",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["accounts"][0]["email"], "alice@example.com");
+
+    // Unknown /api/v1/* paths are answered locally (JSON 404), never proxied upstream.
+    for (method, path) in [
+        (Method::GET, "/api/v1/nope"),
+        (Method::POST, "/api/v1/accounts/acc_1/enable"),
+    ] {
+        let (status, headers, body) = send_request(addr, method, path, HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "NOT_FOUND", "{path}");
+    }
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reads_without_token_stay_open() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, _, _) = send_request(addr, Method::GET, "/api/v1/status", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, headers, body) =
+        send_request(addr, Method::GET, "/api/v1/auth/status", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(hyper::header::CACHE_CONTROL).unwrap(), "no-store");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"auth_required": false, "authenticated": true, "control_enabled": false})
+    );
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reads_require_token_when_configured() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    // The HTML shell carries no account data and stays reachable so the browser can ask for the token.
+    let (status, _, _) = send_request(addr, Method::GET, "/dashboard", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    for path in [
+        "/api/v1/status",
+        "/api/v1/accounts",
+        "/api/v1/forecast",
+        "/api/v1/events",
+    ] {
+        let (status, headers, body) = send_request(addr, Method::GET, path, HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(
+            headers.get(hyper::header::WWW_AUTHENTICATE).unwrap(),
+            "Bearer",
+            "{path}"
+        );
+        assert_eq!(error_code(&body), "UNAUTHORIZED", "{path}");
+    }
+    for path in ["/api/v1/status", "/api/v1/accounts", "/api/v1/forecast"] {
+        let (status, _, _) = send_request(
+            addr,
+            Method::GET,
+            path,
+            hdrs(&[("authorization", bearer(TEST_TOKEN).as_str())]),
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+    }
+
+    let (_, _, body) = send_request(addr, Method::GET, "/api/v1/auth/status", HeaderMap::new(), Bytes::new()).await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"auth_required": true, "authenticated": false, "control_enabled": true})
+    );
+    let (_, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/auth/status",
+        hdrs(&[("authorization", bearer(TEST_TOKEN).as_str())]),
+        Bytes::new(),
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["authenticated"], true);
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_strategy_control_matrix() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    let (addr, server_task, shutdown_tx) = start_server().await;
+    let auth = bearer(TEST_TOKEN);
+    let good = || {
+        hdrs(&[
+            ("x-agy-pool-control", "1"),
+            ("content-type", "application/json"),
+            ("authorization", auth.as_str()),
+        ])
+    };
+    let body = r#"{"strategy":"max_quota"}"#;
+    let strategy = || agy_pool::storage::load_pool().unwrap().strategy;
+
+    // No token configured: controls stay off even from loopback.
+    let (status, _, resp) = post_strategy(addr, good(), body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error_code(&resp), "TOKEN_REQUIRED_FOR_CONTROL");
+    assert_eq!(strategy(), "smart");
+
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (status, _, resp) = post_strategy(
+        addr,
+        hdrs(&[("content-type", "application/json"), ("authorization", auth.as_str())]),
+        body,
+    )
+    .await;
+    assert_eq!(
+        (status, error_code(&resp).as_str()),
+        (StatusCode::FORBIDDEN, "CONTROL_HEADER_REQUIRED")
+    );
+    let (status, _, resp) = post_strategy(
+        addr,
+        hdrs(&[
+            ("x-agy-pool-control", "1"),
+            ("content-type", "text/plain"),
+            ("authorization", auth.as_str()),
+        ]),
+        body,
+    )
+    .await;
+    assert_eq!(
+        (status, error_code(&resp).as_str()),
+        (StatusCode::UNSUPPORTED_MEDIA_TYPE, "JSON_REQUIRED")
+    );
+    let (status, _, _) = post_strategy(
+        addr,
+        hdrs(&[("x-agy-pool-control", "1"), ("content-type", "application/json")]),
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, _) = post_strategy(
+        addr,
+        hdrs(&[
+            ("x-agy-pool-control", "1"),
+            ("content-type", "application/json"),
+            ("authorization", "Bearer wrong"),
+        ]),
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Cross-site browsers are stopped by the Host/Origin guard before auth.
+    let mut cross_site = good();
+    cross_site.insert(hyper::header::ORIGIN, "http://evil.example.com".parse().unwrap());
+    let (status, _, _) = post_strategy(addr, cross_site, body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(strategy(), "smart");
+
+    for bad in [
+        r#"{"strategy":"round_robin"}"#,
+        r#"{"strategy":"smart","x":1}"#,
+        "not json",
+    ] {
+        let (status, _, resp) = post_strategy(addr, good(), bad).await;
+        assert_eq!(
+            (status, error_code(&resp).as_str()),
+            (StatusCode::BAD_REQUEST, "INVALID_ARGUMENT"),
+            "{bad}"
+        );
+    }
+
+    let (status, headers, resp) = post_strategy(addr, good(), body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(hyper::header::CACHE_CONTROL).unwrap(), "no-store");
+    let json: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(json, serde_json::json!({"ok": true, "strategy": "max_quota"}));
+    assert_eq!(strategy(), "max_quota");
+    let (_, _, resp) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/status",
+        hdrs(&[("authorization", auth.as_str())]),
+        Bytes::new(),
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(json["strategy"], "max_quota");
+
+    let (status, headers, _) =
+        send_request(addr, Method::GET, "/api/v1/strategy", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(headers.get(hyper::header::ALLOW).unwrap(), "POST");
+
+    // Explicit opt-out: no token, controls allowed.
+    set_dashboard_config(None, true);
+    let (status, _, _) = post_strategy(
+        addr,
+        hdrs(&[
+            ("x-agy-pool-control", "1"),
+            ("content-type", "application/json; charset=utf-8"),
+        ]),
+        r#"{"strategy":"smart"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(strategy(), "smart");
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_auth_failures_are_throttled() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+    let get = |path: &'static str, token: Option<&'static str>| {
+        let headers = match token {
+            Some(t) => hdrs(&[("authorization", bearer(t).as_str())]),
+            None => HeaderMap::new(),
+        };
+        send_request(addr, Method::GET, path, headers, Bytes::new())
+    };
+
+    // Missing tokens (a fresh page load) never count.
+    for _ in 0..10 {
+        assert_eq!(get("/api/v1/status", None).await.0, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(get("/api/v1/status", Some(TEST_TOKEN)).await.0, StatusCode::OK);
+
+    // Five wrong tokens lock this client out, even with the right token afterwards.
+    for _ in 0..5 {
+        assert_eq!(
+            get("/api/v1/status", Some("wrong-token")).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let (status, headers, body) = get("/api/v1/status", Some(TEST_TOKEN)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(headers.get(hyper::header::RETRY_AFTER).unwrap(), "60");
+    assert_eq!(error_code(&body), "TOO_MANY_AUTH_FAILURES");
+
+    // /auth/status is not a free guessing oracle.
+    agy_pool::dashboard::auth::reset_auth_failures();
+    for _ in 0..5 {
+        assert_eq!(get("/api/v1/auth/status", Some("wrong-token")).await.0, StatusCode::OK);
+    }
+    assert_eq!(
+        get("/api/v1/auth/status", Some(TEST_TOKEN)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        get("/api/v1/status", Some(TEST_TOKEN)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 
     let _ = shutdown_tx.send(());
     let _ = server_task.await;

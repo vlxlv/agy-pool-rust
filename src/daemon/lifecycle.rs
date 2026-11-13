@@ -52,21 +52,23 @@ impl Drop for ProcessKillGuard {
     }
 }
 
-/// Makes get_static_config() (model_mapping, keep_alive_secs, native_agy.binary) return this instance's config.
-/// Only the instance's own config file counts; an invalid file falls back to defaults and is reported.
-fn apply_instance_static_config(ctx: &super::instance::InstanceContext) -> Option<String> {
-    let (cfg, err) = match ctx.config_path.as_deref() {
-        Some(p) => match crate::config::load_config_file(p) {
-            Ok(c) => (c, None),
-            Err(e) => (
-                crate::config::default_static_config(),
-                Some(format!("ignoring invalid config {}: {e}", p.display())),
-            ),
-        },
-        None => (crate::config::default_static_config(), None),
+/// Makes get_static_config() (model_mapping, keep_alive_secs, native_agy.binary, dashboard) return this
+/// instance's config. Fails closed: falling back to defaults could silently drop the dashboard token.
+fn apply_instance_static_config(ctx: &super::instance::InstanceContext) -> Result<(), crate::config::ConfigError> {
+    use crate::config::{ConfigError, ENV_DASHBOARD_TOKEN};
+    let cfg = match ctx.config_path.as_deref() {
+        Some(p) => crate::config::load_config_file(p)
+            .map_err(|e| ConfigError::Validation(format!("invalid config {}: {e}", p.display())))?,
+        None => crate::config::default_static_config(),
     };
+    if let Ok(token) = std::env::var(ENV_DASHBOARD_TOKEN)
+        && !token.is_empty()
+    {
+        crate::config::check_dashboard_token(&token)
+            .map_err(|e| ConfigError::Validation(format!("invalid {ENV_DASHBOARD_TOKEN}: {e}")))?;
+    }
     crate::config::set_static_config(cfg);
-    err
+    Ok(())
 }
 
 /// Starts the reverse proxy gateway for the given InstanceContext.
@@ -78,9 +80,7 @@ pub fn start_instance(ctx: &super::instance::InstanceContext, opts: LaunchOption
     crate::config::assert_safe_write_path(&log_file)?;
 
     if opts.foreground {
-        if let Some(e) = apply_instance_static_config(ctx) {
-            eprintln!("warning: {e}");
-        }
+        apply_instance_static_config(ctx).map_err(DaemonError::Config)?;
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
         let res = rt.block_on(async {
             super::server::run_foreground(super::server::ServerOptions {
@@ -287,8 +287,9 @@ pub fn run_daemon_child(stderr: &mut impl std::io::Write) -> i32 {
         let _ = writeln!(stderr, "daemon child error: {e}");
         return 1;
     }
-    if let Some(e) = apply_instance_static_config(&ctx) {
-        let _ = writeln!(stderr, "daemon child warning: {e}");
+    if let Err(e) = apply_instance_static_config(&ctx) {
+        let _ = writeln!(stderr, "daemon child error: {e}");
+        return 1;
     }
 
     let pid_file = std::env::var("AGY_TEST_PID_FILE")
