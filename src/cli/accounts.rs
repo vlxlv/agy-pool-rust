@@ -545,7 +545,7 @@ fn render_wide_quota_dashboard(
     let sub_sep = "-".repeat(border_width);
 
     let _ = writeln!(io.stdout, "\n{sep}");
-    let title = format!("Antigravity Multi-Account Pool v{}", crate::VERSION);
+    let title = format!("Antigravity Multi-Account Pool {}", crate::VERSION);
     let pad = (68 + title.len()) / 2;
     let lead_spaces = pad.saturating_sub(title.len());
     let _ = writeln!(
@@ -3397,7 +3397,7 @@ mod tests {
         let (code, stdout, _) = crate::cli::test_support::run_cli(&["quota"], "").await;
         assert_eq!(code, 0);
         let clean_q = strip_ansi(&stdout);
-        assert!(clean_q.contains("Antigravity Multi-Account Pool v"));
+        assert!(clean_q.contains("Antigravity Multi-Account Pool"));
         assert!(clean_q.contains("AccountOne · CLI Base [Next ⚡]    hits 10 · quota age unknown"));
         assert!(clean_q.contains("5H  ████████████████░░░░  80%   N/A"));
         assert!(clean_q.contains("WK  ████████████████░░░░  80%   N/A"));

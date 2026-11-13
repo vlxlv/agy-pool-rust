@@ -98,7 +98,7 @@ pub async fn status_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
 
     let verbose = rem.iter().any(|a| a == "-v" || a == "--verbose");
 
-    let _ = writeln!(io.stdout, "agy-pool v{}\n", crate::VERSION);
+    let _ = writeln!(io.stdout, "agy-pool {}\n", crate::VERSION);
 
     let (status, info, msg) = crate::daemon::check_instance_status(&ctx);
     match status {

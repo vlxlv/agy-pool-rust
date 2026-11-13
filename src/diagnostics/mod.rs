@@ -512,7 +512,7 @@ pub fn run_doctor(out: &mut impl Write) -> bool {
     let sub_sep = "-".repeat(68);
 
     let _ = writeln!(out, "\n{}", sep);
-    let title = format!("Antigravity System Doctor (agy-pool v{})", crate::VERSION);
+    let title = format!("Antigravity System Doctor (agy-pool {})", crate::VERSION);
     let padding = (68 + title.len()) / 2;
     let _ = writeln!(out, "{}{:width$}{}", CLR_BOLD, title, CLR_RESET, width = padding);
     let _ = writeln!(out, "{}\n", sep);

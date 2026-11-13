@@ -210,6 +210,51 @@
       font-size: 11px;
     }
 
+    button.version-btn {
+      appearance: none;
+      cursor: pointer;
+      text-decoration: none;
+      background-color: var(--surface-subtle);
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    button.version-btn:hover {
+      background-color: var(--btn-hover-bg);
+      color: var(--text-main);
+      border-color: var(--btn-hover-border);
+    }
+
+    button.version-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    button.version-btn.has-update {
+      background: linear-gradient(135deg, var(--accent-dim), var(--surface-subtle));
+      border-color: var(--accent-border);
+      color: var(--accent-text);
+      font-weight: 600;
+      box-shadow: 0 0 8px var(--accent-soft);
+    }
+
+    button.version-btn.has-update:hover {
+      background: linear-gradient(135deg, var(--accent-soft), var(--btn-hover-bg));
+      border-color: var(--accent);
+    }
+
+    .version-update-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 1px 6px;
+      border-radius: 9999px;
+      font-size: 10px;
+      font-weight: 700;
+      background-color: var(--accent);
+      color: var(--accent-contrast);
+      animation: pulse 2s infinite ease-in-out;
+    }
+
     .header-controls {
       display: flex;
       align-items: center;
@@ -781,7 +826,10 @@
         <span>agy-pool dashboard</span>
       </div>
       <div id="endpoint-pill" class="pill pill-mono">—</div>
-      <div id="version-pill" class="pill pill-mono">v...</div>
+      <button id="version-btn" type="button" class="pill pill-mono version-btn" title="Click to check for updates">
+        <span id="version-pill">...</span>
+        <span id="version-update-badge" class="version-update-badge" hidden>⚡ Update</span>
+      </button>
       <div id="uptime-pill" class="pill">up —</div>
     </div>
     <div class="header-controls">
@@ -809,7 +857,7 @@
   <div id="update-banner" class="update-banner" hidden>
     <div class="update-banner-content">
       <span class="update-badge">UPDATE</span>
-      <span id="update-text">New version available: <strong id="update-target-version" class="num">v...</strong></span>
+      <span id="update-text">New version available: <strong id="update-target-version" class="num">...</strong></span>
       <button id="upgrade-btn" type="button" class="upgrade-btn">Upgrade Now</button>
       <span id="update-msg" class="update-msg" role="status"></span>
     </div>
@@ -1092,6 +1140,9 @@
     const upgradeBtn = document.getElementById('upgrade-btn');
     const updateMsg = document.getElementById('update-msg');
     const updateDismissBtn = document.getElementById('update-dismiss-btn');
+    const versionBtn = document.getElementById('version-btn');
+    const versionBadge = document.getElementById('version-update-badge');
+    const versionPill = document.getElementById('version-pill');
     let updateDismissed = false;
 
     // Email toggle event listener
@@ -1126,6 +1177,24 @@
       });
     }
 
+    if (versionBtn) {
+      versionBtn.addEventListener('click', async () => {
+        if (versionBtn.classList.contains('has-update')) {
+          updateDismissed = false;
+          updateBanner.hidden = false;
+          updateBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          if (upgradeBtn) upgradeBtn.focus();
+        } else {
+          showToast('Checking for updates...');
+          await checkForUpdate(true);
+          if (!versionBtn.classList.contains('has-update')) {
+            const curVer = versionPill ? versionPill.textContent : '';
+            showToast(`agy-pool ${curVer} is up to date ✓`);
+          }
+        }
+      });
+    }
+
     if (upgradeBtn) {
       upgradeBtn.addEventListener('click', async () => {
         upgradeBtn.disabled = true;
@@ -1140,18 +1209,18 @@
           });
           if (res.ok) {
             const data = await res.json().catch(() => ({}));
-            const ver = data.version || updateTargetVersion.textContent;
+            const ver = (data.version || updateTargetVersion.textContent || '').replace(/^v/, '');
             upgradeBtn.textContent = 'Upgraded ✓';
             updateMsg.className = 'update-msg success';
             let seconds = 3;
-            updateMsg.textContent = `Upgraded to v${ver}! Gateway restarting in ${seconds}s...`;
+            updateMsg.textContent = `Upgraded to ${ver}! Gateway restarting in ${seconds}s...`;
             const timer = setInterval(() => {
               seconds -= 1;
               if (seconds <= 0) {
                 clearInterval(timer);
                 window.location.reload();
               } else {
-                updateMsg.textContent = `Upgraded to v${ver}! Gateway restarting in ${seconds}s...`;
+                updateMsg.textContent = `Upgraded to ${ver}! Gateway restarting in ${seconds}s...`;
               }
             }, 1000);
           } else {
@@ -1245,7 +1314,10 @@
         if (statusData.listen) {
           endpointPill.title = `Listening: ${statusData.listen}`;
         }
-        document.getElementById('version-pill').textContent = `v${statusData.version}`;
+        if (versionPill) versionPill.textContent = statusData.version;
+        if (versionBtn && !versionBtn.classList.contains('has-update')) {
+          versionBtn.title = `agy-pool ${statusData.version} (click to check for updates)`;
+        }
         const upFormatted = formatDuration(statusData.uptime_secs);
         document.getElementById('uptime-pill').textContent = `up ${upFormatted}`;
         const totalReq = (statusData.total_requests || 0).toLocaleString();
@@ -1351,16 +1423,33 @@
         if (!res.ok) return;
         const data = await res.json();
         if (data && data.has_update && data.latest_version) {
-          updateTargetVersion.textContent = `v${data.latest_version}`;
+          const latestVer = data.latest_version.replace(/^v/, '');
+          const curVer = (data.current_version || (versionPill ? versionPill.textContent : '')).replace(/^v/, '');
+          updateTargetVersion.textContent = latestVer;
           if (!updateDismissed) {
             updateBanner.hidden = false;
           }
-          const versionPill = document.getElementById('version-pill');
+          if (versionBtn) {
+            versionBtn.classList.add('has-update');
+            versionBtn.title = `Update available: ${curVer} → ${latestVer} (click to view & upgrade)`;
+          }
+          if (versionBadge) {
+            versionBadge.hidden = false;
+            versionBadge.textContent = `${latestVer} ⚡`;
+          }
           if (versionPill) {
-            versionPill.title = `Current: v${data.current_version} · Latest: v${data.latest_version}`;
+            versionPill.title = `Current: ${curVer} · Latest: ${latestVer}`;
           }
         } else {
-          updateBanner.hidden = true;
+          if (!force) updateBanner.hidden = true;
+          if (versionBtn) {
+            versionBtn.classList.remove('has-update');
+            const curVer = (versionPill ? versionPill.textContent : (data?.current_version || '')).replace(/^v/, '');
+            versionBtn.title = `agy-pool ${curVer} (click to check for updates)`;
+          }
+          if (versionBadge) {
+            versionBadge.hidden = true;
+          }
         }
       } catch (err) {
         console.warn('Update check failed:', err);

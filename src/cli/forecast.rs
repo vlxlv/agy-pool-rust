@@ -107,7 +107,7 @@ pub async fn forecast_cmd(io: &mut Io<'_>, args: &[String]) -> Result<(), String
     let sub_sep = "-".repeat(68);
 
     let _ = writeln!(io.stdout, "\n{}", sep);
-    let title = format!("Quota Runway & Endurance Forecast (v{})", crate::VERSION);
+    let title = format!("Quota Runway & Endurance Forecast ({})", crate::VERSION);
     let _ = writeln!(io.stdout, "{}{}{}", CLR_BOLD, center_string(&title, 68), CLR_RESET);
     let _ = writeln!(io.stdout, "{}", sep);
 
