@@ -255,6 +255,8 @@
       animation: pulse 2s infinite ease-in-out;
     }
 
+    .version-update-badge[hidden] { display: none; }
+
     .header-controls {
       display: flex;
       align-items: center;
@@ -1186,8 +1188,10 @@
           if (upgradeBtn) upgradeBtn.focus();
         } else {
           showToast('Checking for updates...');
-          await checkForUpdate(true);
-          if (!versionBtn.classList.contains('has-update')) {
+          const result = await checkForUpdate(true);
+          if (!result) {
+            showToast('Could not check for updates; try again in a minute', true);
+          } else if (!result.has_update) {
             const curVer = versionPill ? versionPill.textContent : '';
             showToast(`agy-pool ${curVer} is up to date ✓`);
           }
@@ -1451,6 +1455,7 @@
             versionBadge.hidden = true;
           }
         }
+        return data;
       } catch (err) {
         console.warn('Update check failed:', err);
       }
