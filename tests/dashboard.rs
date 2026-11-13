@@ -718,6 +718,20 @@ async fn test_embedded_spa_asset_constraints() {
         );
     }
 
+    // Account controls (Phase 2).
+    for needle in [
+        "/api/v1/accounts/refresh-all",
+        "/api/v1/accounts/reorder",
+        "data-act=",
+        "refresh-all-btn",
+        "verify-dialog",
+        "toast",
+        "Disable the last enabled account?",
+    ] {
+        assert!(body_str.contains(needle), "missing {needle}");
+    }
+    assert!(!body_str.contains("alert("), "use the toast instead of alert()");
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
