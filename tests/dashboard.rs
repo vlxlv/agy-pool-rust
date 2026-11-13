@@ -666,6 +666,11 @@ async fn test_embedded_spa_asset_constraints() {
     assert!(body_str.contains("/api/v1/update"), "missing /api/v1/update reference");
     assert!(body_str.contains("update-banner"), "missing update-banner element");
     assert!(body_str.contains("upgrade-btn"), "missing upgrade-btn element");
+    assert!(body_str.contains("version-btn"), "missing version-btn element");
+    assert!(
+        body_str.contains("version-update-badge"),
+        "missing version-update-badge element"
+    );
 
     // Assert body includes the email visibility toggle control (show_email)
     assert!(body_str.contains("show_email"), "missing show_email toggle control");

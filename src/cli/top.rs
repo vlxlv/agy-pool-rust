@@ -627,7 +627,7 @@ fn render_header(
     if width >= 96 {
         let sep = "=".repeat(68);
         sb.push_str(&format!("{sep}\n"));
-        let title = format!("Antigravity Multi-Account Pool v{}", crate::VERSION);
+        let title = format!("Antigravity Multi-Account Pool {}", crate::VERSION);
         let pad = (68 + title.len()) / 2;
         sb.push_str(&format!("{CLR_BOLD}{title:>pad$}{CLR_RESET}\n"));
         sb.push_str(&format!("{sep}\n"));
@@ -636,7 +636,7 @@ fn render_header(
         ));
     } else if width >= 60 {
         let header_line = format!(
-            "agy-pool v{} · Gateway: {} · {} · {:.1}s",
+            "agy-pool {} · Gateway: {} · {} · {:.1}s",
             crate::VERSION,
             gateway_str,
             strat,
@@ -645,15 +645,15 @@ fn render_header(
         if visible_width(&header_line) <= width {
             sb.push_str(&format!("\n{header_line}\n"));
         } else {
-            sb.push_str(&format!("\nagy-pool v{} · Gateway: {gateway_str}\n", crate::VERSION));
+            sb.push_str(&format!("\nagy-pool {} · Gateway: {gateway_str}\n", crate::VERSION));
             sb.push_str(&format!("Strategy: {strat} · Refresh: {rate_sec:.1}s\n"));
         }
     } else if width >= 40 {
-        let line1 = format!("agy-pool v{} · {}", crate::VERSION, gateway_str);
+        let line1 = format!("agy-pool {} · {}", crate::VERSION, gateway_str);
         if visible_width(&line1) <= width {
             sb.push_str(&format!("\n{line1}\n"));
         } else {
-            sb.push_str(&format!("\nagy-pool v{}\n{gateway_str}\n", crate::VERSION));
+            sb.push_str(&format!("\nagy-pool {}\n{gateway_str}\n", crate::VERSION));
         }
         let line2 = format!("Strategy: {strat} · Refresh: {rate_sec:.1}s");
         if visible_width(&line2) <= width {
