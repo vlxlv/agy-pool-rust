@@ -652,7 +652,7 @@ async fn test_embedded_spa_asset_constraints() {
         }
     }
 
-    // Assert body references all four backend endpoints
+    // Assert body references all backend endpoints
     assert!(body_str.contains("/api/v1/status"), "missing /api/v1/status reference");
     assert!(
         body_str.contains("/api/v1/accounts"),
@@ -663,6 +663,9 @@ async fn test_embedded_spa_asset_constraints() {
         "missing /api/v1/forecast reference"
     );
     assert!(body_str.contains("/api/v1/events"), "missing /api/v1/events reference");
+    assert!(body_str.contains("/api/v1/update"), "missing /api/v1/update reference");
+    assert!(body_str.contains("update-banner"), "missing update-banner element");
+    assert!(body_str.contains("upgrade-btn"), "missing upgrade-btn element");
 
     // Assert body includes the email visibility toggle control (show_email)
     assert!(body_str.contains("show_email"), "missing show_email toggle control");
@@ -1352,4 +1355,221 @@ async fn test_quota_refresh_controls() {
 
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dashboard_update_endpoints() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    agy_pool::cli::update::clear_update_cache();
+
+    struct ResetUpdate;
+    impl Drop for ResetUpdate {
+        fn drop(&mut self) {
+            agy_pool::cli::update::set_releases_api(None);
+            agy_pool::cli::update::set_update_target_path(None);
+            agy_pool::cli::update::clear_update_cache();
+        }
+    }
+    let _reset = ResetUpdate;
+
+    let bin_name = format!(
+        "agy-pool-{}-{}",
+        agy_pool::cli::update::current_go_os(),
+        agy_pool::cli::update::current_go_arch()
+    );
+    let new_bin = b"new dashboard binary".to_vec();
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&new_bin);
+    let sum_hex = hex::encode(hasher.finalize());
+    let sums = format!("{sum_hex}  {bin_name}\n");
+    let tag = "v9.9.9".to_string();
+
+    struct MockState {
+        tag: String,
+        bin_name: String,
+        new_bin: Vec<u8>,
+        sums: String,
+    }
+    let state = Arc::new(std::sync::Mutex::new(MockState {
+        tag,
+        bin_name: bin_name.clone(),
+        new_bin,
+        sums,
+    }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mock_url = format!("http://127.0.0.1:{port}");
+    let mock_state = state.clone();
+    let mock_server = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let state = mock_state.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = vec![0u8; 4096];
+                let n = match socket.read(&mut buf).await {
+                    Ok(n) if n > 0 => n,
+                    _ => return,
+                };
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req_str.lines().next().unwrap_or("");
+                let path = first_line.split_whitespace().nth(1).unwrap_or("");
+
+                let (tag, bin_name, new_bin, sums) = {
+                    let st = state.lock().unwrap();
+                    (st.tag.clone(), st.bin_name.clone(), st.new_bin.clone(), st.sums.clone())
+                };
+
+                if path.contains("/releases") {
+                    let body = format!(
+                        r#"[{{"tag_name":"{tag}","assets":[{{"name":"{bin_name}","url":"http://127.0.0.1:{port}/bin"}},{{"name":"SHA256SUMS","url":"http://127.0.0.1:{port}/sums"}}]}}]"#
+                    );
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                } else if path.contains("/sums") {
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        sums.len(),
+                        sums
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                } else if path.contains("/bin") {
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        new_bin.len()
+                    );
+                    let _ = socket.write_all(header.as_bytes()).await;
+                    let _ = socket.write_all(&new_bin).await;
+                } else {
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                }
+            });
+        }
+    });
+
+    agy_pool::cli::update::set_releases_api(Some(format!("{mock_url}/releases")));
+
+    static DASHBOARD_TEST_BIN: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+    fn test_bin_provider() -> std::path::PathBuf {
+        let lock = DASHBOARD_TEST_BIN.lock().unwrap();
+        lock.clone().expect("DASHBOARD_TEST_BIN must be set")
+    }
+
+    let temp_target_dir = tempfile::tempdir().unwrap();
+    let target_bin = temp_target_dir.path().join("agy-pool");
+    std::fs::write(&target_bin, b"old binary").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&target_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    *DASHBOARD_TEST_BIN.lock().unwrap() = Some(target_bin.clone());
+    agy_pool::cli::update::set_update_target_path(Some(test_bin_provider));
+
+    // Dashboard configured with auth token
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    // 1. GET /api/v1/update without auth token -> 401 UNAUTHORIZED
+    let (status, _, _) = send_request(addr, Method::GET, "/api/v1/update", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // 2. GET /api/v1/update with auth token -> 200 OK with update details
+    let mut authed_headers = HeaderMap::new();
+    authed_headers.insert(hyper::header::AUTHORIZATION, bearer(TEST_TOKEN).parse().unwrap());
+    let (status, headers, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/update",
+        authed_headers.clone(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json from GET /api/v1/update");
+    assert_eq!(json["has_update"], true);
+    assert_eq!(json["latest_version"], "9.9.9");
+    assert_eq!(json["current_version"], agy_pool::VERSION);
+
+    // 3. POST /api/v1/update controls gating:
+    // a) Missing X-Agy-Pool-Control header -> 403 Forbidden
+    let mut post_no_control = authed_headers.clone();
+    post_no_control.insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+    let (status, _, body) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/update",
+        post_no_control,
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error_code(&body), "CONTROL_HEADER_REQUIRED");
+
+    // b) Missing Content-Type: application/json -> 415 Unsupported Media Type
+    let mut post_bad_ct = authed_headers.clone();
+    post_bad_ct.insert("x-agy-pool-control", "1".parse().unwrap());
+    let (status, _, body) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/update",
+        post_bad_ct,
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(error_code(&body), "JSON_REQUIRED");
+
+    // c) Missing Bearer token when required -> 401 Unauthorized
+    let mut post_no_token = HeaderMap::new();
+    post_no_token.insert("x-agy-pool-control", "1".parse().unwrap());
+    post_no_token.insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+    let (status, _, _) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/update",
+        post_no_token,
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // d) Valid POST with all headers -> 200 OK and target binary is replaced!
+    let mut valid_post = authed_headers.clone();
+    valid_post.insert("x-agy-pool-control", "1".parse().unwrap());
+    valid_post.insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
+    let (status, _, body) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/update",
+        valid_post,
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json from POST /api/v1/update");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["version"], "9.9.9");
+
+    // Verify file content on disk
+    let replaced_bin = std::fs::read(&target_bin).unwrap();
+    assert_eq!(replaced_bin, b"new dashboard binary");
+
+    // 4. Method not allowed for PUT/DELETE on /api/v1/update -> 405 Method Not Allowed with Allow: GET, POST
+    let (status, headers, _) =
+        send_request(addr, Method::DELETE, "/api/v1/update", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(headers.get(hyper::header::ALLOW).unwrap(), "GET, POST");
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+    mock_server.abort();
 }
