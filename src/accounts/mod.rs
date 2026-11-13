@@ -724,7 +724,13 @@ pub async fn switch_account(target: &str) -> Result<crate::storage::Account, Acc
         }
         best
     } else {
-        match find_account_by_target(&pool.accounts, target) {
+        // An exact id wins over list positions and name matches (the dashboard always passes ids).
+        match pool
+            .accounts
+            .iter()
+            .find(|a| a.id == target)
+            .or_else(|| find_account_by_target(&pool.accounts, target))
+        {
             Some(a) => a.clone(),
             None => {
                 return Err(AccountsError::Message(format!("account '{}' not found", target)));
@@ -1280,6 +1286,16 @@ fn clear_validation_restriction_cas(
     Ok(VerificationTransitionResult {
         cleared: cleared.load(std::sync::atomic::Ordering::SeqCst),
     })
+}
+
+/// Persists a validation restriction that a quota probe cleared on `after`, unless the stored account
+/// changed since `before` was read. Returns whether the restriction was cleared.
+pub fn persist_cleared_restriction(
+    before: &crate::storage::Account,
+    after: &crate::storage::Account,
+    quota: &crate::storage::QuotaState,
+) -> Result<bool, AccountsError> {
+    clear_validation_restriction_cas(after, &snapshot_account(before), quota).map(|r| r.cleared)
 }
 
 pub async fn verify_account(target: &str) -> Result<(crate::storage::Account, String), AccountsError> {
@@ -2676,5 +2692,70 @@ mod tests {
         assert!(!err_str.contains(secret_token), "leaked secret_token");
         assert!(!err_str.contains(secret_email), "leaked secret_email");
         assert!(!err_str.contains("raw-provider-body-marker"), "leaked raw_oauth_body");
+    }
+
+    #[tokio::test]
+    async fn switch_account_prefers_exact_id() {
+        let _env = setup_isolated_test_dir();
+        let token = |t: &str| crate::storage::Account {
+            access_token: t.to_string(),
+            token_expiry: Some(crate::clock::now_unix() + 3600.0),
+            ..Default::default()
+        };
+        // acc_1 is *named* like acc_2's id, and acc_3 has a digit-only id that is also a valid list position.
+        let mut a1 = token("tok1");
+        a1.id = "acc_1".to_string();
+        a1.name = "acc_2".to_string();
+        let mut a2 = token("tok2");
+        a2.id = "acc_2".to_string();
+        let mut a3 = token("tok3");
+        a3.id = "1".to_string();
+        let mut pool = crate::storage::Pool::new_empty();
+        pool.accounts = vec![a1, a2, a3];
+        pool.active_account_id = Some("acc_1".to_string());
+        crate::storage::save_pool(&pool).unwrap();
+
+        assert_eq!(switch_account("acc_2").await.unwrap().id, "acc_2");
+        assert_eq!(switch_account("1").await.unwrap().id, "1");
+        let loaded = crate::storage::load_pool().unwrap();
+        assert_eq!(loaded.active_account_id.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn persist_cleared_restriction_only_when_unchanged() {
+        let _env = setup_isolated_test_dir();
+        let restricted = crate::storage::Account {
+            id: "acc_1".to_string(),
+            status: crate::storage::STATUS_VALIDATION_REQUIRED.to_string(),
+            validation_url: Some("https://accounts.google.com/v1".to_string()),
+            rate_limited_until: Some(crate::clock::now_unix() + 3600.0),
+            ..Default::default()
+        };
+        let mut pool = crate::storage::Pool::new_empty();
+        pool.accounts = vec![restricted.clone()];
+        crate::storage::save_pool(&pool).unwrap();
+
+        let mut cleared = restricted.clone();
+        cleared.status.clear();
+        cleared.validation_url = None;
+        cleared.rate_limited_until = None;
+        let quota = crate::storage::QuotaState::default();
+
+        // Someone re-restricted the account with a new link meanwhile: keep the stored state.
+        crate::storage::pool_transaction(|p| {
+            p.accounts[0].validation_url = Some("https://accounts.google.com/v2".to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert!(!persist_cleared_restriction(&restricted, &cleared, &quota).unwrap());
+        let stored = crate::storage::load_pool().unwrap().accounts[0].clone();
+        assert_eq!(stored.status, crate::storage::STATUS_VALIDATION_REQUIRED);
+
+        // Unchanged since `before`: the clear is persisted.
+        assert!(persist_cleared_restriction(&stored, &cleared, &quota).unwrap());
+        let stored = crate::storage::load_pool().unwrap().accounts[0].clone();
+        assert!(stored.status.is_empty());
+        assert_eq!(stored.validation_url, None);
+        assert_eq!(stored.rate_limited_until, None);
     }
 }
