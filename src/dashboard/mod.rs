@@ -493,6 +493,7 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
         | "/api/v1/accounts"
         | "/api/v1/forecast"
         | "/api/v1/events"
+        | "/api/v1/tokens"
             if !is_get =>
         {
             method_not_allowed("GET")
@@ -514,7 +515,7 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
             Some(denied) => denied,
             None => update_apply_response().await,
         },
-        "/api/v1/status" | "/api/v1/accounts" | "/api/v1/forecast" | "/api/v1/events" => {
+        "/api/v1/status" | "/api/v1/accounts" | "/api/v1/forecast" | "/api/v1/events" | "/api/v1/tokens" => {
             if let Some(denied) = read_gate(&req, token) {
                 return denied;
             }
@@ -522,6 +523,7 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
                 "/api/v1/status" => status_response().await,
                 "/api/v1/accounts" => accounts_response(req.uri().query()).await,
                 "/api/v1/forecast" => forecast_response().await,
+                "/api/v1/tokens" => tokens_response(req.uri().query()).await,
                 _ => events_response(),
             }
         }
@@ -580,6 +582,42 @@ async fn forecast_response() -> Response<ProxyBody> {
         return internal_error();
     };
     json_response(serde_json::to_vec(&forecast).unwrap_or_default())
+}
+
+async fn tokens_response(query: Option<&str>) -> Response<ProxyBody> {
+    let raw = query
+        .and_then(|q| {
+            url::form_urlencoded::parse(q.as_bytes())
+                .find(|(k, _)| k == "range")
+                .map(|(_, v)| v.into_owned())
+        })
+        .unwrap_or_else(|| "24h".to_string());
+    let Some(range) = crate::storage::tokens::TokenRange::parse(&raw) else {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "range must be one of 1h, 24h, 7d, total",
+        );
+    };
+    let now = crate::clock::now_unix() as i64;
+    let Ok(result) = tokio::task::spawn_blocking(move || dto::build_tokens_response(range, now)).await else {
+        return internal_error();
+    };
+    match result {
+        Ok(body) => json_response(serde_json::to_vec(&body).unwrap_or_default()),
+        Err(e) => {
+            crate::observability::log_message_level(
+                crate::observability::LogLevel::Error,
+                "DASHBOARD",
+                &format!("failed to read token usage: {e}"),
+            );
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "STORAGE_ERROR",
+                "could not read token usage; see the gateway log",
+            )
+        }
+    }
 }
 
 fn events_response() -> Response<ProxyBody> {

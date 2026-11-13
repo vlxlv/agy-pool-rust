@@ -663,6 +663,9 @@ async fn test_embedded_spa_asset_constraints() {
         "missing /api/v1/forecast reference"
     );
     assert!(body_str.contains("/api/v1/events"), "missing /api/v1/events reference");
+    assert!(body_str.contains("/api/v1/tokens"), "missing /api/v1/tokens reference");
+    assert!(body_str.contains("token-usage-body"), "missing token usage table");
+    assert!(body_str.contains("data-token-range"), "missing token range buttons");
     assert!(body_str.contains("/api/v1/update"), "missing /api/v1/update reference");
     assert!(body_str.contains("update-banner"), "missing update-banner element");
     assert!(body_str.contains("upgrade-btn"), "missing upgrade-btn element");
@@ -1572,4 +1575,83 @@ async fn test_dashboard_update_endpoints() {
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
     mock_server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_tokens_endpoint() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    agy_pool::storage::tokens::clear_pending();
+    let now = agy_pool::clock::now_unix() as i64;
+    agy_pool::storage::tokens::record_token_usage_at("acc_1", 1000, 400, 200, 100, false, now);
+    // cached not reported (-1) and an aborted stream
+    agy_pool::storage::tokens::record_token_usage_at("acc_2", 500, -1, 100, 0, true, now);
+    // three days ago: only in 7d and total
+    agy_pool::storage::tokens::record_token_usage_at("acc_1", 7000, 0, 0, 0, false, now - 3 * 86400);
+    agy_pool::storage::tokens::flush_token_usage().unwrap();
+
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, _, _) = send_request(addr, Method::GET, "/api/v1/tokens", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "reads need the token");
+
+    let auth = bearer(TEST_TOKEN);
+    let get = |path: &'static str| {
+        let headers = hdrs(&[("authorization", auth.as_str())]);
+        async move { send_request(addr, Method::GET, path, headers, Bytes::new()).await }
+    };
+
+    // Default range is 24h.
+    let (status, headers, body) = get("/api/v1/tokens").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(hyper::header::CACHE_CONTROL).unwrap(), "no-store");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["range"], "24h");
+    assert!(json["window_start"].as_i64().unwrap() <= now);
+    let summary = &json["summary"];
+    assert_eq!(summary["prompt_tokens"], 1500);
+    assert_eq!(summary["cached_tokens"], 400);
+    assert_eq!(summary["output_tokens"], 300);
+    assert_eq!(summary["thinking_tokens"], 100);
+    assert_eq!(summary["total_tokens"], 1900, "cached is part of prompt");
+    assert_eq!(summary["request_count"], 2);
+    assert_eq!(summary["aborted_count"], 1);
+    let accounts = json["accounts"].as_array().unwrap();
+    assert_eq!(accounts.len(), 2);
+    assert_eq!(accounts[0]["account_id"], "acc_1", "sorted by total, largest first");
+    assert_eq!(accounts[0]["total_tokens"], 1300);
+    assert!((accounts[0]["pool_share"].as_f64().unwrap() - 1300.0 / 1900.0).abs() < 1e-9);
+    assert_eq!(accounts[1]["cached_tokens"], 0);
+    assert!(
+        !String::from_utf8_lossy(&body).contains("@example.com"),
+        "never exposes emails"
+    );
+
+    let (_, _, body) = get("/api/v1/tokens?range=7d").await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["summary"]["prompt_tokens"], 8500);
+
+    let (_, _, body) = get("/api/v1/tokens?range=total").await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["window_start"].is_null());
+
+    let (status, _, body) = get("/api/v1/tokens?range=2d").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), "INVALID_ARGUMENT");
+
+    let (status, _, _) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/tokens",
+        hdrs(&[("authorization", auth.as_str())]),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+
+    agy_pool::storage::tokens::clear_pending();
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
 }

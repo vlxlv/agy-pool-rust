@@ -755,6 +755,43 @@
       max-width: min(480px, 90vw);
     }
     #verify-dialog a { color: var(--accent-text); word-break: break-all; }
+    button.btn.active {
+      color: var(--accent-text);
+      border-color: var(--accent-border);
+      background-color: var(--accent-soft);
+    }
+    .token-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      padding: 10px 16px 4px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .token-summary strong {
+      color: var(--text-main);
+      font-size: 15px;
+    }
+    .token-bar {
+      display: flex;
+      height: 8px;
+      margin: 8px 16px 12px;
+      border-radius: 4px;
+      overflow: hidden;
+      background-color: var(--border-subtle);
+    }
+    .token-bar span { height: 100%; }
+    .token-bar .seg-prompt { background-color: #6366f1; }
+    .token-bar .seg-cached { background-color: #a5b4fc; }
+    .token-bar .seg-output { background-color: var(--accent); }
+    .token-bar .seg-thinking { background-color: #f59e0b; }
+    .token-legend i {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      margin-right: 4px;
+    }
   </style>
 </head>
 <body>
@@ -901,6 +938,43 @@
             <tr>
               <td colspan="7" class="empty-state">Loading accounts...</td>
             </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Token Usage -->
+    <div class="section-panel">
+      <div class="section-header">
+        <div class="section-title">
+          <span>Token Usage</span>
+          <span class="pill pill-mono" id="token-window">—</span>
+        </div>
+        <div class="btn-group">
+          <button type="button" class="btn" data-token-range="1h" title="Since the start of the current hour">This hour</button>
+          <button type="button" class="btn active" data-token-range="24h">24h</button>
+          <button type="button" class="btn" data-token-range="7d">7d</button>
+          <button type="button" class="btn" data-token-range="total">All time</button>
+        </div>
+      </div>
+      <div class="token-summary" id="token-summary">Loading token usage...</div>
+      <div class="token-bar" id="token-bar"></div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>Requests</th>
+              <th>Prompt</th>
+              <th>Cached</th>
+              <th>Output</th>
+              <th>Thinking</th>
+              <th>Total</th>
+              <th>Share</th>
+            </tr>
+          </thead>
+          <tbody id="token-usage-body">
+            <tr><td colspan="8" class="empty-state">Loading token usage...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1343,6 +1417,112 @@
       }
     }
 
+    let tokenRange = '24h';
+
+    function fmtTokens(n) {
+      n = Number(n) || 0;
+      if (n < 1000) return String(n);
+      if (n < 1e6) return (n / 1e3).toFixed(1) + 'K';
+      if (n < 1e9) return (n / 1e6).toFixed(2) + 'M';
+      return (n / 1e9).toFixed(2) + 'B';
+    }
+
+    async function fetchTokens() {
+      try {
+        const res = await agyFetch('/api/v1/tokens?range=' + encodeURIComponent(tokenRange));
+        if (!res.ok) return;
+        renderTokens(await res.json());
+      } catch (err) {
+        console.error('Failed to fetch token usage:', err);
+      }
+    }
+
+    function renderTokens(data) {
+      const s = data.summary || {};
+      const total = Number(s.total_tokens) || 0;
+      document.getElementById('token-window').textContent = data.window_start
+        ? 'since ' + new Date(data.window_start * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : 'all time';
+
+      const summary = document.getElementById('token-summary');
+      summary.textContent = '';
+      const parts = [
+        ['Total', total, null],
+        ['Prompt', s.prompt_tokens, 'seg-prompt'],
+        ['Cached (in prompt)', s.cached_tokens, 'seg-cached'],
+        ['Output', s.output_tokens, 'seg-output'],
+        ['Thinking', s.thinking_tokens, 'seg-thinking'],
+        ['Requests', s.request_count, null],
+      ];
+      for (const [label, value, seg] of parts) {
+        const span = document.createElement('span');
+        span.className = 'token-legend';
+        if (seg) {
+          const swatch = document.createElement('i');
+          swatch.className = seg;
+          span.appendChild(swatch);
+        }
+        span.appendChild(document.createTextNode(label + ' '));
+        const strong = document.createElement('strong');
+        strong.className = 'num';
+        strong.textContent = label === 'Requests' ? String(Number(value) || 0) : fmtTokens(value);
+        span.appendChild(strong);
+        summary.appendChild(span);
+      }
+      if (s.aborted_count) {
+        const note = document.createElement('span');
+        note.textContent = s.aborted_count + ' aborted (partial usage)';
+        summary.appendChild(note);
+      }
+
+      // Cached is a part of prompt: the bar shows uncached prompt + cached + output + thinking = total.
+      const bar = document.getElementById('token-bar');
+      bar.textContent = '';
+      const cached = Number(s.cached_tokens) || 0;
+      const segments = [
+        ['seg-prompt', (Number(s.prompt_tokens) || 0) - cached],
+        ['seg-cached', cached],
+        ['seg-output', Number(s.output_tokens) || 0],
+        ['seg-thinking', Number(s.thinking_tokens) || 0],
+      ];
+      if (total > 0) {
+        for (const [cls, value] of segments) {
+          if (value <= 0) continue;
+          const seg = document.createElement('span');
+          seg.className = cls;
+          seg.style.width = (value * 100 / total).toFixed(2) + '%';
+          seg.title = fmtTokens(value);
+          bar.appendChild(seg);
+        }
+      }
+
+      const tbody = document.getElementById('token-usage-body');
+      const rows = data.accounts || [];
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No token usage in this range.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(a => `
+        <tr>
+          <td>${escapeHtml(a.name || a.account_id)}</td>
+          <td class="num">${Number(a.request_count) || 0}</td>
+          <td class="num">${fmtTokens(a.prompt_tokens)}</td>
+          <td class="num">${fmtTokens(a.cached_tokens)}</td>
+          <td class="num">${fmtTokens(a.output_tokens)}</td>
+          <td class="num">${fmtTokens(a.thinking_tokens)}</td>
+          <td class="num">${fmtTokens(a.total_tokens)}</td>
+          <td class="num">${a.pool_share == null ? '—' : (a.pool_share * 100).toFixed(1) + '%'}</td>
+        </tr>`).join('');
+    }
+
+    document.querySelectorAll('button[data-token-range]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        tokenRange = btn.dataset.tokenRange;
+        document.querySelectorAll('button[data-token-range]').forEach(b => b.classList.toggle('active', b === btn));
+        fetchTokens();
+      });
+    });
+
     async function checkForUpdate(force = false) {
       if (!authOk) return;
       try {
@@ -1678,7 +1858,7 @@
     }
 
     function start() {
-      Promise.all([fetchStatus(), fetchAccounts(), fetchForecast(), checkForUpdate()]).catch(console.error);
+      Promise.all([fetchStatus(), fetchAccounts(), fetchForecast(), fetchTokens(), checkForUpdate()]).catch(console.error);
       connectSSE();
       if (started) return;
       started = true;
@@ -1690,6 +1870,12 @@
         fetchAccounts();
         fetchForecast();
       }, 5000);
+
+      // Token usage changes slowly (the gateway flushes every 10s); poll every 30s.
+      setInterval(() => {
+        if (!authOk) return;
+        fetchTokens();
+      }, 30000);
 
       // 1s local tick for countdowns
       setInterval(updateLocalCountdowns, 1000);

@@ -281,6 +281,82 @@ pub fn build_sse_stats_event() -> SseStatsEvent {
     SseStatsEvent { in_flight, qps, rss_mb }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokenTotalsDto {
+    pub total_tokens: i64,
+    pub prompt_tokens: i64,
+    /// Part of prompt_tokens; not added to total_tokens.
+    pub cached_tokens: i64,
+    pub output_tokens: i64,
+    pub thinking_tokens: i64,
+    pub request_count: i64,
+    pub aborted_count: i64,
+}
+
+impl From<&crate::storage::tokens::TokenCounts> for TokenTotalsDto {
+    fn from(c: &crate::storage::tokens::TokenCounts) -> Self {
+        TokenTotalsDto {
+            total_tokens: c.total(),
+            prompt_tokens: c.prompt,
+            cached_tokens: c.cached,
+            output_tokens: c.output,
+            thinking_tokens: c.thinking,
+            request_count: c.requests,
+            aborted_count: c.aborted,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokenAccountDto {
+    pub account_id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub totals: TokenTotalsDto,
+    /// This account's share of the pool's total_tokens; null when the pool used nothing.
+    pub pool_share: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokensResponse {
+    pub range: String,
+    /// Unix start of the first hour bucket in the range; null for "total".
+    pub window_start: Option<i64>,
+    pub summary: TokenTotalsDto,
+    pub accounts: Vec<TokenAccountDto>,
+}
+
+pub fn build_tokens_response(
+    range: crate::storage::tokens::TokenRange,
+    now_unix: i64,
+) -> Result<TokensResponse, crate::storage::StorageError> {
+    let usage = crate::storage::tokens::usage_by_account(range, now_unix)?;
+    let pool = crate::storage::load_pool().unwrap_or_default();
+    let summary = crate::storage::tokens::sum(&usage);
+    let pool_total = summary.total();
+    let mut accounts: Vec<TokenAccountDto> = usage
+        .iter()
+        .map(|(id, c)| TokenAccountDto {
+            account_id: id.clone(),
+            name: crate::storage::tokens::account_label(&pool, id),
+            totals: c.into(),
+            pool_share: (pool_total > 0).then(|| c.total() as f64 / pool_total as f64),
+        })
+        .collect();
+    accounts.sort_by(|a, b| {
+        b.totals
+            .total_tokens
+            .cmp(&a.totals.total_tokens)
+            .then_with(|| a.account_id.cmp(&b.account_id))
+    });
+    Ok(TokensResponse {
+        range: range.as_str().to_string(),
+        window_start: range.start_bucket(now_unix),
+        summary: (&summary).into(),
+        accounts,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
