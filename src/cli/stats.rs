@@ -226,6 +226,12 @@ pub async fn stats_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
                 }
             } else {
                 render_terminal_report(io.stdout, &report);
+                if let Some(line) = crate::cli::tokens::summary_line(
+                    crate::storage::tokens::TokenRange::Day,
+                    crate::clock::now_unix() as i64,
+                ) {
+                    let _ = writeln!(io.stdout, "\n{line}");
+                }
                 0
             }
         }
