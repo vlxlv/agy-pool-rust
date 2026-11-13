@@ -684,6 +684,17 @@ async fn test_embedded_spa_asset_constraints() {
         body_str.contains("prefers-color-scheme: light"),
         "missing prefers-color-scheme: light detection"
     );
+
+    // Assert body includes human-readable latency metrics formatting elements
+    assert!(
+        body_str.contains("metric-ttfb-unit"),
+        "missing metric-ttfb-unit element"
+    );
+    assert!(
+        body_str.contains("fmtDurationParts"),
+        "missing fmtDurationParts function"
+    );
+    assert!(body_str.contains("fmtMs"), "missing fmtMs function");
     assert!(
         body_str.contains(r#"data-theme="light""#),
         "missing light theme CSS override"

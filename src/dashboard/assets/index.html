@@ -961,10 +961,10 @@
         <div class="card-title">Latency (TTFB / Total)</div>
         <div class="card-value">
           <span id="metric-ttfb-p50" class="num">—</span>
-          <span class="unit">ms TTFB</span>
+          <span class="unit" id="metric-ttfb-unit">ms TTFB</span>
         </div>
         <div class="card-sub">
-          Total P50: <span class="num" id="metric-total-p50">—</span>ms · P95: <span class="num" id="metric-total-p95">—</span>ms
+          Total P50: <span class="num" id="metric-total-p50">—</span> · P95: <span class="num" id="metric-total-p95">—</span>
         </div>
       </div>
 
@@ -1279,7 +1279,8 @@
           updateDismissed = false;
           updateBanner.hidden = false;
           updateBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          if (upgradeBtn) upgradeBtn.focus();
+          const targetBtn = (upgradeBtn && !upgradeBtn.hidden) ? upgradeBtn : document.getElementById('update-deb-copy');
+          if (targetBtn) targetBtn.focus();
         } else {
           showToast('Checking for updates...');
           const result = await checkForUpdate(true);
@@ -1388,6 +1389,21 @@
       }
     }
 
+    function fmtDurationParts(ms) {
+      if (ms === null || ms === undefined || isNaN(ms)) return { val: '—', unit: '' };
+      ms = Number(ms);
+      if (ms < 1000) return { val: String(ms), unit: 'ms' };
+      if (ms < 60000) return { val: (ms / 1000).toFixed(2), unit: 's' };
+      const m = Math.floor(ms / 60000);
+      const s = ((ms % 60000) / 1000).toFixed(1);
+      return { val: `${m}m ${s}s`, unit: '' };
+    }
+
+    function fmtMs(ms) {
+      const p = fmtDurationParts(ms);
+      return p.unit ? `${p.val}${p.unit}` : p.val;
+    }
+
     function getProgressBarColorClass(pct) {
       if (pct < 20) return 'danger';
       if (pct < 50) return 'warning';
@@ -1439,9 +1455,11 @@
         document.getElementById('metric-rss').textContent = rssMb;
 
         if (statusData.latency) {
-          document.getElementById('metric-ttfb-p50').textContent = statusData.latency.ttfb_p50_ms || '0';
-          document.getElementById('metric-total-p50').textContent = statusData.latency.total_p50_ms || '0';
-          document.getElementById('metric-total-p95').textContent = statusData.latency.total_p95_ms || '0';
+          const ttfb = fmtDurationParts(statusData.latency.ttfb_p50_ms);
+          document.getElementById('metric-ttfb-p50').textContent = ttfb.val;
+          document.getElementById('metric-ttfb-unit').textContent = (ttfb.unit ? ttfb.unit + ' ' : '') + 'TTFB';
+          document.getElementById('metric-total-p50').textContent = fmtMs(statusData.latency.total_p50_ms);
+          document.getElementById('metric-total-p95').textContent = fmtMs(statusData.latency.total_p95_ms);
         }
       } catch (err) {
         console.error('Failed to fetch status:', err);
@@ -1834,7 +1852,7 @@
             <td class="num text-dim">${formatTime(ev.timestamp)}</td>
             <td class="num font-medium">${escapeHtml(ev.model)}</td>
             <td>${escapeHtml(ev.account)}</td>
-            <td class="num">${ev.ttfb_ms}ms / ${ev.total_ms}ms</td>
+            <td class="num">${fmtMs(ev.ttfb_ms)} / ${fmtMs(ev.total_ms)}</td>
             <td class="num">${ev.tokens.toLocaleString()}</td>
             <td>
               <span class="status-pill ${statusClass}">${ev.status}</span>${failoverBadge}
