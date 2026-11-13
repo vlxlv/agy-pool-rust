@@ -1,245 +1,88 @@
 name: Release
 
-# A `v*` tag runs the security audit and CI gate in parallel, builds all Linux platform
-# binaries and Debian packages with cache and smoke tests, verifies checksums, and publishes
-# the GitHub release.
+# A `v*` tag publishes the binaries and Debian packages that CI (ci.yml) already built, tested and
+# smoke-tested for exactly the tagged commit; nothing is rebuilt. Tag only after CI on that commit
+# is green. workflow_dispatch assembles and verifies the assets for the selected ref without
+# publishing (dry run).
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version for manual run'
-        required: false
-        default: '0.0.0-dryrun'
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
-
-env:
-  CARGO_TERM_COLOR: always
+  cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Resolve version (and gate a tag)
+  release:
+    name: Publish CI build
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    outputs:
-      version: ${{ steps.version.outputs.version }}
+    timeout-minutes: 10
+    permissions:
+      contents: write # publish the release
+      actions: read # find the CI run and download its artifacts
     steps:
       - uses: actions/checkout@v7
 
       - name: Resolve version
         id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            v="${GITHUB_REF_NAME#v}"
-            cargo_v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-            [ "$v" = "$cargo_v" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_v"; exit 1; }
-          else
-            v="${INPUT_VERSION:-0.0.0-dryrun}"
-            v="${v#v}"
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          test -n "$v"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$v" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $v"
+            exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Version: $v"
 
-      # A tag publishes; run the CI gate on exactly the tagged commit first.
-      - name: Install the Rust version pinned by Cargo.toml (rust-version)
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
-          test -n "$v"
-          rustup toolchain install "$v" --profile minimal -c rustfmt,clippy && rustup default "$v"
-      - uses: Swatinem/rust-cache@v2
-        if: startsWith(github.ref, 'refs/tags/')
-      - name: Gate (fmt, clippy, tests)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Find the green CI run for this commit
+        id: ci
         env:
-          AGY_TEST_MODE: '1'
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test -- --test-threads=16
+          # push and workflow_dispatch runs build exactly this commit; pull_request runs build a merge commit.
+          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=20" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].id // empty')
+          if [ -z "$run_id" ]; then
+            echo "::error::no successful CI run (push or workflow_dispatch) for $GITHUB_SHA; wait for CI on this commit to pass, then re-run this workflow"
+            exit 1
+          fi
+          echo "Using CI run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      issues: write
-      checks: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  linux:
-    name: Build Linux (${{ matrix.deb }})
-    needs: [prepare, audit]
-    runs-on: ${{ matrix.runner }}
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-26.04
-            target: x86_64-unknown-linux-musl
-            asset: agy-pool-linux-amd64
-            deb: amd64
-          - runner: ubuntu-26.04-arm
-            target: aarch64-unknown-linux-musl
-            asset: agy-pool-linux-arm64
-            deb: arm64
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Install musl-tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-
-      - name: Install the Rust version pinned by Cargo.toml (rust-version)
-        run: |
-          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
-          test -n "$v"
-          rustup toolchain install "$v" --profile minimal && rustup default "$v"
-
-      - name: Add Rust target
-        run: rustup target add ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build release binary
-        run: |
-          mkdir -p dist
-          AGY_POOL_VERSION=${VERSION} cargo build --release --locked --target ${{ matrix.target }}
-          cp "target/${{ matrix.target }}/release/agy-pool" "dist/${{ matrix.asset }}"
-          chmod +x "dist/${{ matrix.asset }}"
-
-      - name: Verify binary linkage and CLI
-        run: |
-          file "dist/${{ matrix.asset }}"
-          file "dist/${{ matrix.asset }}" | grep -Eq 'statically linked|static-pie linked'
-          VERSION_OUT=$("dist/${{ matrix.asset }}" --version)
-          echo "$VERSION_OUT"
-          [ "$VERSION_OUT" = "agy-pool ${VERSION}" ]
-          "dist/${{ matrix.asset }}" --help
-
-      - name: Build and test Debian package
-        run: |
-          ./scripts/build-deb.sh "${{ matrix.deb }}" "${VERSION}" "dist/${{ matrix.asset }}" dist
-          DEB_FILE="dist/agy-pool_${VERSION}_${{ matrix.deb }}.deb"
-          test -f "$DEB_FILE"
-          sudo dpkg -i "$DEB_FILE"
-          /usr/bin/agy-pool --version
-          sudo dpkg -r agy-pool
-
-      - name: Runtime daemon smoke test
-        run: |
-          tmp_dir=$(mktemp -d)
-          mkdir -p "$tmp_dir/data" "$tmp_dir/config"
-          cat << 'EOF' > "$tmp_dir/config/config.json"
-          {
-            "version": 1,
-            "server": {
-              "listen": "127.0.0.1",
-              "port": 18899
-            }
-          }
-          EOF
-          AGY_DATA_DIR="$tmp_dir/data" AGY_CONFIG_FILE="$tmp_dir/config/config.json" AGY_POOL_DAEMON_CHILD=1 "dist/${{ matrix.asset }}" &
-          DAEMON_PID=$!
-          sleep 1
-          RESP=$(curl -s --fail --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:18899/healthz)
-          echo "Healthcheck response: $RESP"
-          echo "$RESP" | grep -q '"status":"ok"'
-          kill -TERM $DAEMON_PID 2>/dev/null || true
-          rm -rf "$tmp_dir"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-${{ matrix.deb }}
-          path: dist/
-
-  sums:
-    name: Checksums and Package Verification
-    needs: [prepare, linux]
-    runs-on: ubuntu-26.04
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-    timeout-minutes: 10
-    steps:
-      - name: Download all artifacts
+      - name: Download the CI build
         uses: actions/download-artifact@v8
         with:
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+          pattern: dist-*
           path: dist
           merge-multiple: true
 
-      - name: Generate and verify checksums and file list
+      - name: Verify assets and write SHA256SUMS
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd dist
-          sha256sum agy-pool-linux-amd64 agy-pool-linux-arm64 agy-pool_*_amd64.deb agy-pool_*_arm64.deb > SHA256SUMS
+          # Artifacts drop the executable bit.
+          chmod +x agy-pool-linux-amd64 agy-pool-linux-arm64
+          VERSION_OUT=$(./agy-pool-linux-amd64 --version)
+          [ "$VERSION_OUT" = "agy-pool ${VERSION}" ] || { echo "::error::binary reports '$VERSION_OUT', expected agy-pool ${VERSION}"; exit 1; }
+          sha256sum agy-pool-linux-amd64 agy-pool-linux-arm64 "agy-pool_${VERSION}_amd64.deb" "agy-pool_${VERSION}_arm64.deb" > SHA256SUMS
           cat SHA256SUMS
-          sha256sum -c SHA256SUMS
-
-          # Assert the release asset list (5 assets, same names `agy-pool update` looks up)
+          # Exactly the 5 assets `agy-pool update` looks up.
           COUNT=$(ls -1 | wc -l)
-          if [ "$COUNT" -ne 5 ]; then
-            echo "Expected exactly 5 assets in dist, found $COUNT"
-            ls -la
-            exit 1
-          fi
-
-          for F in \
-            agy-pool-linux-amd64 \
-            agy-pool-linux-arm64 \
-            "agy-pool_${VERSION}_amd64.deb" \
-            "agy-pool_${VERSION}_arm64.deb" \
-            SHA256SUMS; do
-            if [ ! -f "$F" ]; then
-              echo "Missing expected asset: $F"
-              exit 1
-            fi
-          done
-
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: rust-release-dist
-          path: dist/
-
-  publish:
-    name: Publish GitHub Release
-    needs: [prepare, sums]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Download release assets
-        uses: actions/download-artifact@v8
-        with:
-          name: rust-release-dist
-          path: dist
+          [ "$COUNT" -eq 5 ] || { ls -la; echo "::error::expected exactly 5 assets, found $COUNT"; exit 1; }
 
       - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          name: ${{ needs.prepare.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}

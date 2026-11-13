@@ -12,7 +12,7 @@ description: Release and version-bump procedure for vlxlv/agy-pool-rust. Use whe
    - **Never** stack bump commits across releases, and never fold a version bump into a feature/fix commit.
 2. **The bump commit touches ONLY `Cargo.toml` and `Cargo.lock`** and has the exact subject `chore: bump version to <X.Y.Z>`.
 3. **Published tags are immutable**: never move or delete an existing `v*` tag unless explicitly told to re-tag that version. After a rewrite, older tags keep pointing at their original (now off-`main`) bump commits; that is expected.
-4. **Builds run in GitHub Actions only**: `release.yml` builds and publishes on a `v*` tag. Never run release/LTO builds on the live gateway host.
+4. **Builds run in GitHub Actions only, once**: `ci.yml` builds and packages every `main` commit; on a `v*` tag `release.yml` publishes that CI run's artifacts for the tagged commit without rebuilding, and fails if CI on that commit has not passed. Never run release/LTO builds on the live gateway host.
 
 ## Procedure
 
@@ -45,7 +45,7 @@ description: Release and version-bump procedure for vlxlv/agy-pool-rust. Use whe
    ```bash
    git push --force-with-lease origin main
    ```
-   Wait for CI on the new `HEAD` to pass.
+   Wait for CI on the new `HEAD` to pass: `release.yml` publishes that run's build artifacts and fails if there is no green CI run for the tagged commit.
 7. Tag (annotated, message = bare version, matching earlier tags) and push only the tag:
    ```bash
    git tag -a "v<X.Y.Z>" -m "<X.Y.Z>"
