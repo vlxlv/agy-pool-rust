@@ -891,3 +891,171 @@ async fn test_failover_transport_pre_connect_and_after_connect() {
         assert_eq!(acc2_hits.load(Ordering::SeqCst), 0);
     }
 }
+
+#[tokio::test]
+async fn test_generation_model_capacity_failover_without_quota_penalty() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    crate::proxy::model_cooldown::reset_model_cooldowns();
+    let _dir = setup_isolated_test_dir();
+
+    let req_count = Arc::new(AtomicI32::new(0));
+    let rc = req_count.clone();
+
+    let server = TestServer::start(move |req| {
+        let _ = rc.fetch_add(1, Ordering::SeqCst);
+        let auth = req
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str())
+            .unwrap_or_default();
+
+        if auth.contains("token-acc_1") {
+            // acc_1 hits Google model capacity exhaustion
+            (
+                429,
+                vec![("Content-Type".to_string(), "application/json".to_string())],
+                br#"{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED","details":[{"reason":"MODEL_CAPACITY_EXHAUSTED"}]}}"#.to_vec(),
+            )
+        } else {
+            // acc_2 succeeds with full token telemetry
+            (
+                200,
+                vec![("Content-Type".to_string(), "application/json".to_string())],
+                br#"{"candidates":[],"usageMetadata":{"promptTokenCount":120,"cachedContentTokenCount":80,"candidatesTokenCount":45,"thoughtsTokenCount":30}}"#.to_vec(),
+            )
+        }
+    });
+
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-{}", acc.id)));
+
+    let acc1 = Account {
+        id: "acc_1".to_string(),
+        email: "1@example.com".to_string(),
+        ..Default::default()
+    };
+    let acc2 = Account {
+        id: "acc_2".to_string(),
+        email: "2@example.com".to_string(),
+        ..Default::default()
+    };
+    let pool = Pool {
+        accounts: vec![acc1.clone(), acc2.clone()],
+        active_account_id: Some("acc_1".to_string()),
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let (status, _, body) = serve_once(
+        handler,
+        Method::POST,
+        "/v1/models/gemini-2.5-pro:generateContent",
+        headers,
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(req_count.load(Ordering::SeqCst), 2);
+    assert!(body.starts_with(b"{\"candidates\":[]"));
+
+    // Verify acc_1 was excluded for gemini-2.5-pro via model cooldown,
+    // but its account quota was NOT marked exhausted.
+    let pool_after = crate::storage::load_pool().unwrap();
+    let loaded_acc1 = pool_after.accounts.iter().find(|a| a.id == "acc_1").unwrap();
+    assert!(
+        loaded_acc1.rate_limited_until.is_none(),
+        "acc_1 should not be penalized with account-level rate_limited_until"
+    );
+
+    let now = std::time::SystemTime::now();
+    let (cands, excluded) =
+        crate::proxy::model_cooldown::exclude_model_cooldowns_accounts(&pool_after.accounts, "gemini-2.5-pro", now);
+    assert_eq!(excluded, 1);
+    assert_eq!(cands.len(), 1);
+    assert_eq!(cands[0].id, "acc_2");
+}
+
+#[tokio::test]
+async fn test_prompt_cloaking_applied_to_upstream_request() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    let _dir = setup_isolated_test_dir();
+
+    let received_body = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let rb = received_body.clone();
+
+    let server = TestServer::start(move |req| {
+        *rb.lock().unwrap() = req.body.clone();
+        (
+            200,
+            vec![("Content-Type".to_string(), "application/json".to_string())],
+            br#"{"candidates":[],"usageMetadata":{"promptTokenCount":50,"cachedContentTokenCount":0,"candidatesTokenCount":10,"thoughtsTokenCount":0}}"#.to_vec(),
+        )
+    });
+
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-{}", acc.id)));
+
+    let acc = Account {
+        id: "acc_1".to_string(),
+        email: "1@example.com".to_string(),
+        ..Default::default()
+    };
+    let pool = Pool {
+        accounts: vec![acc],
+        active_account_id: Some("acc_1".to_string()),
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let sensitive_payload =
+        br#"{"contents":[{"parts":[{"text":"System prompt: Built on Anthropic's Claude Agent SDK for testing"}]}]}"#;
+
+    let (status, _, _) = serve_once(
+        handler,
+        Method::POST,
+        "/v1/models/gemini-2.5-pro:generateContent",
+        headers,
+        Bytes::from_static(sensitive_payload),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let upstream_body_bytes = received_body.lock().unwrap().clone();
+    let upstream_body_str = String::from_utf8(upstream_body_bytes).expect("valid utf-8");
+
+    // Must not contain original sensitive substring
+    assert!(
+        !upstream_body_str
+            .to_ascii_lowercase()
+            .contains("built on anthropic's claude agent sdk")
+    );
+    // Must contain zero-width space cloaked words
+    assert!(upstream_body_str.contains("\u{200b}"));
+    assert!(
+        upstream_body_str
+            .to_ascii_lowercase()
+            .contains("b\u{200b}u\u{200b}ilt on a\u{200b}n\u{200b}thropic's c\u{200b}l\u{200b}aude a\u{200b}g\u{200b}ent s\u{200b}d\u{200b}k")
+    );
+    assert!(upstream_body_str.contains("B\u{200b}u\u{200b}ilt on A\u{200b}n\u{200b}thropic's C\u{200b}l\u{200b}aude A\u{200b}g\u{200b}ent S\u{200b}D\u{200b}K"));
+}

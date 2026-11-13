@@ -37,6 +37,9 @@ impl ProxyTestLock {
         let async_guard = self.async_lock.lock().await;
         let sync_guard = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::config::set_test_mode(true);
+        crate::proxy::model_cooldown::reset_model_cooldowns();
+        crate::proxy::smooth_rate::reset_smooth_rate();
+        crate::proxy::clear_all_verification_confirmation_claims();
         ProxyTestGuard {
             _async_guard: async_guard,
             _sync_guard: sync_guard,
@@ -53,6 +56,7 @@ impl Default for ProxyTestLock {
 impl<'a> Drop for ProxyTestGuard<'a> {
     fn drop(&mut self) {
         crate::proxy::model_cooldown::reset_model_cooldowns();
+        crate::proxy::smooth_rate::reset_smooth_rate();
         crate::proxy::clear_all_verification_confirmation_claims();
         crate::config::reset_data_dir();
         crate::config::set_test_mode(false);

@@ -111,6 +111,8 @@ impl<B> StreamBody<B> {
                 ttfb_ms: self.params.ttfb.as_millis() as u64,
                 total_ms: total.as_millis() as u64,
                 tokens: self.usage.prompt.max(0),
+                output_tokens: self.usage.output.max(0),
+                thinking_tokens: self.usage.thinking.max(0),
                 status: self.params.status,
                 failover: false,
             },
@@ -136,6 +138,8 @@ impl<B> StreamBody<B> {
                 tokens: crate::observability::AuditTokens {
                     prompt: self.usage.prompt,
                     cached: self.usage.cached,
+                    output: self.usage.output,
+                    thinking: self.usage.thinking,
                 },
                 quota_before: self.params.quota_before.clone(),
                 failover_reason: reason.to_string(),
@@ -241,15 +245,21 @@ where
                         } else {
                             "not reported".to_string()
                         };
+                        let output_info = if self.usage.output > 0 || self.usage.thinking > 0 {
+                            format!(", output {} (thinking {})", self.usage.output, self.usage.thinking)
+                        } else {
+                            String::new()
+                        };
                         log_message(
                             "CACHE",
                             &format!(
-                                "{} session {} -> {}: prompt {}, cached {}",
+                                "{} session {} -> {}: prompt {}, cached {}{}",
                                 self.params.model,
                                 session_tag(&self.params.session_key),
                                 self.params.disp_name,
                                 self.usage.prompt,
-                                cached
+                                cached,
+                                output_info
                             ),
                         );
                     }

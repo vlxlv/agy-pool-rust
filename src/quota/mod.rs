@@ -573,8 +573,21 @@ pub fn agy_client_ua(version: &str) -> String {
     )
 }
 
+/// Reports whether an HTTP response status and body indicate upstream model cluster capacity exhaustion
+/// (e.g. Google infrastructure temporary overload) rather than account quota exhaustion.
+pub fn is_model_capacity_error(status: u16, body: &[u8]) -> bool {
+    if status != 429 && status != 503 {
+        return false;
+    }
+    let lower = String::from_utf8_lossy(body).to_lowercase();
+    lower.contains("model_capacity_exhausted") || lower.contains("model capacity exhausted")
+}
+
 /// IsQuotaError reports whether an HTTP response status and body indicate quota exhaustion or rate limits.
 pub fn is_quota_error(status: u16, body: &[u8]) -> bool {
+    if is_model_capacity_error(status, body) {
+        return false;
+    }
     if status == 429 {
         return true;
     }
@@ -724,6 +737,25 @@ mod tests {
             let actual = next_backoff_delay(i);
             assert_eq!(actual, exp, "attempt {}", i);
         }
+    }
+
+    #[test]
+    fn test_is_model_capacity_error_and_quota_disambiguation() {
+        let capacity_body = br#"{"error": {"code": 429, "message": "Resource has been exhausted", "status": "RESOURCE_EXHAUSTED", "details": [{"reason": "MODEL_CAPACITY_EXHAUSTED"}]}}"#;
+        assert!(is_model_capacity_error(429, capacity_body));
+        assert!(is_model_capacity_error(
+            503,
+            br#"{"error": "model capacity exhausted"}"#
+        ));
+        assert!(!is_model_capacity_error(429, br#"{"error": "rate limit exceeded"}"#));
+        assert!(!is_model_capacity_error(403, capacity_body));
+
+        // When capacity is exhausted, is_quota_error must return false to avoid locking account
+        assert!(!is_quota_error(429, capacity_body));
+        // Normal 429 or 403 quota exhaustion
+        assert!(is_quota_error(429, br#"{"error": "rate_limit_exceeded"}"#));
+        assert!(is_quota_error(403, br#"{"error": "quota_exceeded"}"#));
+        assert!(!is_quota_error(500, br#"internal server error"#));
     }
 
     #[derive(serde::Deserialize)]

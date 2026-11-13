@@ -9,10 +9,29 @@ use std::sync::{LazyLock, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditTokens {
     pub prompt: i64,
     pub cached: i64,
+    #[serde(default)]
+    pub output: i64,
+    #[serde(default)]
+    pub thinking: i64,
+}
+
+impl AuditTokens {
+    pub const fn zero() -> Self {
+        Self {
+            prompt: 0,
+            cached: 0,
+            output: 0,
+            thinking: 0,
+        }
+    }
+
+    pub fn effective_output(&self) -> i64 {
+        self.output.max(self.thinking)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,6 +261,8 @@ mod tests {
             tokens: AuditTokens {
                 prompt: 100,
                 cached: 50,
+                output: 25,
+                thinking: 10,
             },
             quota_before: AuditQuota {
                 q5: Some(0.85),
@@ -283,7 +304,12 @@ mod tests {
             status_code: 200,
             ttfb_ms: 10,
             total_ms: 20,
-            tokens: AuditTokens { prompt: 1, cached: 0 },
+            tokens: AuditTokens {
+                prompt: 1,
+                cached: 0,
+                output: 0,
+                thinking: 0,
+            },
             quota_before: AuditQuota {
                 q5: None,
                 q7: None,

@@ -809,7 +809,7 @@ fn test_proxy_audit_case_d_audit_file_permission_mode() {
         status_code: 200,
         ttfb_ms: 10,
         total_ms: 20,
-        tokens: crate::observability::AuditTokens { prompt: 0, cached: 0 },
+        tokens: crate::observability::AuditTokens::zero(),
         quota_before: crate::observability::AuditQuota {
             q5: None,
             q7: None,

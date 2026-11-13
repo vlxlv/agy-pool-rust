@@ -1,12 +1,14 @@
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
-/// UsageTap tracks prompt and cached token counts from responses as they stream.
+/// UsageTap tracks prompt, cached, output (candidates), and thinking token counts from responses as they stream.
 pub struct UsageTap<R> {
     inner: R,
     carry: Vec<u8>,
     pub prompt: i64,
     pub cached: i64,
+    pub output: i64,
+    pub thinking: i64,
 }
 
 impl<R> UsageTap<R> {
@@ -16,6 +18,8 @@ impl<R> UsageTap<R> {
             carry: Vec::new(),
             prompt: 0,
             cached: -1,
+            output: 0,
+            thinking: 0,
         }
     }
 
@@ -27,13 +31,34 @@ impl<R> UsageTap<R> {
         if self.cached >= 0 { Some(self.cached) } else { None }
     }
 
+    pub fn output_tokens(&self) -> i64 {
+        self.output
+    }
+
+    pub fn thinking_tokens(&self) -> i64 {
+        self.thinking
+    }
+
+    /// Effective output tokens: max(output, thinking).
+    /// In Gemini thinking models, ACP and streaming usageMetadata often subsume
+    /// thinking tokens inside candidatesTokenCount (or report thinking separately).
+    /// Computing max(output, thinking) avoids double-counting while ensuring an accurate floor.
+    pub fn effective_output_tokens(&self) -> i64 {
+        self.output.max(self.thinking)
+    }
+
     pub fn scan(&mut self, b: &[u8]) {
         let mut buf = Vec::with_capacity(self.carry.len() + b.len());
         buf.extend_from_slice(&self.carry);
         buf.extend_from_slice(b);
 
         let s = String::from_utf8_lossy(&buf);
-        let keys = ["promptTokenCount", "cachedContentTokenCount"];
+        let keys = [
+            "promptTokenCount",
+            "cachedContentTokenCount",
+            "candidatesTokenCount",
+            "thoughtsTokenCount",
+        ];
         for key in keys {
             let pattern = format!("\"{key}\"");
             let mut start = 0;
@@ -46,10 +71,12 @@ impl<R> UsageTap<R> {
                     if digits_end > 0
                         && let Ok(v) = num_str[..digits_end].parse::<i64>()
                     {
-                        if key == "promptTokenCount" {
-                            self.prompt = v;
-                        } else {
-                            self.cached = v;
+                        match key {
+                            "promptTokenCount" => self.prompt = v,
+                            "cachedContentTokenCount" => self.cached = v,
+                            "candidatesTokenCount" => self.output = v,
+                            "thoughtsTokenCount" => self.thinking = v,
+                            _ => {}
                         }
                     }
                 }
@@ -57,7 +84,7 @@ impl<R> UsageTap<R> {
             }
         }
 
-        let tail_start = buf.len().saturating_sub(64);
+        let tail_start = buf.len().saturating_sub(128);
         self.carry = buf[tail_start..].to_vec();
     }
 }
@@ -125,6 +152,25 @@ mod tests {
         assert_eq!(tap.prompt, 42);
         assert_eq!(tap.cached, -1);
         assert_eq!(tap.cached_tokens(), None);
+    }
+
+    #[test]
+    fn usage_tap_output_and_thinking_tokens() {
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut tap = UsageTap::new(&b""[..]);
+        tap.scan(br#"{"usageMetadata":{"promptTokenCount": 1000,"cachedContentTokenCount": 800,"candidatesTokenCount": 250,"thoughtsTokenCount": 180}}"#);
+        assert_eq!(tap.prompt_tokens(), 1000);
+        assert_eq!(tap.cached_tokens(), Some(800));
+        assert_eq!(tap.output_tokens(), 250);
+        assert_eq!(tap.thinking_tokens(), 180);
+        assert_eq!(tap.effective_output_tokens(), 250);
+
+        // Case where thoughts exceed candidates (e.g. streaming update before candidates finalized)
+        let mut tap2 = UsageTap::new(&b""[..]);
+        tap2.scan(br#"{"usageMetadata":{"candidatesTokenCount": 50,"thoughtsTokenCount": 200}}"#);
+        assert_eq!(tap2.output_tokens(), 50);
+        assert_eq!(tap2.thinking_tokens(), 200);
+        assert_eq!(tap2.effective_output_tokens(), 200);
     }
 
     #[test]
