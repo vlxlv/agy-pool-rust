@@ -824,6 +824,16 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         output: usage.output,
         thinking: usage.thinking,
     };
+    if params.is_generation {
+        crate::storage::tokens::record_token_usage(
+            &params.acc.id,
+            tokens.prompt,
+            tokens.cached,
+            tokens.output,
+            tokens.thinking,
+            false,
+        );
+    }
     write_attempt_audit(
         &params,
         &disp_name,

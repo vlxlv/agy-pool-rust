@@ -4,6 +4,7 @@ pub mod inflight;
 pub mod model_cooldown;
 pub mod observability;
 pub mod stream;
+pub mod tokens;
 pub mod transport_failure;
 pub mod verification_pending;
 

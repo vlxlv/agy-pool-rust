@@ -101,6 +101,17 @@ impl<B> StreamBody<B> {
     }
 
     fn emit_audit(&self, reason: &str, total: Duration, record_latency: bool) {
+        // Runs exactly once per stream: on completion (reason "") or when it ended early.
+        if self.params.is_generation && self.params.status < 400 {
+            crate::storage::tokens::record_token_usage(
+                &self.params.account_id,
+                self.usage.prompt,
+                self.usage.cached,
+                self.usage.output,
+                self.usage.thinking,
+                !reason.is_empty(),
+            );
+        }
         let now = jiff::Timestamp::now();
         crate::dashboard::telemetry::record_attempt(
             crate::dashboard::telemetry::DashboardAuditEvent {
