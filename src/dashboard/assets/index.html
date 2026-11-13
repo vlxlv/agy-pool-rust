@@ -961,10 +961,10 @@
         <div class="card-title">Latency (TTFB / Total)</div>
         <div class="card-value">
           <span id="metric-ttfb-p50" class="num">—</span>
-          <span class="unit">ms TTFB</span>
+          <span class="unit" id="metric-ttfb-unit">ms TTFB</span>
         </div>
         <div class="card-sub">
-          Total P50: <span class="num" id="metric-total-p50">—</span>ms · P95: <span class="num" id="metric-total-p95">—</span>ms
+          Total P50: <span class="num" id="metric-total-p50">—</span> · P95: <span class="num" id="metric-total-p95">—</span>
         </div>
       </div>
 
@@ -1279,7 +1279,8 @@
           updateDismissed = false;
           updateBanner.hidden = false;
           updateBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          if (upgradeBtn) upgradeBtn.focus();
+          const targetBtn = (upgradeBtn && !upgradeBtn.hidden) ? upgradeBtn : document.getElementById('update-deb-copy');
+          if (targetBtn) targetBtn.focus({ preventScroll: true });
         } else {
           showToast('Checking for updates...');
           const result = await checkForUpdate(true);
@@ -1388,6 +1389,22 @@
       }
     }
 
+    function fmtDurationParts(ms) {
+      const n = Number(ms);
+      if (ms == null || !Number.isFinite(n)) return { val: '—', unit: '' };
+      if (n < 1000) return { val: String(Math.round(n)), unit: 'ms' };
+      // Round once, then pick the unit, so 59999 ms is "1m 0.0s" rather than "60.00s".
+      const cs = Math.round(n / 10);
+      if (cs < 6000) return { val: (cs / 100).toFixed(2), unit: 's' };
+      const ds = Math.round(n / 100);
+      return { val: `${Math.floor(ds / 600)}m ${((ds % 600) / 10).toFixed(1)}s`, unit: '' };
+    }
+
+    function fmtMs(ms) {
+      const p = fmtDurationParts(ms);
+      return p.unit ? `${p.val}${p.unit}` : p.val;
+    }
+
     function getProgressBarColorClass(pct) {
       if (pct < 20) return 'danger';
       if (pct < 50) return 'warning';
@@ -1439,9 +1456,11 @@
         document.getElementById('metric-rss').textContent = rssMb;
 
         if (statusData.latency) {
-          document.getElementById('metric-ttfb-p50').textContent = statusData.latency.ttfb_p50_ms || '0';
-          document.getElementById('metric-total-p50').textContent = statusData.latency.total_p50_ms || '0';
-          document.getElementById('metric-total-p95').textContent = statusData.latency.total_p95_ms || '0';
+          const ttfb = fmtDurationParts(statusData.latency.ttfb_p50_ms);
+          document.getElementById('metric-ttfb-p50').textContent = ttfb.val;
+          document.getElementById('metric-ttfb-unit').textContent = (ttfb.unit ? ttfb.unit + ' ' : '') + 'TTFB';
+          document.getElementById('metric-total-p50').textContent = fmtMs(statusData.latency.total_p50_ms);
+          document.getElementById('metric-total-p95').textContent = fmtMs(statusData.latency.total_p95_ms);
         }
       } catch (err) {
         console.error('Failed to fetch status:', err);
@@ -1834,7 +1853,7 @@
             <td class="num text-dim">${formatTime(ev.timestamp)}</td>
             <td class="num font-medium">${escapeHtml(ev.model)}</td>
             <td>${escapeHtml(ev.account)}</td>
-            <td class="num">${ev.ttfb_ms}ms / ${ev.total_ms}ms</td>
+            <td class="num">${fmtMs(ev.ttfb_ms)} / ${fmtMs(ev.total_ms)}</td>
             <td class="num">${ev.tokens.toLocaleString()}</td>
             <td>
               <span class="status-pill ${statusClass}">${ev.status}</span>${failoverBadge}
