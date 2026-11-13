@@ -1,5 +1,6 @@
 pub mod affinity;
 pub mod body;
+pub mod cloak;
 pub mod confirmation;
 pub mod dispatch;
 pub mod failover;
@@ -11,6 +12,7 @@ pub mod usage;
 
 pub use affinity::*;
 pub use body::*;
+pub use cloak::*;
 pub use confirmation::*;
 pub use dispatch::*;
 pub use failover::*;
@@ -909,9 +911,17 @@ impl Handler {
         };
 
         let static_cfg = crate::config::get_static_config();
-        let (path, body_bytes, remapped) = apply_model_mapping(&path, &body_bytes, &static_cfg.model_mapping);
+        let (path, mut body_bytes, remapped) = apply_model_mapping(&path, &body_bytes, &static_cfg.model_mapping);
         if let Some((ref src, ref target)) = remapped {
             log_message("MODEL MAPPING", &format!("Remapped request model: {src} -> {target}"));
+        }
+
+        if let Some(cloaked) = cloak_payload_if_needed(&body_bytes) {
+            log_message(
+                "PROMPT CLOAK",
+                "Applied zero-width cloaking to sensitive agent system prompt",
+            );
+            body_bytes = cloaked;
         }
 
         let is_generation = is_generation_request_path(&path);
@@ -1030,6 +1040,14 @@ impl Handler {
             let (m, sk) = inspect_request(&parts.headers, Some(&parts.uri), &body_bytes);
             model = m;
             session_key = sk;
+            if model.is_empty()
+                && let Some(idx) = path.find("/models/")
+            {
+                let after = &path[idx + 8..];
+                let end = after.find(':').unwrap_or(after.len());
+                let clean = after[..end].strip_prefix("models/").unwrap_or(&after[..end]);
+                model = clean.to_string();
+            }
             if !session_key.is_empty() && !model.is_empty() {
                 session_key.push('\0');
                 session_key.push_str(&model);
@@ -1277,10 +1295,15 @@ impl Handler {
                                 "not reported".to_string()
                             };
                             let disp = display_account_name(Some(acc), Some(false));
+                            let output_info = if toks.output > 0 || toks.thinking > 0 {
+                                format!(", output {} (thinking {})", toks.output, toks.thinking)
+                            } else {
+                                String::new()
+                            };
                             log_message(
                                 "CACHE",
                                 &format!(
-                                    "{model} session {} -> {disp}: prompt {}, cached {cached_str}",
+                                    "{model} session {} -> {disp}: prompt {}, cached {cached_str}{output_info}",
                                     session_tag(&session_key),
                                     toks.prompt
                                 ),

@@ -24,10 +24,12 @@ pub enum Attempt {
 }
 
 /// Token usage metadata returned on successful generation requests.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Tokens {
     pub prompt: i64,
     pub cached: i64,
+    pub output: i64,
+    pub thinking: i64,
 }
 
 /// Parameters for dispatching an HTTP attempt to a specific account.
@@ -99,6 +101,8 @@ fn write_attempt_audit(
             ttfb_ms: ttfb.as_millis() as u64,
             total_ms: total.as_millis() as u64,
             tokens: tokens.prompt.max(0),
+            output_tokens: tokens.output.max(0),
+            thinking_tokens: tokens.thinking.max(0),
             status: status_code,
             failover: is_failover,
         },
@@ -192,7 +196,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 Duration::ZERO,
                 Duration::ZERO,
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             if let Err(persist_err) = record_auth_error(params.acc) {
                 log_message(
@@ -248,7 +252,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     true,
                     Duration::ZERO,
                     Duration::ZERO,
-                    AuditTokens { prompt: 0, cached: 0 },
+                    AuditTokens::default(),
                 );
                 return (
                     Attempt::Failover {
@@ -291,7 +295,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     false,
                     ttfb,
                     start.elapsed(),
-                    AuditTokens { prompt: 0, cached: 0 },
+                    AuditTokens::default(),
                 );
                 record_no_replay_prevented();
 
@@ -344,7 +348,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                         true,
                         Duration::ZERO,
                         Duration::ZERO,
-                        AuditTokens { prompt: 0, cached: 0 },
+                        AuditTokens::default(),
                     );
                     return (
                         Attempt::Failover {
@@ -366,7 +370,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     false,
                     ttfb,
                     start.elapsed(),
-                    AuditTokens { prompt: 0, cached: 0 },
+                    AuditTokens::default(),
                 );
                 record_no_replay_prevented();
                 let err_str = err.to_string().to_ascii_lowercase();
@@ -412,9 +416,9 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         );
 
         // Failover on 503 or model capacity exhaustion when model is specified
-        if (reason == "MODEL_CAPACITY_EXHAUSTED" || status == StatusCode::SERVICE_UNAVAILABLE)
-            && !params.model.is_empty()
-        {
+        let capacity =
+            reason == "MODEL_CAPACITY_EXHAUSTED" || crate::quota::is_model_capacity_error(status_code, &err_body);
+        if (capacity || status == StatusCode::SERVICE_UNAVAILABLE) && !params.model.is_empty() {
             let cooldown = record_model_capacity_error(&params.acc.id, params.model);
             log_message(
                 "FAILOVER",
@@ -431,7 +435,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -463,7 +467,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -497,7 +501,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -526,7 +530,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -557,7 +561,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -568,8 +572,8 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
         }
 
-        // Failover on 503 for requests without a model
-        if status == StatusCode::SERVICE_UNAVAILABLE {
+        // Failover on 503 or capacity exhaustion for requests without a model
+        if status == StatusCode::SERVICE_UNAVAILABLE || capacity {
             let persist_err = record_soft_cooldown(params.acc);
             if persist_err.is_err() {
                 log_message(
@@ -580,7 +584,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             log_message(
                 "FAILOVER",
                 &format!(
-                    "Account {disp_name} upstream unavailable (HTTP 503)! Auto-switching to next account (soft cooldown 30s)..."
+                    "Account {disp_name} upstream unavailable (HTTP {status_code})! Auto-switching to next account (soft cooldown 30s)..."
                 ),
             );
             record_attempt_audit(
@@ -591,7 +595,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -611,7 +615,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             false,
             ttfb,
             start.elapsed(),
-            AuditTokens { prompt: 0, cached: 0 },
+            AuditTokens::default(),
         );
         let mut out_headers = parts.headers;
         attach_debug_headers(
@@ -738,7 +742,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     false,
                     ttfb,
                     start.elapsed(),
-                    AuditTokens { prompt: 0, cached: 0 },
+                    AuditTokens::default(),
                 );
                 let mut out_headers = HeaderMap::new();
                 attach_debug_headers(
@@ -786,7 +790,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 false,
                 ttfb,
                 start.elapsed(),
-                AuditTokens { prompt: 0, cached: 0 },
+                AuditTokens::default(),
             );
             let resp = send_buffered(
                 err_status,
@@ -817,6 +821,8 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
     let tokens = Tokens {
         prompt: usage.prompt,
         cached: usage.cached,
+        output: usage.output,
+        thinking: usage.thinking,
     };
     write_attempt_audit(
         &params,
@@ -830,6 +836,8 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         AuditTokens {
             prompt: tokens.prompt,
             cached: tokens.cached,
+            output: tokens.output,
+            thinking: tokens.thinking,
         },
     );
     (Attempt::Done(resp), Some(tokens))
