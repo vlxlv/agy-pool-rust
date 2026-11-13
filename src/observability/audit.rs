@@ -19,21 +19,6 @@ pub struct AuditTokens {
     pub thinking: i64,
 }
 
-impl AuditTokens {
-    pub const fn zero() -> Self {
-        Self {
-            prompt: 0,
-            cached: 0,
-            output: 0,
-            thinking: 0,
-        }
-    }
-
-    pub fn effective_output(&self) -> i64 {
-        self.output.max(self.thinking)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuditQuota {
     #[serde(skip_serializing_if = "Option::is_none")]

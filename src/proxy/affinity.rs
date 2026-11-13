@@ -334,19 +334,6 @@ pub fn inspect_request(headers: &http::HeaderMap, uri: Option<&http::Uri>, body:
         model = m.to_string();
     }
 
-    if model.is_empty()
-        && let Some(u) = uri
-    {
-        let p = u.path();
-        if let Some(idx) = p.find("/models/") {
-            let after = &p[idx + 8..];
-            let end = after.find(':').unwrap_or(after.len());
-            let m = &after[..end];
-            let clean = m.strip_prefix("models/").unwrap_or(m);
-            model = clean.to_string();
-        }
-    }
-
     // 1. Check HTTP headers
     let header_names = [
         "X-Conversation-Id",

@@ -39,14 +39,6 @@ impl<R> UsageTap<R> {
         self.thinking
     }
 
-    /// Effective output tokens: max(output, thinking).
-    /// In Gemini thinking models, ACP and streaming usageMetadata often subsume
-    /// thinking tokens inside candidatesTokenCount (or report thinking separately).
-    /// Computing max(output, thinking) avoids double-counting while ensuring an accurate floor.
-    pub fn effective_output_tokens(&self) -> i64 {
-        self.output.max(self.thinking)
-    }
-
     pub fn scan(&mut self, b: &[u8]) {
         let mut buf = Vec::with_capacity(self.carry.len() + b.len());
         buf.extend_from_slice(&self.carry);
@@ -163,14 +155,12 @@ mod tests {
         assert_eq!(tap.cached_tokens(), Some(800));
         assert_eq!(tap.output_tokens(), 250);
         assert_eq!(tap.thinking_tokens(), 180);
-        assert_eq!(tap.effective_output_tokens(), 250);
 
-        // Case where thoughts exceed candidates (e.g. streaming update before candidates finalized)
+        // Thoughts are counted separately from candidates and may exceed them
         let mut tap2 = UsageTap::new(&b""[..]);
         tap2.scan(br#"{"usageMetadata":{"candidatesTokenCount": 50,"thoughtsTokenCount": 200}}"#);
         assert_eq!(tap2.output_tokens(), 50);
         assert_eq!(tap2.thinking_tokens(), 200);
-        assert_eq!(tap2.effective_output_tokens(), 200);
     }
 
     #[test]

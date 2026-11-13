@@ -32,21 +32,6 @@ pub struct Tokens {
     pub thinking: i64,
 }
 
-impl Tokens {
-    pub const fn zero() -> Self {
-        Self {
-            prompt: 0,
-            cached: 0,
-            output: 0,
-            thinking: 0,
-        }
-    }
-
-    pub fn effective_output(&self) -> i64 {
-        self.output.max(self.thinking)
-    }
-}
-
 /// Parameters for dispatching an HTTP attempt to a specific account.
 pub struct DispatchParams<'a> {
     pub req_method: &'a Method,
@@ -211,7 +196,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 Duration::ZERO,
                 Duration::ZERO,
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             if let Err(persist_err) = record_auth_error(params.acc) {
                 log_message(
@@ -267,7 +252,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     true,
                     Duration::ZERO,
                     Duration::ZERO,
-                    AuditTokens::zero(),
+                    AuditTokens::default(),
                 );
                 return (
                     Attempt::Failover {
@@ -310,7 +295,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     false,
                     ttfb,
                     start.elapsed(),
-                    AuditTokens::zero(),
+                    AuditTokens::default(),
                 );
                 record_no_replay_prevented();
 
@@ -363,7 +348,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                         true,
                         Duration::ZERO,
                         Duration::ZERO,
-                        AuditTokens::zero(),
+                        AuditTokens::default(),
                     );
                     return (
                         Attempt::Failover {
@@ -385,7 +370,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     false,
                     ttfb,
                     start.elapsed(),
-                    AuditTokens::zero(),
+                    AuditTokens::default(),
                 );
                 record_no_replay_prevented();
                 let err_str = err.to_string().to_ascii_lowercase();
@@ -431,9 +416,9 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         );
 
         // Failover on 503 or model capacity exhaustion when model is specified
-        if (reason == "MODEL_CAPACITY_EXHAUSTED" || status == StatusCode::SERVICE_UNAVAILABLE)
-            && !params.model.is_empty()
-        {
+        let capacity =
+            reason == "MODEL_CAPACITY_EXHAUSTED" || crate::quota::is_model_capacity_error(status_code, &err_body);
+        if (capacity || status == StatusCode::SERVICE_UNAVAILABLE) && !params.model.is_empty() {
             let cooldown = record_model_capacity_error(&params.acc.id, params.model);
             log_message(
                 "FAILOVER",
@@ -450,7 +435,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -482,42 +467,12 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
                     reason: "ExplicitRetryableUpstreamResponse:ValidationError",
                     err: persist_err.err().map(|e| e.to_string()),
-                },
-                None,
-            );
-        }
-
-        // Failover on upstream model capacity exhaustion (Google cluster overload)
-        if crate::quota::is_model_capacity_error(status_code, &err_body) {
-            let backoff = crate::proxy::model_cooldown::record_model_capacity_error(&params.acc.id, params.model);
-            let backoff_secs = backoff.as_secs();
-            log_message(
-                "FAILOVER",
-                &format!(
-                    "Account {disp_name} hit upstream model capacity error for {}! Model paused for {backoff_secs}s. Auto-switching to next account...",
-                    params.model
-                ),
-            );
-            record_attempt_audit(
-                &params,
-                &disp_name,
-                status_code,
-                "ModelCapacityExhausted",
-                true,
-                ttfb,
-                start.elapsed(),
-                AuditTokens::zero(),
-            );
-            return (
-                Attempt::Failover {
-                    reason: "ExplicitRetryableUpstreamResponse:ModelCapacityExhausted",
-                    err: None,
                 },
                 None,
             );
@@ -546,7 +501,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -575,7 +530,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -606,7 +561,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -617,8 +572,8 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             );
         }
 
-        // Failover on 503 for requests without a model
-        if status == StatusCode::SERVICE_UNAVAILABLE {
+        // Failover on 503 or capacity exhaustion for requests without a model
+        if status == StatusCode::SERVICE_UNAVAILABLE || capacity {
             let persist_err = record_soft_cooldown(params.acc);
             if persist_err.is_err() {
                 log_message(
@@ -629,7 +584,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             log_message(
                 "FAILOVER",
                 &format!(
-                    "Account {disp_name} upstream unavailable (HTTP 503)! Auto-switching to next account (soft cooldown 30s)..."
+                    "Account {disp_name} upstream unavailable (HTTP {status_code})! Auto-switching to next account (soft cooldown 30s)..."
                 ),
             );
             record_attempt_audit(
@@ -640,7 +595,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 true,
                 ttfb,
                 start.elapsed(),
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             return (
                 Attempt::Failover {
@@ -660,7 +615,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             false,
             ttfb,
             start.elapsed(),
-            AuditTokens::zero(),
+            AuditTokens::default(),
         );
         let mut out_headers = parts.headers;
         attach_debug_headers(
@@ -787,7 +742,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                     false,
                     ttfb,
                     start.elapsed(),
-                    AuditTokens::zero(),
+                    AuditTokens::default(),
                 );
                 let mut out_headers = HeaderMap::new();
                 attach_debug_headers(
@@ -835,7 +790,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
                 false,
                 ttfb,
                 start.elapsed(),
-                AuditTokens::zero(),
+                AuditTokens::default(),
             );
             let resp = send_buffered(
                 err_status,

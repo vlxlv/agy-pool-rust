@@ -14,8 +14,15 @@ const ZW: &str = "\u{200b}";
 
 /// Checks whether the text contains any of the turned-away phrases (case-insensitive ASCII).
 pub fn turns_away(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    TURNED_AWAY.iter().any(|&needle| lower.contains(needle))
+    bytes_turn_away(text.as_bytes())
+}
+
+// Runs on every request body, so it scans in place instead of lowercasing a copy.
+fn bytes_turn_away(hay: &[u8]) -> bool {
+    TURNED_AWAY.iter().any(|&needle| {
+        let n = needle.as_bytes();
+        hay.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+    })
 }
 
 /// Breaks up every alphanumeric word of length >= 3 in `line` by inserting a Zero-Width Space
@@ -92,10 +99,10 @@ pub fn cloak_text(text: &str) -> String {
 /// If any turned-away phrase is present, returns `Some(Bytes)` containing cloaked payload.
 /// If not present, returns `None` (0 allocations).
 pub fn cloak_payload_if_needed(body: &[u8]) -> Option<Bytes> {
-    let s = std::str::from_utf8(body).ok()?;
-    if !turns_away(s) {
+    if !bytes_turn_away(body) {
         return None;
     }
+    let s = std::str::from_utf8(body).ok()?;
     Some(Bytes::from(cloak_text(s)))
 }
 
