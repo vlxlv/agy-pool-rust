@@ -304,6 +304,102 @@
       font-weight: 500;
     }
 
+    /* Update Banner */
+    .update-banner {
+      background: linear-gradient(90deg, var(--accent-dim), var(--surface-subtle));
+      border-bottom: 1px solid var(--accent-border);
+      color: var(--text-main);
+      padding: 8px 20px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .update-banner[hidden] {
+      display: none !important;
+    }
+
+    .update-banner-content {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .update-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      background-color: var(--accent-soft);
+      color: var(--accent-text);
+      border: 1px solid var(--accent-border);
+    }
+
+    .upgrade-btn {
+      appearance: none;
+      background: var(--accent);
+      color: var(--accent-contrast);
+      border: 1px solid transparent;
+      border-radius: 6px;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: opacity 0.15s ease, transform 0.1s ease;
+    }
+
+    .upgrade-btn:hover:not(:disabled) {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+
+    .upgrade-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .update-msg {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .update-msg.error {
+      color: var(--red-text);
+    }
+
+    .update-msg.success {
+      color: var(--green-text);
+    }
+
+    .update-dismiss {
+      appearance: none;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      line-height: 1;
+    }
+
+    .update-dismiss:hover {
+      color: var(--text-main);
+      background: var(--surface-subtle);
+    }
+
     /* Main Container */
     main {
       flex: 1;
@@ -709,6 +805,17 @@
     </div>
   </header>
 
+  <!-- Update Available Banner -->
+  <div id="update-banner" class="update-banner" hidden>
+    <div class="update-banner-content">
+      <span class="update-badge">UPDATE</span>
+      <span id="update-text">New version available: <strong id="update-target-version" class="num">v...</strong></span>
+      <button id="upgrade-btn" type="button" class="upgrade-btn">Upgrade Now</button>
+      <span id="update-msg" class="update-msg" role="status"></span>
+    </div>
+    <button id="update-dismiss-btn" type="button" class="update-dismiss" aria-label="Dismiss banner" title="Dismiss">✕</button>
+  </div>
+
   <!-- Reconnect Alert Banner -->
   <div id="reconnect-banner">
     ⚠️ SSE event stream disconnected. Reconnecting in 3s...
@@ -980,6 +1087,12 @@
     const reconnectBanner = document.getElementById('reconnect-banner');
     const pauseBtn = document.getElementById('pause-btn');
     const clearBtn = document.getElementById('clear-btn');
+    const updateBanner = document.getElementById('update-banner');
+    const updateTargetVersion = document.getElementById('update-target-version');
+    const upgradeBtn = document.getElementById('upgrade-btn');
+    const updateMsg = document.getElementById('update-msg');
+    const updateDismissBtn = document.getElementById('update-dismiss-btn');
+    let updateDismissed = false;
 
     // Email toggle event listener
     showEmailCheckbox.addEventListener('change', (e) => {
@@ -1005,6 +1118,61 @@
       eventList = [];
       renderStream();
     });
+
+    if (updateDismissBtn) {
+      updateDismissBtn.addEventListener('click', () => {
+        updateDismissed = true;
+        updateBanner.hidden = true;
+      });
+    }
+
+    if (upgradeBtn) {
+      upgradeBtn.addEventListener('click', async () => {
+        upgradeBtn.disabled = true;
+        upgradeBtn.textContent = 'Upgrading...';
+        updateMsg.className = 'update-msg';
+        updateMsg.textContent = 'Downloading and applying update...';
+
+        try {
+          const res = await agyFetch('/api/v1/update', {
+            method: 'POST',
+            body: JSON.stringify({}),
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            const ver = data.version || updateTargetVersion.textContent;
+            upgradeBtn.textContent = 'Upgraded ✓';
+            updateMsg.className = 'update-msg success';
+            let seconds = 3;
+            updateMsg.textContent = `Upgraded to v${ver}! Gateway restarting in ${seconds}s...`;
+            const timer = setInterval(() => {
+              seconds -= 1;
+              if (seconds <= 0) {
+                clearInterval(timer);
+                window.location.reload();
+              } else {
+                updateMsg.textContent = `Upgraded to v${ver}! Gateway restarting in ${seconds}s...`;
+              }
+            }, 1000);
+          } else {
+            let errMsg = `HTTP ${res.status}`;
+            try {
+              const errData = await res.json();
+              errMsg = errData.error?.message || errMsg;
+            } catch (_) {}
+            upgradeBtn.disabled = false;
+            upgradeBtn.textContent = 'Retry Upgrade';
+            updateMsg.className = 'update-msg error';
+            updateMsg.textContent = `Upgrade failed: ${errMsg}`;
+          }
+        } catch (err) {
+          upgradeBtn.disabled = false;
+          upgradeBtn.textContent = 'Retry Upgrade';
+          updateMsg.className = 'update-msg error';
+          updateMsg.textContent = `Upgrade error: ${err.message || err}`;
+        }
+      });
+    }
 
     // Utilities
     function escapeHtml(str) {
@@ -1172,6 +1340,30 @@
         document.getElementById('metric-forecast-window').textContent = data.window_used || '12h';
       } catch (err) {
         console.error('Failed to fetch forecast:', err);
+      }
+    }
+
+    async function checkForUpdate(force = false) {
+      if (!authOk) return;
+      try {
+        const url = force ? '/api/v1/update?refresh=true' : '/api/v1/update';
+        const res = await agyFetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.has_update && data.latest_version) {
+          updateTargetVersion.textContent = `v${data.latest_version}`;
+          if (!updateDismissed) {
+            updateBanner.hidden = false;
+          }
+          const versionPill = document.getElementById('version-pill');
+          if (versionPill) {
+            versionPill.title = `Current: v${data.current_version} · Latest: v${data.latest_version}`;
+          }
+        } else {
+          updateBanner.hidden = true;
+        }
+      } catch (err) {
+        console.warn('Update check failed:', err);
       }
     }
 
@@ -1479,11 +1671,14 @@
       strategySelect.hidden = !controlEnabled;
       document.getElementById('refresh-all-btn').hidden = !controlEnabled;
       document.getElementById('actions-col').hidden = !controlEnabled;
+      if (upgradeBtn) {
+        upgradeBtn.hidden = !controlEnabled;
+      }
       start();
     }
 
     function start() {
-      Promise.all([fetchStatus(), fetchAccounts(), fetchForecast()]).catch(console.error);
+      Promise.all([fetchStatus(), fetchAccounts(), fetchForecast(), checkForUpdate()]).catch(console.error);
       connectSSE();
       if (started) return;
       started = true;
@@ -1498,6 +1693,12 @@
 
       // 1s local tick for countdowns
       setInterval(updateLocalCountdowns, 1000);
+
+      // Periodic update check every 15 minutes
+      setInterval(() => {
+        if (!authOk) return;
+        checkForUpdate();
+      }, 15 * 60 * 1000);
     }
 
     document.getElementById('accounts-table-body').addEventListener('click', async (e) => {

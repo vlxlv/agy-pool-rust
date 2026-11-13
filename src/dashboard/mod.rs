@@ -407,6 +407,49 @@ async fn set_strategy(req: Request<hyper::body::Incoming>) -> Response<ProxyBody
     }
 }
 
+async fn update_check_response(query: Option<&str>) -> Response<ProxyBody> {
+    let force = query
+        .map(|q| {
+            url::form_urlencoded::parse(q.as_bytes())
+                .any(|(k, v)| (k == "refresh" || k == "force") && (v == "true" || v == "1"))
+        })
+        .unwrap_or(false);
+    match crate::cli::update::check_latest_update(force).await {
+        Ok(result) => json_response(serde_json::to_vec(&result).unwrap_or_default()),
+        Err(e) => {
+            crate::observability::log_message_level(
+                crate::observability::LogLevel::Warn,
+                "DASHBOARD",
+                &format!("update check failed: {e}"),
+            );
+            api_error(StatusCode::BAD_GATEWAY, "UPDATE_CHECK_FAILED", &e)
+        }
+    }
+}
+
+async fn update_apply_response() -> Response<ProxyBody> {
+    match crate::cli::update::apply_latest_update(crate::cli::update::RestartMode::Delayed(Duration::from_millis(500)))
+        .await
+    {
+        Ok(latest_version) => {
+            let body = serde_json::json!({
+                "ok": true,
+                "version": latest_version,
+                "message": format!("Upgraded to {latest_version}; restarting gateway"),
+            });
+            json_response(serde_json::to_vec(&body).unwrap_or_default())
+        }
+        Err(e) => {
+            crate::observability::log_message_level(
+                crate::observability::LogLevel::Error,
+                "DASHBOARD",
+                &format!("update apply failed: {e}"),
+            );
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "UPDATE_APPLY_FAILED", &e)
+        }
+    }
+}
+
 /// Requests the dashboard answers; everything else goes to the proxy. `POST /` stays a proxy call.
 pub fn owns(method: &Method, path: &str) -> bool {
     (path == "/" && method == Method::GET)
@@ -450,6 +493,17 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
         "/api/v1/strategy" => match control_gate(&req, &cfg, token) {
             Some(denied) => denied,
             None => set_strategy(req).await,
+        },
+        "/api/v1/update" if !is_get && !is_post => method_not_allowed("GET, POST"),
+        "/api/v1/update" if is_get => {
+            if let Some(denied) = read_gate(&req, token) {
+                return denied;
+            }
+            update_check_response(req.uri().query()).await
+        }
+        "/api/v1/update" => match control_gate(&req, &cfg, token) {
+            Some(denied) => denied,
+            None => update_apply_response().await,
         },
         "/api/v1/status" | "/api/v1/accounts" | "/api/v1/forecast" | "/api/v1/events" => {
             if let Some(denied) = read_gate(&req, token) {

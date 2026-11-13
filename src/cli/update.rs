@@ -49,14 +49,14 @@ fn dpkg_file_list() -> PathBuf {
     lock.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_DPKG_FILE_LIST))
 }
 
-fn current_go_os() -> &'static str {
+pub fn current_go_os() -> &'static str {
     match std::env::consts::OS {
         "macos" => "darwin",
         other => other,
     }
 }
 
-fn current_go_arch() -> &'static str {
+pub fn current_go_arch() -> &'static str {
     match std::env::consts::ARCH {
         "x86_64" => "amd64",
         "aarch64" => "arm64",
@@ -209,6 +209,183 @@ struct Release {
     assets: Vec<ReleaseAsset>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpdateCheckResult {
+    pub current_version: String,
+    pub latest_version: String,
+    pub has_update: bool,
+    pub release_url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartMode {
+    Immediate,
+    Delayed(std::time::Duration),
+    None,
+}
+
+static UPDATE_CACHE: Mutex<Option<(std::time::Instant, UpdateCheckResult)>> = Mutex::new(None);
+const UPDATE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+pub fn clear_update_cache() {
+    let mut lock = UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *lock = None;
+}
+
+pub async fn check_latest_update(force_refresh: bool) -> Result<UpdateCheckResult, String> {
+    if !force_refresh {
+        let lock = UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((ts, ref res)) = *lock
+            && ts.elapsed() < UPDATE_CACHE_TTL
+        {
+            return Ok(res.clone());
+        }
+    }
+
+    let token = github_token();
+    let api_url = releases_api();
+    let body = download(&api_url, &token)
+        .await
+        .map_err(|e| format!("Cannot query releases: {e}"))?;
+    let releases: Vec<Release> =
+        serde_json::from_slice(&body).map_err(|e| format!("Cannot parse releases response: {e}"))?;
+    if releases.is_empty() {
+        return Err("Cannot parse releases response: empty releases list".to_string());
+    }
+
+    let rel = &releases[0];
+    let latest = rel.tag_name.strip_prefix('v').unwrap_or(&rel.tag_name).to_string();
+    let current = crate::VERSION.to_string();
+    let has_update = latest != current;
+    let release_url = format!("https://github.com/vlxlv/agy-pool-rust/releases/tag/{}", rel.tag_name);
+
+    let res = UpdateCheckResult {
+        current_version: current,
+        latest_version: latest,
+        has_update,
+        release_url,
+    };
+
+    let mut lock = UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *lock = Some((std::time::Instant::now(), res.clone()));
+    Ok(res)
+}
+
+pub async fn apply_latest_update(restart: RestartMode) -> Result<String, String> {
+    let token = github_token();
+    let api_url = releases_api();
+    let body = download(&api_url, &token)
+        .await
+        .map_err(|e| format!("Cannot query releases: {e}"))?;
+    let releases: Vec<Release> =
+        serde_json::from_slice(&body).map_err(|e| format!("Cannot parse releases response: {e}"))?;
+    if releases.is_empty() {
+        return Err("Cannot parse releases response: empty releases list".to_string());
+    }
+
+    let rel = &releases[0];
+    let latest = rel.tag_name.strip_prefix('v').unwrap_or(&rel.tag_name);
+
+    if latest == crate::VERSION {
+        return Ok(crate::VERSION.to_string());
+    }
+
+    let exe = update_target_path();
+    let dpkg_path = dpkg_file_list();
+    if let Ok(list) = std::fs::read_to_string(&dpkg_path) {
+        let exe_str = exe.to_string_lossy();
+        if list.lines().any(|l| l == exe_str) {
+            return Err(format!(
+                "{} is installed by the agy-pool Debian package; install agy-pool_{}_{}.deb from release {} with `sudo apt install ./<file>.deb`",
+                exe.display(),
+                latest,
+                current_go_arch(),
+                rel.tag_name
+            ));
+        }
+    }
+
+    let bin_name = format!("agy-pool-{}-{}", current_go_os(), current_go_arch());
+    let mut assets = std::collections::HashMap::new();
+    for a in &rel.assets {
+        assets.insert(a.name.clone(), a.url.clone());
+    }
+
+    let bin_url = match assets.get(&bin_name) {
+        Some(u) => u.clone(),
+        None => {
+            return Err(format!(
+                "Release {} has no {} or SHA256SUMS asset",
+                rel.tag_name, bin_name
+            ));
+        }
+    };
+
+    let sums_url = match assets.get("SHA256SUMS") {
+        Some(u) => u.clone(),
+        None => {
+            return Err(format!(
+                "Release {} has no {} or SHA256SUMS asset",
+                rel.tag_name, bin_name
+            ));
+        }
+    };
+
+    let sums = download(&sums_url, &token)
+        .await
+        .map_err(|e| format!("Cannot download SHA256SUMS: {e}"))?;
+
+    let want = checksum_for(&sums, &bin_name);
+    if want.is_empty() {
+        return Err(format!("SHA256SUMS has no entry for {bin_name}"));
+    }
+
+    let bin = download(&bin_url, &token)
+        .await
+        .map_err(|e| format!("Cannot download {bin_name}: {e}"))?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&bin);
+    let got = hex::encode(hasher.finalize());
+    if got != want {
+        return Err(format!("Checksum mismatch for {bin_name}; binary not replaced"));
+    }
+
+    let was_running = crate::daemon::is_daemon_running(None, 0);
+    replace_file(&exe, &bin).map_err(|e| format!("Cannot replace {}: {e}", exe.display()))?;
+
+    clear_update_cache();
+
+    match restart {
+        RestartMode::Immediate if was_running => {
+            let mut cmd = std::process::Command::new(&exe);
+            cmd.arg("restart");
+            let status = cmd.status();
+            if status.is_err() || !status.as_ref().unwrap().success() {
+                let err_str = status
+                    .err()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "non-zero exit".to_string());
+                return Err(format!(
+                    "Updated, but gateway restart failed: {err_str} (run `agy-pool restart`)"
+                ));
+            }
+        }
+        RestartMode::Delayed(delay) if was_running => {
+            let exe_clone = exe.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let mut cmd = std::process::Command::new(&exe_clone);
+                cmd.arg("restart");
+                let _ = cmd.status();
+            });
+        }
+        _ => {}
+    }
+
+    Ok(latest.to_string())
+}
+
 pub async fn update_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
     let mut check_only = false;
     for arg in args {
@@ -225,195 +402,50 @@ pub async fn update_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
         }
     }
 
-    let token = github_token();
-    let api_url = releases_api();
-    let body = match download(&api_url, &token).await {
-        Ok(b) => b,
+    let check = match check_latest_update(true).await {
+        Ok(c) => c,
         Err(e) => {
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Cannot query releases: {}{}",
-                CLR_RED, e, CLR_RESET
-            );
+            let _ = writeln!(io.stderr, "{}[Error] {}{}", CLR_RED, e, CLR_RESET);
             return 1;
         }
     };
 
-    let releases: Vec<Release> = match serde_json::from_slice::<Vec<Release>>(&body) {
-        Ok(r) if !r.is_empty() => r,
-        Ok(_) => {
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Cannot parse releases response: empty releases list{}",
-                CLR_RED, CLR_RESET
-            );
-            return 1;
-        }
-        Err(e) => {
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Cannot parse releases response: {}{}",
-                CLR_RED, e, CLR_RESET
-            );
-            return 1;
-        }
-    };
-
-    let rel = &releases[0];
-    let latest = rel.tag_name.strip_prefix('v').unwrap_or(&rel.tag_name);
-
-    if latest == crate::VERSION {
+    if !check.has_update {
         let _ = writeln!(
             io.stdout,
             "{}✓ agy-pool {} is up to date{}",
-            CLR_GREEN,
-            crate::VERSION,
-            CLR_RESET
+            CLR_GREEN, check.current_version, CLR_RESET
         );
         return 0;
     }
 
-    let _ = writeln!(io.stdout, "Update available: {} → {}", crate::VERSION, latest);
+    let _ = writeln!(
+        io.stdout,
+        "Update available: {} → {}",
+        check.current_version, check.latest_version
+    );
     if check_only {
         return 0;
     }
 
     let exe = update_target_path();
-    let dpkg_path = dpkg_file_list();
-    if let Ok(list) = std::fs::read_to_string(&dpkg_path) {
-        let exe_str = exe.to_string_lossy();
-        if list.lines().any(|l| l == exe_str) {
+    match apply_latest_update(RestartMode::Immediate).await {
+        Ok(latest) => {
             let _ = writeln!(
-                io.stderr,
-                "{}[Error] {} is installed by the agy-pool Debian package; install agy-pool_{}_{}.deb from release {} with `sudo apt install ./<file>.deb`{}",
-                CLR_RED,
+                io.stdout,
+                "{}✓ Updated {} to {}{}",
+                CLR_GREEN,
                 exe.display(),
                 latest,
-                current_go_arch(),
-                rel.tag_name,
                 CLR_RESET
             );
-            return 1;
+            0
         }
-    }
-
-    let bin_name = format!("agy-pool-{}-{}", current_go_os(), current_go_arch());
-    let mut assets = std::collections::HashMap::new();
-    for a in &rel.assets {
-        assets.insert(a.name.clone(), a.url.clone());
-    }
-
-    let bin_url = match assets.get(&bin_name) {
-        Some(u) => u.clone(),
-        None => {
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Release {} has no {} or SHA256SUMS asset{}",
-                CLR_RED, rel.tag_name, bin_name, CLR_RESET
-            );
-            return 1;
-        }
-    };
-
-    let sums_url = match assets.get("SHA256SUMS") {
-        Some(u) => u.clone(),
-        None => {
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Release {} has no {} or SHA256SUMS asset{}",
-                CLR_RED, rel.tag_name, bin_name, CLR_RESET
-            );
-            return 1;
-        }
-    };
-
-    let sums = match download(&sums_url, &token).await {
-        Ok(s) => s,
         Err(e) => {
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Cannot download SHA256SUMS: {}{}",
-                CLR_RED, e, CLR_RESET
-            );
-            return 1;
-        }
-    };
-
-    let want = checksum_for(&sums, &bin_name);
-    if want.is_empty() {
-        let _ = writeln!(
-            io.stderr,
-            "{}[Error] SHA256SUMS has no entry for {}{}",
-            CLR_RED, bin_name, CLR_RESET
-        );
-        return 1;
-    }
-
-    let bin = match download(&bin_url, &token).await {
-        Ok(b) => b,
-        Err(e) => {
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Cannot download {}: {}{}",
-                CLR_RED, bin_name, e, CLR_RESET
-            );
-            return 1;
-        }
-    };
-
-    let mut hasher = Sha256::new();
-    hasher.update(&bin);
-    let got = hex::encode(hasher.finalize());
-    if got != want {
-        let _ = writeln!(
-            io.stderr,
-            "{}[Error] Checksum mismatch for {}; binary not replaced{}",
-            CLR_RED, bin_name, CLR_RESET
-        );
-        return 1;
-    }
-
-    let was_running = crate::daemon::is_daemon_running(None, 0);
-    if let Err(e) = replace_file(&exe, &bin) {
-        let _ = writeln!(
-            io.stderr,
-            "{}[Error] Cannot replace {}: {}{}",
-            CLR_RED,
-            exe.display(),
-            e,
-            CLR_RESET
-        );
-        return 1;
-    }
-
-    let _ = writeln!(
-        io.stdout,
-        "{}✓ Updated {} to {}{}",
-        CLR_GREEN,
-        exe.display(),
-        latest,
-        CLR_RESET
-    );
-
-    if was_running {
-        let mut cmd = std::process::Command::new(&exe);
-        cmd.arg("restart");
-        let status = cmd.status();
-        if status.is_err() || !status.as_ref().unwrap().success() {
-            let err_str = status
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "non-zero exit".to_string());
-            let _ = writeln!(
-                io.stderr,
-                "{}[Error] Updated, but gateway restart failed: {} (run `agy-pool restart`){}",
-                CLR_RED, err_str, CLR_RESET
-            );
-            return 1;
+            let _ = writeln!(io.stderr, "{}[Error] {}{}", CLR_RED, e, CLR_RESET);
+            1
         }
     }
-
-    0
 }
 
 #[cfg(test)]
