@@ -592,7 +592,7 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
         let h = Arc::clone(&handler);
         accept_tasks.spawn(async move {
             loop {
-                let (stream, _) = match listener.accept().await {
+                let (stream, peer) = match listener.accept().await {
                     Ok(res) => res,
                     Err(_) => break,
                 };
@@ -600,7 +600,8 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
                 let io = hyper_util::rt::TokioIo::new(stream);
                 let h = Arc::clone(&h);
                 tokio::spawn(async move {
-                    let service = hyper::service::service_fn(move |req| {
+                    let service = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
+                        req.extensions_mut().insert(crate::dashboard::PeerAddr(peer));
                         let h = Arc::clone(&h);
                         async move { Ok::<_, std::convert::Infallible>(h.serve(req).await) }
                     });

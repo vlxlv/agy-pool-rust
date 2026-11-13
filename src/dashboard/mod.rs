@@ -45,11 +45,11 @@ impl Body for SseBody {
     }
 }
 
-fn method_not_allowed() -> Response<ProxyBody> {
+fn method_not_allowed(allow: &'static str) -> Response<ProxyBody> {
     let mut resp = Response::new(full_body(Bytes::from_static(b"Method Not Allowed\n")));
     *resp.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
     resp.headers_mut()
-        .insert(hyper::header::ALLOW, hyper::header::HeaderValue::from_static("GET"));
+        .insert(hyper::header::ALLOW, hyper::header::HeaderValue::from_static(allow));
     resp.headers_mut().insert(
         hyper::header::CONTENT_TYPE,
         hyper::header::HeaderValue::from_static("text/plain; charset=utf-8"),
@@ -243,158 +243,164 @@ fn json_response(bytes: Vec<u8>) -> Response<ProxyBody> {
     resp
 }
 
-pub async fn try_handle_request(req: &Request<hyper::body::Incoming>) -> Option<Response<ProxyBody>> {
+fn api_error(status: StatusCode, code: &str, message: &str) -> Response<ProxyBody> {
+    let body = serde_json::json!({ "error": { "code": code, "message": message } });
+    let mut resp = json_response(serde_json::to_vec(&body).unwrap_or_default());
+    *resp.status_mut() = status;
+    resp
+}
+
+/// Requests the dashboard answers; everything else goes to the proxy. `POST /` stays a proxy call.
+pub fn owns(method: &Method, path: &str) -> bool {
+    (path == "/" && method == Method::GET)
+        || matches!(path, "/dashboard" | "/dashboard/")
+        || path.starts_with("/api/v1/")
+}
+
+pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
     let path = req.uri().path();
-    let is_root = path == "/";
-    let is_dashboard_path = matches!(path, "/dashboard" | "/dashboard/");
-    let is_status = matches!(path, "/api/v1/status" | "/api/v1/status/");
-    let is_accounts = matches!(path, "/api/v1/accounts" | "/api/v1/accounts/");
-    let is_forecast = matches!(path, "/api/v1/forecast" | "/api/v1/forecast/");
-    let is_events = matches!(path, "/api/v1/events" | "/api/v1/events/");
-
-    let is_dashboard_only = is_dashboard_path || is_status || is_accounts || is_forecast || is_events;
-    let is_dashboard = (is_root && req.method() == Method::GET) || is_dashboard_path;
-
-    if !is_dashboard && !is_dashboard_only {
-        return None;
+    // `/dashboard/` and `/api/v1/status/` keep working as in 0.3.x.
+    let route = match path.strip_suffix('/') {
+        Some(p) if !p.is_empty() => p,
+        _ => path,
+    }
+    .to_owned();
+    let is_html = matches!(route.as_str(), "/" | "/dashboard");
+    if !is_valid_host_and_origin(&req, is_html) {
+        return forbidden();
     }
 
-    if !is_valid_host_and_origin(req, is_dashboard) {
-        return Some(forbidden());
+    let is_get = req.method() == Method::GET;
+    match route.as_str() {
+        "/" | "/dashboard" if is_get => html_response(),
+        "/dashboard" | "/api/v1/status" | "/api/v1/accounts" | "/api/v1/forecast" | "/api/v1/events" if !is_get => {
+            method_not_allowed("GET")
+        }
+        "/api/v1/status" => status_response().await,
+        "/api/v1/accounts" => accounts_response(req.uri().query()).await,
+        "/api/v1/forecast" => forecast_response().await,
+        "/api/v1/events" => events_response(),
+        _ => api_error(StatusCode::NOT_FOUND, "NOT_FOUND", "unknown dashboard API path"),
     }
+}
 
-    if req.method() != Method::GET {
-        return Some(method_not_allowed());
-    }
+fn html_response() -> Response<ProxyBody> {
+    let mut resp = Response::new(full_body(Bytes::from_static(dashboard_html().as_bytes())));
+    resp.headers_mut().insert(
+        hyper::header::CONTENT_TYPE,
+        hyper::header::HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    resp
+}
 
-    if is_dashboard {
-        let mut resp = Response::new(full_body(Bytes::from_static(dashboard_html().as_bytes())));
-        *resp.status_mut() = StatusCode::OK;
-        resp.headers_mut().insert(
-            hyper::header::CONTENT_TYPE,
-            hyper::header::HeaderValue::from_static("text/html; charset=utf-8"),
-        );
-        return Some(resp);
-    }
+async fn status_response() -> Response<ProxyBody> {
+    let Ok(status) = tokio::task::spawn_blocking(dto::build_status_response).await else {
+        return internal_error();
+    };
+    json_response(serde_json::to_vec(&status).unwrap_or_default())
+}
 
-    if is_status {
-        let Ok(status) = tokio::task::spawn_blocking(dto::build_status_response).await else {
-            return Some(internal_error());
-        };
-        let bytes = serde_json::to_vec(&status).unwrap_or_default();
-        return Some(json_response(bytes));
-    }
+async fn accounts_response(query: Option<&str>) -> Response<ProxyBody> {
+    let request_show_email = query
+        .map(|q| url::form_urlencoded::parse(q.as_bytes()).any(|(k, v)| k == "show_email" && (v == "true" || v == "1")))
+        .unwrap_or(false);
+    let Ok(accounts) = tokio::task::spawn_blocking(move || {
+        let pool = crate::storage::load_pool().unwrap_or_default();
+        let now_ts = jiff::Timestamp::now().as_second() as f64;
+        dto::build_accounts_response(&pool, request_show_email, now_ts)
+    })
+    .await
+    else {
+        return internal_error();
+    };
+    json_response(serde_json::to_vec(&accounts).unwrap_or_default())
+}
 
-    if is_accounts {
-        let request_show_email = req
-            .uri()
-            .query()
-            .map(|q| {
-                url::form_urlencoded::parse(q.as_bytes()).any(|(k, v)| k == "show_email" && (v == "true" || v == "1"))
-            })
-            .unwrap_or(false);
-        let Ok(accounts) = tokio::task::spawn_blocking(move || {
-            let pool = crate::storage::load_pool().unwrap_or_default();
-            let now_ts = jiff::Timestamp::now().as_second() as f64;
-            dto::build_accounts_response(&pool, request_show_email, now_ts)
-        })
-        .await
-        else {
-            return Some(internal_error());
-        };
-        let bytes = serde_json::to_vec(&accounts).unwrap_or_default();
-        return Some(json_response(bytes));
-    }
+async fn forecast_response() -> Response<ProxyBody> {
+    let Ok(forecast) = tokio::task::spawn_blocking(|| {
+        let pool = crate::storage::load_pool().unwrap_or_default();
+        let now_ts = jiff::Timestamp::now().as_second() as f64;
+        dto::build_forecast_response(&pool, now_ts)
+    })
+    .await
+    else {
+        return internal_error();
+    };
+    json_response(serde_json::to_vec(&forecast).unwrap_or_default())
+}
 
-    if is_forecast {
-        let Ok(forecast) = tokio::task::spawn_blocking(|| {
-            let pool = crate::storage::load_pool().unwrap_or_default();
-            let now_ts = jiff::Timestamp::now().as_second() as f64;
-            dto::build_forecast_response(&pool, now_ts)
-        })
-        .await
-        else {
-            return Some(internal_error());
-        };
-        let bytes = serde_json::to_vec(&forecast).unwrap_or_default();
-        return Some(json_response(bytes));
-    }
+fn events_response() -> Response<ProxyBody> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+    let (recent, mut audit_rx) = telemetry::subscribe_with_replay(20);
 
-    if is_events {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(64);
-        let (recent, mut audit_rx) = telemetry::subscribe_with_replay(20);
-
-        tokio::spawn(async move {
-            let last_replayed_id = recent.iter().map(|e| e.id).max().unwrap_or(0);
-            for ev in recent {
-                if let Ok(data) = serde_json::to_string(&ev) {
-                    let msg = format!("id: {}\nevent: audit\ndata: {data}\n\n", ev.id);
-                    if tx.send(Bytes::from(msg)).await.is_err() {
-                        return;
-                    }
+    tokio::spawn(async move {
+        let last_replayed_id = recent.iter().map(|e| e.id).max().unwrap_or(0);
+        for ev in recent {
+            if let Ok(data) = serde_json::to_string(&ev) {
+                let msg = format!("id: {}\nevent: audit\ndata: {data}\n\n", ev.id);
+                if tx.send(Bytes::from(msg)).await.is_err() {
+                    return;
                 }
             }
+        }
 
-            let mut ticker = tokio::time::interval_at(
-                tokio::time::Instant::now() + Duration::from_secs(2),
-                Duration::from_secs(2),
-            );
+        let mut ticker = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            Duration::from_secs(2),
+        );
 
-            loop {
-                tokio::select! {
-                    _ = tx.closed() => {
-                        break;
-                    }
-                    recv_res = audit_rx.recv() => {
-                        match recv_res {
-                            Ok(ev) => {
-                                if ev.id <= last_replayed_id {
-                                    continue;
-                                }
-                                if let Ok(data) = serde_json::to_string(&ev) {
-                                    let msg = format!("id: {}\nevent: audit\ndata: {data}\n\n", ev.id);
-                                    if tx.send(Bytes::from(msg)).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+        loop {
+            tokio::select! {
+                _ = tx.closed() => {
+                    break;
+                }
+                recv_res = audit_rx.recv() => {
+                    match recv_res {
+                        Ok(ev) => {
+                            if ev.id <= last_replayed_id {
                                 continue;
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                break;
+                            if let Ok(data) = serde_json::to_string(&ev) {
+                                let msg = format!("id: {}\nevent: audit\ndata: {data}\n\n", ev.id);
+                                if tx.send(Bytes::from(msg)).await.is_err() {
+                                    break;
+                                }
                             }
                         }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
                     }
-                    _ = ticker.tick() => {
-                        let stats = dto::build_sse_stats_event();
-                        if let Ok(data) = serde_json::to_string(&stats) {
-                            let msg = format!("event: stats\ndata: {data}\n\n");
-                            if tx.send(Bytes::from(msg)).await.is_err() {
-                                break;
-                            }
+                }
+                _ = ticker.tick() => {
+                    let stats = dto::build_sse_stats_event();
+                    if let Ok(data) = serde_json::to_string(&stats) {
+                        let msg = format!("event: stats\ndata: {data}\n\n");
+                        if tx.send(Bytes::from(msg)).await.is_err() {
+                            break;
                         }
                     }
                 }
             }
-        });
+        }
+    });
 
-        let mut resp = Response::new(SseBody::new(rx).boxed());
-        *resp.status_mut() = StatusCode::OK;
-        resp.headers_mut().insert(
-            hyper::header::CONTENT_TYPE,
-            hyper::header::HeaderValue::from_static("text/event-stream; charset=utf-8"),
-        );
-        resp.headers_mut().insert(
-            hyper::header::CACHE_CONTROL,
-            hyper::header::HeaderValue::from_static("no-cache"),
-        );
-        resp.headers_mut().insert(
-            hyper::header::CONNECTION,
-            hyper::header::HeaderValue::from_static("keep-alive"),
-        );
-        return Some(resp);
-    }
-
-    None
+    let mut resp = Response::new(SseBody::new(rx).boxed());
+    *resp.status_mut() = StatusCode::OK;
+    resp.headers_mut().insert(
+        hyper::header::CONTENT_TYPE,
+        hyper::header::HeaderValue::from_static("text/event-stream; charset=utf-8"),
+    );
+    resp.headers_mut().insert(
+        hyper::header::CACHE_CONTROL,
+        hyper::header::HeaderValue::from_static("no-cache"),
+    );
+    resp.headers_mut().insert(
+        hyper::header::CONNECTION,
+        hyper::header::HeaderValue::from_static("keep-alive"),
+    );
+    resp
 }

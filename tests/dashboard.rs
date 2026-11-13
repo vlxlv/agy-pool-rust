@@ -75,10 +75,11 @@ async fn start_server() -> (
                     break;
                 }
                 accept_res = listener.accept() => {
-                    if let Ok((stream, _)) = accept_res {
+                    if let Ok((stream, peer)) = accept_res {
                         let io = hyper_util::rt::TokioIo::new(stream);
                         let h = handler.clone();
-                        let service = hyper::service::service_fn(move |req| {
+                        let service = hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
+                            req.extensions_mut().insert(agy_pool::dashboard::PeerAddr(peer));
                             let h = h.clone();
                             async move { Ok::<_, std::convert::Infallible>(h.serve(req).await) }
                         });
@@ -675,6 +676,45 @@ async fn test_host_validation_accepts_multi_listen_runtime_meta() {
     denied.insert(hyper::header::HOST, "evil.internal:8890".parse().unwrap());
     let (status, _, _) = send_request(addr, Method::GET, "/api/v1/status", denied, Bytes::new()).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_trailing_slash_and_unknown_api_paths() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    let mut pool = agy_pool::storage::load_pool().unwrap();
+    pool.show_email = Some(true);
+    agy_pool::storage::save_pool(&pool).unwrap();
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    // A trailing slash must not drop the query string.
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/accounts/?show_email=true",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["accounts"][0]["email"], "alice@example.com");
+
+    // Unknown /api/v1/* paths are answered locally (JSON 404), never proxied upstream.
+    for (method, path) in [
+        (Method::GET, "/api/v1/nope"),
+        (Method::POST, "/api/v1/accounts/acc_1/enable"),
+    ] {
+        let (status, headers, body) = send_request(addr, method, path, HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(headers.get(hyper::header::CONTENT_TYPE).unwrap(), "application/json");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "NOT_FOUND", "{path}");
+    }
 
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
