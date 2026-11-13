@@ -417,6 +417,22 @@
       transform: none;
     }
 
+    .upgrade-btn[hidden], .update-deb[hidden] {
+      display: none;
+    }
+
+    .update-deb code {
+      font-family: var(--font-mono);
+      user-select: all;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--surface-subtle);
+    }
+
+    .update-deb a {
+      color: var(--accent-text);
+    }
+
     .update-msg {
       font-size: 12px;
       color: var(--text-muted);
@@ -898,6 +914,8 @@
       <span class="update-badge">UPDATE</span>
       <span id="update-text">New version available: <strong id="update-target-version" class="num">...</strong></span>
       <button id="upgrade-btn" type="button" class="upgrade-btn">Upgrade Now</button>
+      <span id="update-deb" class="update-deb" hidden>Installed via Debian package (<a id="update-deb-link" target="_blank" rel="noopener noreferrer">release</a>). Upgrade with: <code id="update-deb-cmd"></code>
+        <button id="update-deb-copy" type="button" class="upgrade-btn">Copy</button></span>
       <span id="update-msg" class="update-msg" role="status"></span>
     </div>
     <button id="update-dismiss-btn" type="button" class="update-dismiss" aria-label="Dismiss banner" title="Dismiss">✕</button>
@@ -1216,6 +1234,8 @@
     const upgradeBtn = document.getElementById('upgrade-btn');
     const updateMsg = document.getElementById('update-msg');
     const updateDismissBtn = document.getElementById('update-dismiss-btn');
+    const updateDeb = document.getElementById('update-deb');
+    const updateDebCmd = document.getElementById('update-deb-cmd');
     const versionBtn = document.getElementById('version-btn');
     const versionBadge = document.getElementById('version-update-badge');
     const versionPill = document.getElementById('version-pill');
@@ -1272,6 +1292,17 @@
         }
       });
     }
+
+    document.getElementById('update-deb-copy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(updateDebCmd.textContent);
+        showToast('Command copied');
+      } catch (_) {
+        // navigator.clipboard needs HTTPS or localhost; over plain HTTP select the text instead.
+        window.getSelection().selectAllChildren(updateDebCmd);
+        showToast('Command selected; press Ctrl+C to copy');
+      }
+    });
 
     if (upgradeBtn) {
       upgradeBtn.addEventListener('click', async () => {
@@ -1612,6 +1643,16 @@
           const latestVer = data.latest_version.replace(/^v/, '');
           const curVer = (data.current_version || (versionPill ? versionPill.textContent : '')).replace(/^v/, '');
           updateTargetVersion.textContent = latestVer;
+          // A dpkg-owned binary cannot be replaced in place: show the apt command instead of the button.
+          const deb = data.package_managed ? data.deb_package_name : null;
+          upgradeBtn.hidden = !!data.package_managed;
+          updateDeb.hidden = !data.package_managed;
+          if (data.package_managed && /^https:\/\/github\.com\//.test(data.release_url || '')) {
+            document.getElementById('update-deb-link').href = data.release_url;
+          }
+          updateDebCmd.textContent = deb
+            ? `curl -fLO ${data.release_url.replace('/releases/tag/', '/releases/download/')}/${deb} && sudo apt install ./${deb}`
+            : 'sudo apt install ./<file>.deb';
           if (!updateDismissed) {
             updateBanner.hidden = false;
           }

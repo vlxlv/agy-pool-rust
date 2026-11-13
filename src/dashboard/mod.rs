@@ -450,11 +450,8 @@ async fn update_apply_response() -> Response<ProxyBody> {
                 "DASHBOARD",
                 &format!("update apply failed: {e}"),
             );
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "UPDATE_APPLY_FAILED",
-                "update failed; see the gateway log",
-            )
+            // The caller passed the control gate; the reason (dpkg-owned, checksum, permissions) is what they need.
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "UPDATE_APPLY_FAILED", &e)
         }
     }
 }
