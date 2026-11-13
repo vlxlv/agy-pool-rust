@@ -389,7 +389,19 @@ async fn set_strategy(req: Request<hyper::body::Incoming>) -> Response<ProxyBody
         Ok(Ok(())) => json_response(
             serde_json::to_vec(&serde_json::json!({ "ok": true, "strategy": strategy })).unwrap_or_default(),
         ),
-        Ok(Err(e)) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "STORAGE_ERROR", &e.to_string()),
+        Ok(Err(e)) => {
+            // Storage errors can carry file paths; keep them in the log, not the response.
+            crate::observability::log_message_level(
+                crate::observability::LogLevel::Error,
+                "DASHBOARD",
+                &format!("failed to save strategy: {e}"),
+            );
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "STORAGE_ERROR",
+                "failed to save strategy",
+            )
+        }
         Err(_) => internal_error(),
     }
 }
