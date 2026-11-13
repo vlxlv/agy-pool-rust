@@ -687,6 +687,31 @@ async fn test_embedded_spa_asset_constraints() {
         "missing window.location.host endpoint pill formatting"
     );
 
+    // Auth: the token stays per tab and goes out as a Bearer header; EventSource cannot send headers.
+    for needle in [
+        "agy_dashboard_token",
+        "Authorization",
+        "X-Agy-Pool-Control",
+        "/api/v1/auth/status",
+        "/api/v1/strategy",
+        "token-card",
+        "strategy-select",
+        "getReader()",
+    ] {
+        assert!(body_str.contains(needle), "missing {needle}");
+    }
+    assert!(
+        !body_str.contains("new EventSource("),
+        "EventSource cannot send the Bearer token"
+    );
+    for line in body_str.lines().filter(|l| l.contains("sessionStorage.")) {
+        assert!(
+            line.contains("try {"),
+            "unguarded sessionStorage access: {}",
+            line.trim()
+        );
+    }
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }

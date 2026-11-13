@@ -590,9 +590,52 @@
       align-items: center;
       margin-top: auto;
     }
+
+    .token-card {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+    }
+    .token-card[hidden] { display: none; }
+    .token-card form {
+      width: min(380px, 90vw);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--card-bg);
+      color: var(--text-main);
+    }
+    .token-card h2 { margin: 0; font-size: 16px; }
+    .token-card p { margin: 0; font-size: 12px; color: var(--text-muted); }
+    .token-card input, .token-card button, #strategy-select {
+      font: inherit;
+      color: var(--text-main);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .token-card button { cursor: pointer; border-color: var(--accent-border); }
+    .token-card .token-error { color: var(--red-text); min-height: 1em; }
   </style>
 </head>
 <body>
+  <div id="token-card" class="token-card" hidden>
+    <form id="token-form">
+      <h2>Dashboard token</h2>
+      <p>This gateway requires its dashboard token (<code>dashboard.auth_token</code> or <code>AGY_POOL_DASHBOARD_TOKEN</code>). It is kept only for this browser tab.</p>
+      <input id="token-input" type="password" autocomplete="current-password" aria-label="Dashboard token" required>
+      <button type="submit">Unlock</button>
+      <p id="token-error" class="token-error" role="alert"></p>
+    </form>
+  </div>
   <!-- Header Bar -->
   <header>
     <div class="brand-section">
@@ -605,6 +648,10 @@
       <div id="uptime-pill" class="pill">up —</div>
     </div>
     <div class="header-controls">
+      <select id="strategy-select" aria-label="Load balancing strategy" title="Load balancing strategy" hidden>
+        <option value="smart">smart</option>
+        <option value="max_quota">max_quota</option>
+      </select>
       <div id="sse-pill" class="pill">
         <span id="sse-dot" class="status-dot"></span>
         <span id="sse-status-text">Connecting...</span>
@@ -758,8 +805,42 @@
     let eventList = [];
     let accountsData = [];
     let statusData = null;
-    let sseSource = null;
+    let sseAbort = null;
     let reconnectTimer = null;
+
+    // Dashboard auth: the token is kept per tab (session storage) and sent as a Bearer header.
+    const TOKEN_KEY = 'agy_dashboard_token';
+    let authToken = '';
+    try { authToken = sessionStorage.getItem(TOKEN_KEY) || ''; } catch (_) {}
+    let authOk = false;
+    let started = false;
+
+    function saveToken(t) {
+      authToken = t;
+      try { if (t) { sessionStorage.setItem(TOKEN_KEY, t); } else { sessionStorage.removeItem(TOKEN_KEY); } } catch (_) {}
+    }
+
+    function showTokenCard(message) {
+      authOk = false;
+      saveToken('');
+      if (sseAbort) { sseAbort.abort(); sseAbort = null; }
+      document.getElementById('token-error').textContent = message || '';
+      document.getElementById('token-card').hidden = false;
+      document.getElementById('token-input').focus();
+    }
+
+    async function agyFetch(url, opts = {}) {
+      const headers = Object.assign({}, opts.headers);
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      if ((opts.method || 'GET').toUpperCase() !== 'GET') {
+        headers['X-Agy-Pool-Control'] = '1';
+        headers['Content-Type'] = 'application/json';
+      }
+      const res = await fetch(url, Object.assign({}, opts, { headers }));
+      if (res.status === 401) showTokenCard('Token rejected. Enter the dashboard token again.');
+      if (res.status === 429) showTokenCard('Too many wrong tokens. Wait a minute, then try again.');
+      return res;
+    }
 
     // DOM Elements
     const showEmailCheckbox = document.getElementById('show_email');
@@ -904,13 +985,14 @@
     // REST Fetches
     async function fetchStatus() {
       try {
-        const res = await fetch('/api/v1/status');
+        const res = await agyFetch('/api/v1/status');
         if (!res.ok) return;
         statusData = await res.json();
 
         // Update pills
         const endpointPill = document.getElementById('endpoint-pill');
         endpointPill.textContent = `${window.location.host || statusData.listen} · ${statusData.strategy}`;
+        if (!strategySelect.disabled) strategySelect.value = statusData.strategy;
         if (statusData.listen) {
           endpointPill.title = `Listening: ${statusData.listen}`;
         }
@@ -939,7 +1021,7 @@
     async function fetchAccounts() {
       try {
         const url = `/api/v1/accounts?show_email=${showEmail ? 'true' : 'false'}`;
-        const res = await fetch(url);
+        const res = await agyFetch(url);
         if (!res.ok) return;
         const data = await res.json();
         const fetchedAtMs = Date.now();
@@ -999,7 +1081,7 @@
 
     async function fetchForecast() {
       try {
-        const res = await fetch('/api/v1/forecast');
+        const res = await agyFetch('/api/v1/forecast');
         if (!res.ok) return;
         const data = await res.json();
 
@@ -1163,17 +1245,63 @@
     }
 
     // SSE Stream
-    function connectSSE() {
-      if (sseSource) {
-        try { sseSource.close(); } catch (_) {}
+    function handleAuditEvent(data) {
+      try {
+        const ev = JSON.parse(data);
+        const isDup = eventList.some(
+          (item) => (ev.id && item.id === ev.id && item.timestamp === ev.timestamp)
+            || (!ev.id && item.timestamp === ev.timestamp && item.account === ev.account && item.model === ev.model)
+        );
+        if (isDup) {
+          return;
+        }
+        eventList.unshift(ev);
+        if (eventList.length > 20) {
+          eventList.pop();
+        }
+        if (!streamPaused) {
+          renderStream();
+        }
+      } catch (err) {
+        console.error('Failed to parse SSE audit event:', err);
       }
+    }
 
+    function handleStatsEvent(data) {
+      try {
+        const stats = JSON.parse(data);
+        if (stats) {
+          document.getElementById('metric-inflight').textContent = stats.in_flight;
+          document.getElementById('metric-qps').textContent = (stats.qps || 0).toFixed(2);
+          document.getElementById('metric-rss').textContent = (stats.rss_mb || 0).toFixed(1);
+        }
+      } catch (err) {
+        console.error('Failed to parse SSE stats event:', err);
+      }
+    }
+
+    function scheduleReconnect() {
+      sseDot.className = 'status-dot red';
+      sseStatusText.textContent = 'Reconnecting...';
+      reconnectBanner.style.display = 'block';
+      if (!reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connectSSE();
+        }, 3000);
+      }
+    }
+
+    // EventSource cannot send an Authorization header, so the event stream is read through fetch.
+    async function connectSSE() {
+      if (sseAbort) sseAbort.abort();
+      const ctrl = new AbortController();
+      sseAbort = ctrl;
       sseDot.className = 'status-dot yellow';
       sseStatusText.textContent = 'Connecting...';
-
-      sseSource = new EventSource('/api/v1/events');
-
-      sseSource.onopen = () => {
+      try {
+        const res = await agyFetch('/api/v1/events', { signal: ctrl.signal });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
         sseDot.className = 'status-dot pulse';
         sseStatusText.textContent = 'Connected';
         reconnectBanner.style.display = 'none';
@@ -1185,65 +1313,93 @@
           eventList = [];
           renderStream();
         }
-      };
-
-      sseSource.addEventListener('audit', (e) => {
-        try {
-          const ev = JSON.parse(e.data);
-          const isDup = eventList.some(
-            (item) => (ev.id && item.id === ev.id && item.timestamp === ev.timestamp)
-              || (!ev.id && item.timestamp === ev.timestamp && item.account === ev.account && item.model === ev.model)
-          );
-          if (isDup) {
-            return;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const block = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            let event = 'message';
+            const data = [];
+            for (const line of block.split('\n')) {
+              if (line.startsWith('event:')) event = line.slice(6).trim();
+              else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+            }
+            if (event === 'audit') handleAuditEvent(data.join('\n'));
+            else if (event === 'stats') handleStatsEvent(data.join('\n'));
           }
-          eventList.unshift(ev);
-          if (eventList.length > 20) {
-            eventList.pop();
-          }
-          if (!streamPaused) {
-            renderStream();
-          }
-        } catch (err) {
-          console.error('Failed to parse SSE audit event:', err);
         }
-      });
-
-      sseSource.addEventListener('stats', (e) => {
-        try {
-          const stats = JSON.parse(e.data);
-          if (stats) {
-            document.getElementById('metric-inflight').textContent = stats.in_flight;
-            document.getElementById('metric-qps').textContent = (stats.qps || 0).toFixed(2);
-            document.getElementById('metric-rss').textContent = (stats.rss_mb || 0).toFixed(1);
-          }
-        } catch (err) {
-          console.error('Failed to parse SSE stats event:', err);
-        }
-      });
-
-      sseSource.onerror = () => {
-        try { sseSource.close(); } catch (_) {}
-        sseDot.className = 'status-dot red';
-        sseStatusText.textContent = 'Reconnecting...';
-        reconnectBanner.style.display = 'block';
-
-        if (!reconnectTimer) {
-          reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
-            connectSSE();
-          }, 3000);
-        }
-      };
+      } catch (err) {
+        if (!ctrl.signal.aborted) console.error('SSE stream error:', err);
+      }
+      // Stop when replaced, aborted, or waiting for a token; otherwise the stream dropped.
+      if (ctrl.signal.aborted || sseAbort !== ctrl || !authOk) return;
+      scheduleReconnect();
     }
 
     // Initialization
-    function init() {
+    const strategySelect = document.getElementById('strategy-select');
+    strategySelect.addEventListener('change', async () => {
+      const wanted = strategySelect.value;
+      strategySelect.disabled = true;
+      try {
+        const res = await agyFetch('/api/v1/strategy', { method: 'POST', body: JSON.stringify({ strategy: wanted }) });
+        if (!res.ok && res.status !== 401 && res.status !== 429) {
+          let msg = `HTTP ${res.status}`;
+          try { msg = (await res.json()).error.message || msg; } catch (_) {}
+          alert(`Could not change strategy: ${msg}`);
+        }
+      } catch (err) {
+        alert(`Could not change strategy: ${err}`);
+      } finally {
+        strategySelect.disabled = false;
+        fetchStatus();
+      }
+    });
+
+    document.getElementById('token-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveToken(document.getElementById('token-input').value.trim());
+      checkAuthAndStart();
+    });
+
+    async function checkAuthAndStart() {
+      let s;
+      try {
+        const res = await fetch('/api/v1/auth/status', { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} });
+        if (res.status === 429) { showTokenCard('Too many wrong tokens. Wait a minute, then try again.'); return; }
+        if (!res.ok) { showTokenCard(`Dashboard refused the request (HTTP ${res.status}).`); return; }
+        s = await res.json();
+      } catch (err) {
+        console.error('Auth check failed:', err);
+        setTimeout(checkAuthAndStart, 3000);
+        return;
+      }
+      if (!s.authenticated) {
+        showTokenCard(authToken ? 'Token rejected.' : '');
+        return;
+      }
+      document.getElementById('token-card').hidden = true;
+      document.getElementById('token-input').value = '';
+      authOk = true;
+      strategySelect.hidden = !s.control_enabled;
+      start();
+    }
+
+    function start() {
       Promise.all([fetchStatus(), fetchAccounts(), fetchForecast()]).catch(console.error);
       connectSSE();
+      if (started) return;
+      started = true;
 
       // Periodic 5s polling for background updates
       setInterval(() => {
+        if (!authOk) return;
         fetchStatus();
         fetchAccounts();
         fetchForecast();
@@ -1251,6 +1407,10 @@
 
       // 1s local tick for countdowns
       setInterval(updateLocalCountdowns, 1000);
+    }
+
+    function init() {
+      checkAuthAndStart();
     }
 
     init();
