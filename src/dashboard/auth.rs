@@ -49,9 +49,12 @@ fn parse_bearer(headers: &HeaderMap) -> Result<Option<&str>, ()> {
     Ok(Some(token))
 }
 
-/// IPv6 clients usually control a whole /64, so failures are counted per /64.
+/// Public IPv6 clients usually control a whole /64, so failures are counted per /64. Private ranges
+/// (Tailscale's fd7a:115c:a1e0::/48, LAN ULAs, link-local) share one /64 across many hosts, so one
+/// neighbour could lock everyone out; those are counted per address.
 fn client_key(ip: IpAddr) -> IpAddr {
     match ip.to_canonical() {
+        IpAddr::V6(v6) if v6.is_unique_local() || v6.is_unicast_link_local() => IpAddr::V6(v6),
         IpAddr::V6(v6) => {
             let s = v6.segments();
             IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
@@ -239,6 +242,14 @@ mod tests {
         }
         assert!(l.is_blocked(ip("2001:db8:1:2::ffff"), t0));
         assert!(!l.is_blocked(ip("2001:db8:1:3::1"), t0));
+
+        // Tailscale nodes share a /64; one node's failures must not block its neighbours.
+        let mut l = limiter(t0);
+        for _ in 0..PER_IP_FAILURE_LIMIT {
+            l.record_failure(ip("fd7a:115c:a1e0::1"), t0);
+        }
+        assert!(l.is_blocked(ip("fd7a:115c:a1e0::1"), t0));
+        assert!(!l.is_blocked(ip("fd7a:115c:a1e0::2"), t0));
 
         let mut l = limiter(t0);
         for _ in 0..PER_IP_FAILURE_LIMIT {
