@@ -517,6 +517,14 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
 
     super::pid::write_pid_file(&pid_file, pid_info)?;
 
+    crate::dashboard::control::set_config_context(Some(crate::dashboard::control::ConfigContext {
+        config_path: ctx_inst.config_path.clone(),
+        config_hash: ctx_inst.config_hash.clone(),
+        pid_file: Some(pid_file.clone()),
+        startup: crate::config::get_static_config(),
+        restart_required: Vec::new(),
+    }));
+
     let runtime_file = ctx_inst.runtime_file();
     let _ = super::runtime::write_runtime_stats(&runtime_file, &initial_stats);
 

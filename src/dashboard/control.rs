@@ -1,16 +1,16 @@
 //! Dashboard control and inspection handlers. Accounts are addressed by exact id only: the CLI resolver
 //! also matches list positions and name substrings, which would be racy and ambiguous over HTTP.
 
-use std::path::PathBuf;
-use std::sync::RwLock;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 
 use http_body_util::BodyExt;
 use hyper::{Request, Response, StatusCode};
 
 use super::{api_error, internal_error, json_response};
-use crate::config::StaticConfig;
+use crate::config::{ConfigError, StaticConfig};
 use crate::proxy::body::ProxyBody;
 use crate::storage::{Account, STATUS_DISABLED, STATUS_VALIDATION_REQUIRED};
 
@@ -455,4 +455,131 @@ pub async fn diagnostics_response() -> Response<ProxyBody> {
     checks.push(upstream);
     let healthy = checks.iter().all(|c| c.status != "error");
     json_response(serde_json::to_vec(&serde_json::json!({ "healthy": healthy, "checks": checks })).unwrap_or_default())
+}
+
+/// One reload at a time: two interleaved reloads could pin a stale config.
+static RELOAD_LOCK: Mutex<()> = Mutex::new(());
+
+enum ReloadError {
+    NoConfigFile(String),
+    Invalid(String),
+}
+
+fn changed_fields(fields: &[(&str, bool)]) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|(_, changed)| *changed)
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
+/// Fields the listeners and log writers took at startup; only a restart applies them.
+fn restart_required_fields(startup: &StaticConfig, new: &StaticConfig) -> Vec<String> {
+    changed_fields(&[
+        ("server.listen", startup.server.listen != new.server.listen),
+        ("server.port", startup.server.port != new.server.port),
+        (
+            "logging.backup_count",
+            startup.logging.backup_count != new.logging.backup_count,
+        ),
+        (
+            "logging.audit_max_size_bytes",
+            startup.logging.audit_max_size_bytes != new.logging.audit_max_size_bytes,
+        ),
+    ])
+}
+
+/// Fields read per request or per use, so `set_static_config` applies them at once.
+fn applied_fields(current: &StaticConfig, new: &StaticConfig) -> Vec<String> {
+    changed_fields(&[
+        ("model_mapping", current.model_mapping != new.model_mapping),
+        (
+            "server.keep_alive_secs",
+            current.server.keep_alive_secs != new.server.keep_alive_secs,
+        ),
+        ("native_agy.binary", current.native_agy.binary != new.native_agy.binary),
+        (
+            "logging.max_size_bytes",
+            current.logging.max_size_bytes != new.logging.max_size_bytes,
+        ),
+        (
+            "dashboard.auth_token",
+            current.dashboard.auth_token != new.dashboard.auth_token,
+        ),
+        (
+            "dashboard.allow_unauthenticated_control",
+            current.dashboard.allow_unauthenticated_control != new.dashboard.allow_unauthenticated_control,
+        ),
+    ])
+}
+
+fn update_pid_config_hash(pid_file: &Path, hash: Option<String>) -> Result<(), crate::daemon::DaemonError> {
+    let mut info = crate::daemon::read_pid_file(pid_file)?;
+    // Never rewrite a PID file another process has claimed since.
+    if info.pid != std::process::id() as i32 {
+        return Ok(());
+    }
+    info.config_hash = hash;
+    crate::daemon::write_pid_file(pid_file, info)
+}
+
+fn reload_blocking() -> Result<serde_json::Value, ReloadError> {
+    let _lock = RELOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = config_context();
+    let Some((ctx, path)) = ctx.and_then(|c| c.config_path.clone().map(|p| (c, p))) else {
+        return Err(ReloadError::NoConfigFile(
+            "the gateway was started without a config.json; restart it with one to enable reload".to_string(),
+        ));
+    };
+    // load_config_file parses and validates everything; on error nothing below runs.
+    let new_cfg = crate::config::load_config_file(&path).map_err(|e| match e {
+        ConfigError::Io(msg) => ReloadError::NoConfigFile(msg),
+        other => ReloadError::Invalid(other.to_string()),
+    })?;
+    let hash = crate::config::compute_config_file_hash(&path).ok();
+    let restart_required = restart_required_fields(&ctx.startup, &new_cfg);
+    let applied = applied_fields(&crate::config::get_static_config(), &new_cfg);
+
+    // Restart-only fields keep their startup values so /config shows what is actually running.
+    let mut active = new_cfg;
+    active.server.listen = ctx.startup.server.listen.clone();
+    active.server.port = ctx.startup.server.port;
+    active.logging.backup_count = ctx.startup.logging.backup_count;
+    active.logging.audit_max_size_bytes = ctx.startup.logging.audit_max_size_bytes;
+    crate::daemon::set_rotate_limits(active.logging.max_size_bytes, active.logging.backup_count as i32);
+    crate::config::set_static_config(active);
+
+    // The CLI compares this hash with config.json; only a fully applied file may clear its mismatch warning.
+    if restart_required.is_empty()
+        && let Some(pid_file) = &ctx.pid_file
+        && let Err(e) = update_pid_config_hash(pid_file, hash.clone())
+    {
+        log_error(format!("config reloaded but updating the PID file failed: {e}"));
+    }
+    crate::observability::log_message_level(
+        crate::observability::LogLevel::Info,
+        "DASHBOARD",
+        &format!("config reloaded; applied {applied:?}, restart required for {restart_required:?}"),
+    );
+    set_config_context(Some(ConfigContext {
+        config_hash: hash.clone(),
+        restart_required: restart_required.clone(),
+        ..ctx
+    }));
+    Ok(serde_json::json!({
+        "applied_fields": applied,
+        "restart_required_fields": restart_required,
+        "config_hash": hash,
+    }))
+}
+
+/// Handles `POST /api/v1/config/reload` after `control_gate` allowed it. Applies all or nothing.
+pub async fn reload_config() -> Response<ProxyBody> {
+    match tokio::task::spawn_blocking(reload_blocking).await {
+        Ok(Ok(body)) => ok(body),
+        Ok(Err(ReloadError::NoConfigFile(msg))) => api_error(StatusCode::BAD_REQUEST, "NO_CONFIG_FILE", &msg),
+        // The caller passed the control gate; the validation message is what they need to fix the file.
+        Ok(Err(ReloadError::Invalid(msg))) => api_error(StatusCode::BAD_REQUEST, "INVALID_CONFIG", &msg),
+        Err(_) => internal_error(),
+    }
 }

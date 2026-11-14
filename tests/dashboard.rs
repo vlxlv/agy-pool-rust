@@ -1119,6 +1119,10 @@ async fn get_json(addr: SocketAddr, path: &str, token: Option<&str>) -> (StatusC
     (status, serde_json::from_slice(&body).unwrap_or_default())
 }
 
+fn write_config(path: &std::path::Path, json: &serde_json::Value) {
+    std::fs::write(path, serde_json::to_vec(json).unwrap()).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_account_mutations() {
     let _guard = lock_test().await;
@@ -1821,6 +1825,184 @@ async fn test_diagnostics_endpoint() {
             .contains("dns lookup failed")
     );
     assert_eq!(json["healthy"], true, "warnings do not make the gateway unhealthy");
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_config_reload() {
+    use agy_pool::dashboard::control::{ConfigContext, set_config_context};
+
+    let _guard = lock_test().await;
+    let tmp = setup_test_env();
+    let config_path = tmp.path().join("config.json");
+    let pid_file = tmp.path().join("agy-pool.pid");
+    let base = serde_json::json!({
+        "version": 1,
+        "model_mapping": { "gemini-old": "gemini-a" },
+        "dashboard": { "auth_token": TEST_TOKEN },
+    });
+    write_config(&config_path, &base);
+    let startup = agy_pool::config::load_config_file(&config_path).unwrap();
+    agy_pool::config::set_static_config(startup.clone());
+    let startup_hash = agy_pool::config::compute_config_file_hash(&config_path).unwrap();
+    agy_pool::daemon::write_pid_file(
+        &pid_file,
+        agy_pool::daemon::DaemonInfo {
+            pid: std::process::id() as i32,
+            config_hash: Some(startup_hash.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let context = ConfigContext {
+        config_path: Some(config_path.clone()),
+        config_hash: Some(startup_hash),
+        pid_file: Some(pid_file.clone()),
+        startup,
+        restart_required: Vec::new(),
+    };
+    set_config_context(Some(context.clone()));
+    let pid_hash = || agy_pool::daemon::read_pid_file(&pid_file).unwrap().config_hash;
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    // Live fields apply at once, and the PID file learns the new hash.
+    let mut edited = base.clone();
+    edited["model_mapping"]["gemini-old"] = "gemini-b".into();
+    edited["server"] = serde_json::json!({ "keep_alive_secs": 7 });
+    edited["logging"] = serde_json::json!({ "max_size_bytes": 123456 });
+    write_config(&config_path, &edited);
+    let (status, body) = post_control(addr, "/api/v1/config/reload", "{}").await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert!(!String::from_utf8_lossy(&body).contains(TEST_TOKEN), "token leaked");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["applied_fields"],
+        serde_json::json!(["model_mapping", "server.keep_alive_secs", "logging.max_size_bytes"])
+    );
+    assert_eq!(json["restart_required_fields"], serde_json::json!([]));
+    let edited_hash = agy_pool::config::compute_config_file_hash(&config_path).unwrap();
+    assert_eq!(json["config_hash"], edited_hash.as_str());
+    assert_eq!(pid_hash().as_deref(), Some(edited_hash.as_str()));
+    let active = agy_pool::config::get_static_config();
+    assert_eq!(active.model_mapping["gemini-old"], "gemini-b");
+    assert_eq!(active.server.keep_alive_secs, 7);
+    assert_eq!(active.logging.max_size_bytes, 123456);
+
+    // The control header is still required.
+    let (status, _, _) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/config/reload",
+        hdrs(&[
+            ("content-type", "application/json"),
+            ("authorization", bearer(TEST_TOKEN).as_str()),
+        ]),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, _) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/config/reload",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+
+    // Broken JSON, invalid values and unknown keys change nothing.
+    for broken in [
+        "{",
+        r#"{"version": 1, "server": {"port": 0}}"#,
+        r#"{"version": 1, "surprise": true}"#,
+    ] {
+        std::fs::write(&config_path, broken).unwrap();
+        let (status, body) = post_control(addr, "/api/v1/config/reload", "{}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{broken}");
+        assert_eq!(error_code(&body), "INVALID_CONFIG");
+    }
+    assert_eq!(agy_pool::config::get_static_config(), active);
+    assert_eq!(pid_hash().as_deref(), Some(edited_hash.as_str()));
+
+    // Socket fields need a restart: they stay pinned, and the PID hash keeps flagging the difference.
+    let mut moved = edited.clone();
+    moved["server"]["port"] = 9999.into();
+    moved["model_mapping"]["gemini-old"] = "gemini-c".into();
+    write_config(&config_path, &moved);
+    let (status, body) = post_control(addr, "/api/v1/config/reload", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["applied_fields"], serde_json::json!(["model_mapping"]));
+    assert_eq!(json["restart_required_fields"], serde_json::json!(["server.port"]));
+    let active = agy_pool::config::get_static_config();
+    assert_eq!(active.server.port, 8899);
+    assert_eq!(active.model_mapping["gemini-old"], "gemini-c");
+    assert_eq!(pid_hash().as_deref(), Some(edited_hash.as_str()));
+    let (_, json) = get_json(addr, "/api/v1/config", Some(TEST_TOKEN)).await;
+    assert_eq!(json["restart_required_fields"], serde_json::json!(["server.port"]));
+    assert_eq!(json["config"]["server"]["port"], 8899);
+
+    // A new token applies at once; the old one stops working.
+    let new_token = "fedcba9876543210fedcba9876543210";
+    let mut rotated = edited.clone();
+    rotated["dashboard"]["auth_token"] = new_token.into();
+    write_config(&config_path, &rotated);
+    let (status, body) = post_control(addr, "/api/v1/config/reload", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!String::from_utf8_lossy(&body).contains(new_token), "token leaked");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["applied_fields"],
+        serde_json::json!(["model_mapping", "dashboard.auth_token"])
+    );
+    assert_eq!(json["restart_required_fields"], serde_json::json!([]));
+    let rotated_hash = agy_pool::config::compute_config_file_hash(&config_path).unwrap();
+    assert_eq!(pid_hash().as_deref(), Some(rotated_hash.as_str()));
+    let (status, _) = get_json(addr, "/api/v1/config", Some(TEST_TOKEN)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = get_json(addr, "/api/v1/config", Some(new_token)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // No file to reload: a deleted config.json, or a gateway started without one.
+    let new_headers = || {
+        hdrs(&[
+            ("x-agy-pool-control", "1"),
+            ("content-type", "application/json"),
+            ("authorization", bearer(new_token).as_str()),
+        ])
+    };
+    std::fs::remove_file(&config_path).unwrap();
+    let (status, _, body) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/config/reload",
+        new_headers(),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), "NO_CONFIG_FILE");
+    set_config_context(Some(ConfigContext {
+        config_path: None,
+        ..context
+    }));
+    let (status, _, body) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/config/reload",
+        new_headers(),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), "NO_CONFIG_FILE");
+    assert_eq!(
+        agy_pool::config::get_static_config().dashboard.auth_token.as_deref(),
+        Some(new_token)
+    );
 
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
