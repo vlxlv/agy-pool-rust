@@ -101,6 +101,7 @@ fn write_attempt_audit(
             ttfb_ms: ttfb.as_millis() as u64,
             total_ms: total.as_millis() as u64,
             tokens: tokens.prompt.max(0),
+            cached_tokens: tokens.cached.max(0),
             output_tokens: tokens.output.max(0),
             thinking_tokens: tokens.thinking.max(0),
             status: status_code,

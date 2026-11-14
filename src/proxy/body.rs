@@ -122,6 +122,7 @@ impl<B> StreamBody<B> {
                 ttfb_ms: self.params.ttfb.as_millis() as u64,
                 total_ms: total.as_millis() as u64,
                 tokens: self.usage.prompt.max(0),
+                cached_tokens: self.usage.cached.max(0),
                 output_tokens: self.usage.output.max(0),
                 thinking_tokens: self.usage.thinking.max(0),
                 status: self.params.status,

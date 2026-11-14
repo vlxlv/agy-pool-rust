@@ -35,6 +35,8 @@ pub struct DashboardAuditEvent {
     pub total_ms: u64,
     pub tokens: i64,
     #[serde(default)]
+    pub cached_tokens: i64,
+    #[serde(default)]
     pub output_tokens: i64,
     #[serde(default)]
     pub thinking_tokens: i64,
@@ -277,6 +279,7 @@ mod tests {
                     ttfb_ms: i as u64,
                     total_ms: (i * 10) as u64,
                     tokens: 100,
+                    cached_tokens: 0,
                     output_tokens: 0,
                     thinking_tokens: 0,
                     status: 200,
@@ -320,6 +323,7 @@ mod tests {
                     ttfb_ms: 0,
                     total_ms: 0,
                     tokens: 0,
+                    cached_tokens: 0,
                     output_tokens: 0,
                     thinking_tokens: 0,
                     status: 429,
@@ -350,6 +354,7 @@ mod tests {
                 ttfb_ms: 120,
                 total_ms: 480,
                 tokens: 55,
+                cached_tokens: 0,
                 output_tokens: 0,
                 thinking_tokens: 0,
                 status: 200,
@@ -382,6 +387,7 @@ mod tests {
                         ttfb_ms: i as u64,
                         total_ms: (i * 5) as u64,
                         tokens: 50,
+                        cached_tokens: 0,
                         output_tokens: 0,
                         thinking_tokens: 0,
                         status: 200,
@@ -405,6 +411,7 @@ mod tests {
                     ttfb_ms: 151,
                     total_ms: 755,
                     tokens: 50,
+                    cached_tokens: 0,
                     output_tokens: 0,
                     thinking_tokens: 0,
                     status: 200,
