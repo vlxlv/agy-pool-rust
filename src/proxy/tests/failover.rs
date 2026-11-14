@@ -1059,3 +1059,192 @@ async fn test_prompt_cloaking_applied_to_upstream_request() {
     );
     assert!(upstream_body_str.contains("B\u{200b}u\u{200b}ilt on A\u{200b}n\u{200b}thropic's C\u{200b}l\u{200b}aude A\u{200b}g\u{200b}ent S\u{200b}D\u{200b}K"));
 }
+
+// 18. Fake WAF 429 (no Retry-After, no quota reset markers) does not failover or cooldown
+#[tokio::test]
+async fn test_fake_waf_429_does_not_failover_or_cooldown() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    let _dir = setup_isolated_test_dir();
+
+    let acc1_hits = Arc::new(AtomicI32::new(0));
+    let acc2_hits = Arc::new(AtomicI32::new(0));
+    let h1 = acc1_hits.clone();
+    let h2 = acc2_hits.clone();
+
+    let server = TestServer::start(move |req| {
+        let auth = req.headers.get("authorization").map(|s| s.as_str()).unwrap_or("");
+        if auth.contains("acc_1") {
+            h1.fetch_add(1, Ordering::SeqCst);
+            // Bare WAF 429 honeypot: no Retry-After, no standard quota JSON details
+            (
+                429,
+                vec![("content-type".to_string(), "application/json".to_string())],
+                b"{\"error\": {\"code\": 429, \"message\": \"Too Many Requests\"}}".to_vec(),
+            )
+        } else if auth.contains("acc_2") {
+            h2.fetch_add(1, Ordering::SeqCst);
+            (
+                200,
+                vec![("content-type".to_string(), "application/json".to_string())],
+                b"{\"result\": \"success from acc_2\"}".to_vec(),
+            )
+        } else {
+            (500, vec![], b"unknown".to_vec())
+        }
+    });
+
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-{}", acc.id)));
+
+    let acc1 = Account {
+        id: "acc_1".to_string(),
+        email: "acc1@gmail.com".to_string(),
+        ..Default::default()
+    };
+    let acc2 = Account {
+        id: "acc_2".to_string(),
+        email: "acc2@gmail.com".to_string(),
+        ..Default::default()
+    };
+    let pool = Pool {
+        accounts: vec![acc1.clone(), acc2.clone()],
+        active_account_id: Some("acc_1".to_string()),
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let (status, resp_headers, body) = serve_once(
+        handler,
+        Method::POST,
+        "/v1/models/gemini-2.5-pro:generateContent",
+        headers,
+        Bytes::from_static(b"{\"contents\":[]}"),
+    )
+    .await;
+
+    // Upstream 429 should be returned directly to client
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(body.starts_with(b"{\"error\": {\"code\": 429"));
+    // Must NOT failover to acc_2
+    assert_eq!(acc1_hits.load(Ordering::SeqCst), 1);
+    assert_eq!(acc2_hits.load(Ordering::SeqCst), 0);
+
+    // acc_1 must NOT be in cooldown
+    let loaded_pool = crate::storage::load_pool().unwrap();
+    let loaded_acc1 = loaded_pool.accounts.iter().find(|a| a.id == "acc_1").unwrap();
+    assert!(loaded_acc1.rate_limited_until.is_none());
+    assert_eq!(resp_headers.get("x-agy-pool-account").unwrap(), "Account 1");
+}
+
+// 19. Request-scoped consecutive 429 circuit breaker protects remaining pool accounts
+#[tokio::test]
+async fn test_consecutive_429_circuit_breaker() {
+    let _lock = TEST_LOCK.lock().await;
+    reset_in_flight();
+    let _dir = setup_isolated_test_dir();
+
+    let acc1_hits = Arc::new(AtomicI32::new(0));
+    let acc2_hits = Arc::new(AtomicI32::new(0));
+    let acc3_hits = Arc::new(AtomicI32::new(0));
+    let h1 = acc1_hits.clone();
+    let h2 = acc2_hits.clone();
+    let h3 = acc3_hits.clone();
+
+    let server = TestServer::start(move |req| {
+        let auth = req.headers.get("authorization").map(|s| s.as_str()).unwrap_or("");
+        if auth.contains("acc_1") {
+            h1.fetch_add(1, Ordering::SeqCst);
+            (
+                429,
+                vec![
+                    ("retry-after".to_string(), "60".to_string()),
+                    ("content-type".to_string(), "application/json".to_string()),
+                ],
+                b"{\"error\": {\"code\": 429, \"message\": \"Rate limit exceeded\"}}".to_vec(),
+            )
+        } else if auth.contains("acc_2") {
+            h2.fetch_add(1, Ordering::SeqCst);
+            (
+                429,
+                vec![
+                    ("retry-after".to_string(), "60".to_string()),
+                    ("content-type".to_string(), "application/json".to_string()),
+                ],
+                b"{\"error\": {\"code\": 429, \"message\": \"Rate limit exceeded\"}}".to_vec(),
+            )
+        } else if auth.contains("acc_3") {
+            h3.fetch_add(1, Ordering::SeqCst);
+            (
+                200,
+                vec![("content-type".to_string(), "application/json".to_string())],
+                b"{\"result\": \"success from acc_3\"}".to_vec(),
+            )
+        } else {
+            (500, vec![], b"unknown".to_vec())
+        }
+    });
+
+    let _url_guard = crate::proxy::set_backend_url_for_test(&server.url());
+    let _tok_guard = crate::proxy::set_token_refresher_for_test(|acc| Ok(format!("token-{}", acc.id)));
+
+    let acc1 = Account {
+        id: "acc_1".to_string(),
+        email: "acc1@gmail.com".to_string(),
+        ..Default::default()
+    };
+    let acc2 = Account {
+        id: "acc_2".to_string(),
+        email: "acc2@gmail.com".to_string(),
+        ..Default::default()
+    };
+    let acc3 = Account {
+        id: "acc_3".to_string(),
+        email: "acc3@gmail.com".to_string(),
+        ..Default::default()
+    };
+    let pool = Pool {
+        accounts: vec![acc1.clone(), acc2.clone(), acc3.clone()],
+        active_account_id: Some("acc_1".to_string()),
+        strategy: "smart".to_string(),
+        ..Default::default()
+    };
+    crate::storage::save_pool(&pool).unwrap();
+
+    let handler = Arc::new(Handler::new());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        hyper::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let (status, resp_headers, _) = serve_once(
+        handler,
+        Method::POST,
+        "/v1/models/gemini-2.5-pro:generateContent",
+        headers,
+        Bytes::from_static(b"{\"contents\":[]}"),
+    )
+    .await;
+
+    // Must return 429 with circuit-breaker header
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        resp_headers.get("X-Agy-Pool-Circuit-Breaker").unwrap(),
+        "consecutive-429"
+    );
+
+    // acc_1 and acc_2 were attempted (1 initial + 1 failover)
+    assert_eq!(acc1_hits.load(Ordering::SeqCst), 1);
+    assert_eq!(acc2_hits.load(Ordering::SeqCst), 1);
+    // acc_3 was protected and never hit!
+    assert_eq!(acc3_hits.load(Ordering::SeqCst), 0);
+}

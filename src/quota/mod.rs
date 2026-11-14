@@ -583,26 +583,42 @@ pub fn is_model_capacity_error(status: u16, body: &[u8]) -> bool {
     lower.contains("model_capacity_exhausted") || lower.contains("model capacity exhausted")
 }
 
-/// IsQuotaError reports whether an HTTP response status and body indicate quota exhaustion or rate limits.
-pub fn is_quota_error(status: u16, body: &[u8]) -> bool {
+/// IsQuotaError reports whether an HTTP response status, headers, and body indicate genuine
+/// quota exhaustion or rate limits, while rejecting bare WAF 429 honeypots.
+pub fn is_quota_error(status: u16, headers: Option<&hyper::HeaderMap>, body: &[u8]) -> bool {
     if is_model_capacity_error(status, body) {
         return false;
     }
-    if status == 429 {
-        return true;
-    }
-    if status != 403 {
+    if status != 429 && status != 403 {
         return false;
+    }
+    // Genuine HTTP rate limiting typically provides a Retry-After header.
+    if let Some(hdrs) = headers
+        && (hdrs.contains_key(hyper::header::RETRY_AFTER) || hdrs.contains_key("retry-after"))
+    {
+        return true;
     }
     let lower = String::from_utf8_lossy(body).to_lowercase();
     let markers = [
         "resource_exhausted",
+        "resourceexhausted",
+        "resource exhausted",
+        "resource has been exhausted",
         "quota_exceeded",
-        "rate_limit_exceeded",
         "quota exceeded",
         "quota exhausted",
+        "rate_limit_exceeded",
+        "rate limit",
+        "rate_limit",
         "exceeded your current quota",
         "insufficient quota",
+        "quotafailure",
+        "quota failure",
+        "quota_failure",
+        "quotaresettimestamp",
+        "quota_reset_time_stamp",
+        "retrydelay",
+        "retry_delay",
     ];
     for m in markers {
         if lower.contains(m) {
@@ -751,11 +767,23 @@ mod tests {
         assert!(!is_model_capacity_error(403, capacity_body));
 
         // When capacity is exhausted, is_quota_error must return false to avoid locking account
-        assert!(!is_quota_error(429, capacity_body));
-        // Normal 429 or 403 quota exhaustion
-        assert!(is_quota_error(429, br#"{"error": "rate_limit_exceeded"}"#));
-        assert!(is_quota_error(403, br#"{"error": "quota_exceeded"}"#));
-        assert!(!is_quota_error(500, br#"internal server error"#));
+        assert!(!is_quota_error(429, None, capacity_body));
+        // Normal 429 or 403 quota exhaustion with markers
+        assert!(is_quota_error(429, None, br#"{"error": "rate_limit_exceeded"}"#));
+        assert!(is_quota_error(403, None, br#"{"error": "quota_exceeded"}"#));
+        assert!(is_quota_error(429, None, br#"{"error": "resource has been exhausted"}"#));
+        assert!(!is_quota_error(500, None, br#"internal server error"#));
+
+        // Fake WAF 429 without Retry-After and without quota markers must be rejected
+        let fake_waf_429 = br#"{"error": {"code": 429, "message": "Too Many Requests"}}"#;
+        assert!(!is_quota_error(429, None, fake_waf_429));
+        assert!(!is_quota_error(429, None, b"Too Many Requests"));
+        assert!(!is_quota_error(429, None, b"<html><body>Error 429</body></html>"));
+
+        // 429 with Retry-After header is recognized as genuine rate limit
+        let mut hdrs = hyper::HeaderMap::new();
+        hdrs.insert("retry-after", hyper::header::HeaderValue::from_static("60"));
+        assert!(is_quota_error(429, Some(&hdrs), fake_waf_429));
     }
 
     #[derive(serde::Deserialize)]

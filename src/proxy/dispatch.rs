@@ -479,7 +479,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         }
 
         // Failover on 429 or 403 quota exhaustion
-        if crate::quota::is_quota_error(status_code, &err_body) {
+        if crate::quota::is_quota_error(status_code, Some(&parts.headers), &err_body) {
             let (delay, persist_err) = match record_quota_error(params.acc, Some(&parts.headers), Some(&err_body)) {
                 Ok(d) => (d, None),
                 Err(e) => (300, Some(e)),
@@ -607,6 +607,14 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         }
 
         // Ordinary upstream error (400, 404, 500, etc.): Forward directly, DO NOT REPLAY!
+        if status_code == 429 {
+            log_message(
+                "PROXY WARN",
+                &format!(
+                    "Upstream 429 received on {disp_name} without valid quota reset or Retry-After metadata (likely WAF honeypot / edge block). Returning directly to client without failover to protect pool."
+                ),
+            );
+        }
         record_attempt_audit(
             &params,
             &disp_name,

@@ -2,12 +2,14 @@ use bytes::Bytes;
 
 /// List of sensitive agent lines that trigger Google Antigravity server-side 429 filters.
 pub const TURNED_AWAY: &[&str] = &[
-    "x-anthropic-billing-header:",
+    "x-anthropic-billing-header",
     "built on anthropic's claude agent sdk",
+    "anthropic's claude agent sdk",
+    "claude agent sdk",
     "you are codex, an agent based on gpt-5",
     "you are codex, a coding agent based on gpt-5",
     "hermes agent, an intelligent ai assistant created by nous research",
-    "rfc 2119 keywords: must, required, should, recommended, may, optional.",
+    "rfc 2119",
 ];
 
 const ZW: &str = "\u{200b}";
@@ -121,6 +123,7 @@ mod tests {
         assert!(turns_away(
             "RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL."
         ));
+        assert!(turns_away("Instructions conforming to RFC 2119: MUST DO THIS."));
         assert!(!turns_away("Hello world, this is normal prompt."));
     }
 

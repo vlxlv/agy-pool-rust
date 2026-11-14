@@ -1203,6 +1203,7 @@ impl Handler {
 
         let mut attempt = 0;
         let mut has_failed_over = false;
+        let mut consecutive_quota_failovers = 0;
         let mut last_error: Option<String> = None;
 
         for acc in &candidates {
@@ -1312,7 +1313,7 @@ impl Handler {
                     }
                     return resp;
                 }
-                Attempt::Failover { reason: _, err } => {
+                Attempt::Failover { reason, err } => {
                     if let Some(e) = err {
                         last_error = Some(e);
                     }
@@ -1321,23 +1322,48 @@ impl Handler {
                     {
                         affinity_manager().delete(&session_key);
                     }
+                    if reason.contains("QuotaExhausted") {
+                        consecutive_quota_failovers += 1;
+                        if consecutive_quota_failovers >= 2 {
+                            log_message(
+                                "CIRCUIT BREAKER",
+                                &format!(
+                                    "Consecutive 429 quota failovers ({consecutive_quota_failovers}) reached for request {request_id}. Halting failover to protect remaining pool accounts."
+                                ),
+                            );
+                            break;
+                        }
+                    } else {
+                        consecutive_quota_failovers = 0;
+                    }
                     continue;
                 }
             }
         }
 
-        // All accounts exhausted
-        let err_msg = if let Some(err) = last_error {
-            err
+        // All accounts exhausted or circuit breaker tripped
+        let (status, err_msg) = if consecutive_quota_failovers >= 2 {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("Circuit breaker tripped: consecutive 429 quota exhaustion detected across {consecutive_quota_failovers} accounts for request {request_id}. Halting failover to protect remaining pool accounts."),
+            )
+        } else if let Some(err) = last_error {
+            (StatusCode::SERVICE_UNAVAILABLE, err)
         } else if model_excluded > 0 {
-            format!("{model_excluded} account(s) paused for {model} after 503/capacity errors")
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("{model_excluded} account(s) paused for {model} after 503/capacity errors"),
+            )
         } else {
-            "all candidate accounts restricted or exhausted".to_string()
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "all candidate accounts restricted or exhausted".to_string(),
+            )
         };
         log_message(
             "ALL EXHAUSTED",
             &format!(
-                "{} {} failed across all accounts: {err_msg}",
+                "{} {} failed across candidate accounts: {err_msg}",
                 parts.method,
                 filepath_base(&path)
             ),
@@ -1347,8 +1373,11 @@ impl Handler {
         if let Ok(v) = HeaderValue::from_str(strategy) {
             out_headers.insert("X-Agy-Pool-Strategy", v);
         }
+        if consecutive_quota_failovers >= 2 {
+            out_headers.insert("X-Agy-Pool-Circuit-Breaker", HeaderValue::from_static("consecutive-429"));
+        }
         send_buffered(
-            StatusCode::SERVICE_UNAVAILABLE,
+            status,
             &out_headers,
             Bytes::from(format!("All accounts in pool exhausted or unavailable: {err_msg}\n")),
         )
