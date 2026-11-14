@@ -2,7 +2,8 @@ use crate::cli::Io;
 use crate::cli::{CLR_GREEN, CLR_RED, CLR_RESET};
 use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
-use std::os::unix::process::ExitStatusExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -445,14 +446,45 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
             tokio::spawn(async move {
                 let _guard = guard;
                 tokio::time::sleep(delay).await;
-                let status = tokio::task::spawn_blocking(move || restart_command(&exe_clone).status()).await;
-                // Under systemd the restart runs in the unit's cgroup, so stopping the unit SIGTERMs it too.
-                if !matches!(status, Ok(Ok(ref s)) if s.success() || s.signal() == Some(libc::SIGTERM)) {
-                    crate::observability::log_message_level(
-                        crate::observability::LogLevel::Error,
-                        "UPDATE",
-                        &format!("binary updated but gateway restart failed ({status:?}); run `agy-pool restart`"),
-                    );
+                let mut cmd = restart_command(&exe_clone);
+                cmd.stdin(std::process::Stdio::null());
+                if let Ok(log_fd) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(crate::config::log_file())
+                {
+                    if let Ok(log_err) = log_fd.try_clone() {
+                        cmd.stdout(log_fd);
+                        cmd.stderr(log_err);
+                    } else {
+                        cmd.stdout(std::process::Stdio::null());
+                        cmd.stderr(std::process::Stdio::null());
+                    }
+                } else {
+                    cmd.stdout(std::process::Stdio::null());
+                    cmd.stderr(std::process::Stdio::null());
+                }
+                #[cfg(unix)]
+                {
+                    cmd.process_group(0);
+                }
+                match cmd.spawn() {
+                    Ok(_) => {
+                        crate::observability::log_message_level(
+                            crate::observability::LogLevel::Info,
+                            "UPDATE",
+                            "Spawned detached `agy-pool restart`; daemon will now yield to new instance",
+                        );
+                    }
+                    Err(e) => {
+                        crate::observability::log_message_level(
+                            crate::observability::LogLevel::Error,
+                            "UPDATE",
+                            &format!(
+                                "binary updated but gateway restart failed to spawn ({e}); run `agy-pool restart`"
+                            ),
+                        );
+                    }
                 }
             });
         }
