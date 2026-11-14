@@ -818,6 +818,36 @@
       max-width: min(480px, 90vw);
     }
     #verify-dialog a { color: var(--accent-text); word-break: break-all; }
+    #config-dialog {
+      position: fixed;
+      inset: 0 0 0 auto;
+      z-index: 50;
+      margin: 0;
+      width: min(560px, 100vw);
+      height: 100vh;
+      max-height: 100vh;
+      box-sizing: border-box;
+      overflow: auto;
+      padding: 16px;
+      border: 0;
+      border-left: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--text-main);
+    }
+    #config-dialog h2 { font-size: 15px; margin: 0 0 10px; }
+    #config-view {
+      font: 11px/1.4 var(--font-mono);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      overflow: auto;
+    }
+    .diag-list { list-style: none; margin: 0 0 10px; padding: 0; font-size: 13px; }
+    .diag-list li { padding: 2px 0; }
+    .diag-ok { color: var(--green-text); }
+    .diag-warn { color: var(--amber-text); }
+    .diag-error { color: var(--red-text); }
     button.btn.active {
       color: var(--accent-text);
       border-color: var(--accent-border);
@@ -873,6 +903,17 @@
     <p><a id="verify-link" href="#" target="_blank" rel="noopener noreferrer"></a></p>
     <form method="dialog"><button class="row-btn" type="submit">Close</button></form>
   </dialog>
+  <dialog id="config-dialog" aria-labelledby="config-title">
+    <h2 id="config-title">Config &amp; health</h2>
+    <ul id="diag-list" class="diag-list"></ul>
+    <p id="config-restart" class="diag-warn" hidden></p>
+    <div class="row-actions">
+      <button id="reload-config-btn" class="row-btn" type="button" title="Re-read config.json and apply what can change without a restart">Reload config.json</button>
+      <button id="diag-rerun-btn" class="row-btn" type="button">Run checks again</button>
+      <form method="dialog"><button class="row-btn" type="submit">Close</button></form>
+    </div>
+    <pre id="config-view"></pre>
+  </dialog>
   <!-- Header Bar -->
   <header>
     <div class="brand-section">
@@ -888,6 +929,7 @@
       <div id="uptime-pill" class="pill">up —</div>
     </div>
     <div class="header-controls">
+      <button id="config-btn" type="button" class="row-btn" hidden>Config &amp; health</button>
       <select id="strategy-select" aria-label="Load balancing strategy" title="Load balancing strategy" hidden>
         <option value="smart">smart</option>
         <option value="max_quota">max_quota</option>
@@ -2006,6 +2048,7 @@
       controlEnabled = Boolean(s.control_enabled);
       strategySelect.hidden = !controlEnabled;
       document.getElementById('refresh-all-btn').hidden = !controlEnabled;
+      document.getElementById('config-btn').hidden = !controlEnabled;
       document.getElementById('actions-col').hidden = !controlEnabled;
       if (upgradeBtn) {
         upgradeBtn.hidden = !controlEnabled;
@@ -2096,6 +2139,52 @@
       btn.disabled = false;
       if (data) showToast(`Refreshed ${data.refreshed}, failed ${data.failed}.`, data.failed > 0);
       fetchAccounts();
+    });
+
+    const DIAG_ICONS = { ok: '✓', warn: '⚠', error: '✖' };
+    const configView = document.getElementById('config-view');
+
+    function renderConfig(data) {
+      configView.textContent = JSON.stringify(Object.assign({ config_path: data.config_path }, data.config), null, 2);
+      const restart = data.restart_required_fields || [];
+      const note = document.getElementById('config-restart');
+      note.hidden = restart.length === 0;
+      note.textContent = `Restart the gateway to apply: ${restart.join(', ')}`;
+    }
+
+    async function loadConfigPanel() {
+      const list = document.getElementById('diag-list');
+      list.innerHTML = '<li>Running checks…</li>';
+      try {
+        const [cfgRes, diagRes] = await Promise.all([agyFetch('/api/v1/config'), agyFetch('/api/v1/diagnostics')]);
+        if (cfgRes.ok) renderConfig(await cfgRes.json());
+        if (!diagRes.ok) throw new Error(`HTTP ${diagRes.status}`);
+        const d = await diagRes.json();
+        list.innerHTML = d.checks.map(c => `<li class="diag-${escapeHtml(c.status)}">${DIAG_ICONS[c.status] || '?'} <strong>${escapeHtml(c.name)}</strong>: ${escapeHtml(c.detail)}</li>`).join('');
+      } catch (err) {
+        list.innerHTML = `<li class="diag-error">Checks failed: ${escapeHtml(String(err))}</li>`;
+      }
+    }
+
+    document.getElementById('config-btn').addEventListener('click', () => {
+      const dlg = document.getElementById('config-dialog');
+      if (!dlg.open) dlg.show();
+      loadConfigPanel();
+    });
+    document.getElementById('diag-rerun-btn').addEventListener('click', loadConfigPanel);
+    document.getElementById('reload-config-btn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const data = await control('/api/v1/config/reload', {});
+      btn.disabled = false;
+      if (!data) return;
+      const applied = data.applied_fields.length ? data.applied_fields.join(', ') : 'nothing changed';
+      const restart = data.restart_required_fields;
+      showToast(restart.length
+        ? `Applied: ${applied}. Restart needed for: ${restart.join(', ')}`
+        : `Config reloaded (${applied}).`, restart.length > 0);
+      loadConfigPanel();
+      fetchStatus();
     });
 
     function init() {
