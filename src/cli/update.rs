@@ -2,7 +2,6 @@ use crate::cli::Io;
 use crate::cli::{CLR_GREEN, CLR_RED, CLR_RESET};
 use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
-#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -254,6 +253,7 @@ const UPDATE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300
 static LAST_RELEASE_QUERY: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 const MIN_RELEASE_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 static APPLY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+const RESTART_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub fn clear_update_cache() {
     clear_release_cache();
@@ -440,34 +440,14 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
             }
         }
         RestartMode::Delayed(delay) if was_running => {
-            // The task owns the guard: a second click cannot download again and queue a second restart, and
-            // a failed restart releases it so the operator can retry.
+            // Detached and never awaited: the restart stops this gateway, and runtime shutdown waits for blocking
+            // tasks, so waiting on it would deadlock. It inherits stdout/stderr, which already go to this
+            // gateway's log (daemon log file, systemd StandardOutput, or the terminal).
             let exe_clone = exe.clone();
             tokio::spawn(async move {
-                let _guard = guard;
                 tokio::time::sleep(delay).await;
                 let mut cmd = restart_command(&exe_clone);
-                cmd.stdin(std::process::Stdio::null());
-                if let Ok(log_fd) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(crate::config::log_file())
-                {
-                    if let Ok(log_err) = log_fd.try_clone() {
-                        cmd.stdout(log_fd);
-                        cmd.stderr(log_err);
-                    } else {
-                        cmd.stdout(std::process::Stdio::null());
-                        cmd.stderr(std::process::Stdio::null());
-                    }
-                } else {
-                    cmd.stdout(std::process::Stdio::null());
-                    cmd.stderr(std::process::Stdio::null());
-                }
-                #[cfg(unix)]
-                {
-                    cmd.process_group(0);
-                }
+                cmd.stdin(std::process::Stdio::null()).process_group(0);
                 match cmd.spawn() {
                     Ok(_) => {
                         crate::observability::log_message_level(
@@ -475,6 +455,10 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
                             "UPDATE",
                             "Spawned detached `agy-pool restart`; daemon will now yield to new instance",
                         );
+                        // Block a second click while the restart runs (it takes ~11s at most). If this process
+                        // is still alive afterwards the restart failed, and dropping the guard lets the operator retry.
+                        // An async sleep is safe here: runtime shutdown drops it instead of waiting.
+                        tokio::time::sleep(RESTART_GRACE).await;
                     }
                     Err(e) => {
                         crate::observability::log_message_level(
@@ -486,6 +470,7 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
                         );
                     }
                 }
+                drop(guard);
             });
         }
         _ => {}
