@@ -2,6 +2,7 @@ use crate::cli::Io;
 use crate::cli::{CLR_GREEN, CLR_RED, CLR_RESET};
 use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -254,9 +255,23 @@ const MIN_RELEASE_QUERY_INTERVAL: std::time::Duration = std::time::Duration::fro
 static APPLY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 pub fn clear_update_cache() {
+    clear_release_cache();
+    APPLY_IN_FLIGHT.store(false, Ordering::Release);
+}
+
+fn clear_release_cache() {
     *UPDATE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *LAST_RELEASE_QUERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    APPLY_IN_FLIGHT.store(false, Ordering::Release);
+}
+
+/// `agy-pool restart` as an operator would type it. The gateway's daemon-child variables must not leak in:
+/// AGY_POOL_DAEMON_CHILD would make it a second gateway, and the port variable would pin the old port.
+fn restart_command(exe: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("restart")
+        .env_remove(crate::daemon::ENV_DAEMON_CHILD)
+        .env_remove(crate::daemon::ENV_DAEMON_PORT);
+    cmd
 }
 
 /// Reports whether release version `latest` is newer than `current` ("X.Y.Z", pre-release suffixes ignored).
@@ -407,14 +422,12 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
     let was_running = crate::daemon::is_daemon_running(None, 0);
     replace_file(&exe, &bin).map_err(|e| format!("Cannot replace {}: {e}", exe.display()))?;
 
-    clear_update_cache();
+    // Not clear_update_cache: APPLY_IN_FLIGHT must stay set until the restart below is done.
+    clear_release_cache();
 
     match restart {
         RestartMode::Immediate if was_running => {
-            let mut cmd = std::process::Command::new(&exe);
-            cmd.arg("restart");
-            cmd.env_remove(crate::daemon::ENV_DAEMON_CHILD);
-            let status = cmd.status();
+            let status = restart_command(&exe).status();
             if status.is_err() || !status.as_ref().unwrap().success() {
                 let err_str = status
                     .err()
@@ -426,20 +439,15 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
             }
         }
         RestartMode::Delayed(delay) if was_running => {
-            // Keep APPLY_IN_FLIGHT set until the restart replaces this process, so a second click cannot
-            // download again and queue a second restart.
-            std::mem::forget(guard);
+            // The task owns the guard: a second click cannot download again and queue a second restart, and
+            // a failed restart releases it so the operator can retry.
             let exe_clone = exe.clone();
             tokio::spawn(async move {
+                let _guard = guard;
                 tokio::time::sleep(delay).await;
-                let status = tokio::task::spawn_blocking(move || {
-                    let mut cmd = std::process::Command::new(&exe_clone);
-                    cmd.arg("restart");
-                    cmd.env_remove(crate::daemon::ENV_DAEMON_CHILD);
-                    cmd.status()
-                })
-                .await;
-                if !matches!(status, Ok(Ok(ref s)) if s.success()) {
+                let status = tokio::task::spawn_blocking(move || restart_command(&exe_clone).status()).await;
+                // Under systemd the restart runs in the unit's cgroup, so stopping the unit SIGTERMs it too.
+                if !matches!(status, Ok(Ok(ref s)) if s.success() || s.signal() == Some(libc::SIGTERM)) {
                     crate::observability::log_message_level(
                         crate::observability::LogLevel::Error,
                         "UPDATE",
@@ -535,6 +543,15 @@ pub async fn update_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_command_drops_daemon_child_env() {
+        let cmd = restart_command(Path::new("/bin/agy-pool"));
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["restart"]);
+        let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k).collect();
+        assert!(removed.contains(&std::ffi::OsStr::new(crate::daemon::ENV_DAEMON_CHILD)));
+        assert!(removed.contains(&std::ffi::OsStr::new(crate::daemon::ENV_DAEMON_PORT)));
+    }
 
     #[test]
     fn is_newer_compares_versions_not_strings() {
