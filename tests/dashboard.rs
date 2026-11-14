@@ -191,7 +191,7 @@ async fn test_dashboard_html_and_rest_routes() {
     let (addr, server_task, shutdown_tx) = start_server().await;
 
     // 1. GET / and GET /dashboard and GET /dashboard/ return 200 OK with text/html; charset=utf-8
-    for path in ["/", "/dashboard", "/dashboard/"] {
+    for path in ["/", "/dashboard", "/dashboard/", "/dashboard/traffic"] {
         let (status, headers, body) = send_request(addr, Method::GET, path, HeaderMap::new(), Bytes::new()).await;
         assert_eq!(status, StatusCode::OK, "path {path} status");
         let content_type = headers.get(hyper::header::CONTENT_TYPE).unwrap().to_str().unwrap();
@@ -202,6 +202,26 @@ async fn test_dashboard_html_and_rest_routes() {
         let body_str = String::from_utf8_lossy(&body);
         assert!(body_str.contains("agy-pool dashboard"), "body for {path}: {body_str}");
     }
+    // The pages share one stylesheet and one script.
+    for (path, expected) in [
+        ("/dashboard/app.css", "text/css; charset=utf-8"),
+        ("/dashboard/app.js", "text/javascript; charset=utf-8"),
+    ] {
+        let (status, headers, _) = send_request(addr, Method::GET, path, HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(status, StatusCode::OK, "path {path} status");
+        assert_eq!(
+            headers.get(hyper::header::CONTENT_TYPE).unwrap(),
+            expected,
+            "content type for {path}"
+        );
+        assert_eq!(
+            headers.get("x-content-type-options").unwrap(),
+            "nosniff",
+            "nosniff for {path}"
+        );
+    }
+    let (status, _, _) = send_request(addr, Method::GET, "/dashboard/nope.js", HeaderMap::new(), Bytes::new()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     // 2. GET /api/v1/status returns 200 OK JSON containing version, strategy, latency.ttfb_p50_ms, qps
     let (status, headers, body) =
@@ -299,7 +319,12 @@ async fn test_dashboard_non_get_returns_405() {
     let (addr, server_task, shutdown_tx) = start_server().await;
 
     // POST /api/v1/status and POST /dashboard return 405 Method Not Allowed with Allow: GET header
-    for path in ["/api/v1/status", "/dashboard"] {
+    for path in [
+        "/api/v1/status",
+        "/dashboard",
+        "/dashboard/traffic",
+        "/dashboard/app.js",
+    ] {
         let (status, headers, _) =
             send_request(addr, Method::POST, path, HeaderMap::new(), Bytes::from_static(b"{}")).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "path {path} should return 405");
@@ -359,7 +384,14 @@ async fn test_host_and_origin_validation() {
     let (addr, server_task, shutdown_tx) = start_server().await;
 
     // 1. Disallowed DNS-rebinding & malformed Hosts are rejected with 403 Forbidden
-    for path in ["/", "/dashboard", "/api/v1/accounts", "/api/v1/events"] {
+    for path in [
+        "/",
+        "/dashboard",
+        "/dashboard/traffic",
+        "/dashboard/app.js",
+        "/api/v1/accounts",
+        "/api/v1/events",
+    ] {
         for bad_host in [
             "evil.com:8899",
             "localhost.evil.com:8899",
@@ -625,37 +657,62 @@ async fn test_embedded_spa_asset_constraints() {
     setup_sample_pool();
     let (addr, server_task, shutdown_tx) = start_server().await;
 
-    let (status, headers, body) = send_request(addr, Method::GET, "/dashboard", HeaderMap::new(), Bytes::new()).await;
-    assert_eq!(status, StatusCode::OK);
-    let ct = headers.get(hyper::header::CONTENT_TYPE).unwrap().to_str().unwrap();
-    assert!(ct.contains("text/html; charset=utf-8"));
+    // Each page and shared asset stays small and self-contained; the needles below search all of them.
+    let mut body_str = String::new();
+    for path in [
+        "/dashboard",
+        "/dashboard/traffic",
+        "/dashboard/app.css",
+        "/dashboard/app.js",
+    ] {
+        let (status, _, body) = send_request(addr, Method::GET, path, HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(status, StatusCode::OK, "path {path}");
+        let text = String::from_utf8(body.to_vec()).expect("valid UTF-8 asset");
+        assert!(
+            text.len() > 2048 && text.len() < 90_000,
+            "{path} length {} not in range (2048, 90000)",
+            text.len()
+        );
 
-    let body_str = String::from_utf8(body.to_vec()).expect("valid UTF-8 HTML body");
-
-    // Assert body length > 2048 and < 90_000 bytes
-    assert!(
-        body_str.len() > 2048 && body_str.len() < 90_000,
-        "body length {} not in range (2048, 90000)",
-        body_str.len()
-    );
-
-    // Assert body contains no external CDN URLs in <script or <link tags
-    let body_lower = body_str.to_lowercase();
-    for tag_start in ["<script", "<link"] {
-        let mut rest = body_lower.as_str();
-        while let Some(idx) = rest.find(tag_start) {
-            let after = &rest[idx..];
-            if let Some(end_tag) = after.find('>') {
-                let tag_content = &after[..=end_tag];
-                assert!(
-                    !tag_content.contains("https://") && !tag_content.contains("http://"),
-                    "external URL found in tag: {tag_content}"
-                );
-                rest = &after[end_tag + 1..];
-            } else {
-                break;
+        // No external CDN URLs in <script or <link tags
+        let lower = text.to_lowercase();
+        for tag_start in ["<script", "<link"] {
+            let mut rest = lower.as_str();
+            while let Some(idx) = rest.find(tag_start) {
+                let after = &rest[idx..];
+                if let Some(end_tag) = after.find('>') {
+                    let tag_content = &after[..=end_tag];
+                    assert!(
+                        !tag_content.contains("https://") && !tag_content.contains("http://"),
+                        "external URL found in tag on {path}: {tag_content}"
+                    );
+                    rest = &after[end_tag + 1..];
+                } else {
+                    break;
+                }
             }
         }
+
+        if path.ends_with(".css") || path.ends_with(".js") {
+            body_str.push_str(&text);
+            continue;
+        }
+        // The theme must be applied in <head>, before the body paints, or light-mode users see a dark flash.
+        let bootstrap = text
+            .find("window.__applyAgyTheme(saved)")
+            .expect("missing theme bootstrap");
+        let head_end = text.find("</head>").expect("missing </head>");
+        assert!(bootstrap < head_end, "theme bootstrap must run inside <head> on {path}");
+        for needle in [
+            "/dashboard/app.css",
+            "/dashboard/app.js",
+            "agyBoot()",
+            "theme-switcher",
+            "pulse-pop",
+        ] {
+            assert!(text.contains(needle), "{path} missing {needle}");
+        }
+        body_str.push_str(&text);
     }
 
     // Assert body references all backend endpoints
@@ -701,12 +758,10 @@ async fn test_embedded_spa_asset_constraints() {
         "missing light theme CSS override"
     );
     assert!(body_str.contains("agy_theme"), "missing agy_theme persistence key");
-    // The theme must be applied in <head>, before the body paints, or light-mode users see a dark flash.
-    let bootstrap = body_str
-        .find("window.__applyAgyTheme(saved)")
-        .expect("missing theme bootstrap");
-    let head_end = body_str.find("</head>").expect("missing </head>");
-    assert!(bootstrap < head_end, "theme bootstrap must run inside <head>");
+    assert!(
+        body_str.contains("agy_currency"),
+        "missing agy_currency persistence key"
+    );
     // Blocked storage (privacy mode, sandboxed iframe) throws; one unguarded access halts the whole script.
     for line in body_str.lines().filter(|l| l.contains("localStorage.")) {
         assert!(line.contains("try {"), "unguarded localStorage access: {}", line.trim());

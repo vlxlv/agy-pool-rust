@@ -18,8 +18,17 @@ use hyper::{Method, Request, Response, StatusCode};
 use crate::config::DashboardConfig;
 use crate::proxy::body::{ProxyBody, full_body};
 
-pub fn dashboard_html() -> &'static str {
-    include_str!("assets/index.html")
+/// The dashboard's embedded files: two pages and the stylesheet and script they share.
+/// Returns (content type, body) for a dashboard asset route.
+fn dashboard_asset(route: &str) -> Option<(&'static str, &'static str)> {
+    const HTML: &str = "text/html; charset=utf-8";
+    match route {
+        "/" | "/dashboard" => Some((HTML, include_str!("assets/pool.html"))),
+        "/dashboard/traffic" => Some((HTML, include_str!("assets/traffic.html"))),
+        "/dashboard/app.css" => Some(("text/css; charset=utf-8", include_str!("assets/app.css"))),
+        "/dashboard/app.js" => Some(("text/javascript; charset=utf-8", include_str!("assets/app.js"))),
+        _ => None,
+    }
 }
 
 pub struct SseBody {
@@ -469,7 +478,8 @@ async fn update_apply_response() -> Response<ProxyBody> {
 /// Requests the dashboard answers; everything else goes to the proxy. `POST /` stays a proxy call.
 pub fn owns(method: &Method, path: &str) -> bool {
     (path == "/" && method == Method::GET)
-        || matches!(path, "/dashboard" | "/dashboard/")
+        || path == "/dashboard"
+        || path.starts_with("/dashboard/")
         || path.starts_with("/api/v1/")
 }
 
@@ -481,7 +491,7 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
         _ => path,
     }
     .to_owned();
-    let is_html = matches!(route.as_str(), "/" | "/dashboard");
+    let is_html = matches!(route.as_str(), "/" | "/dashboard" | "/dashboard/traffic");
     if !is_valid_host_and_origin(&req, is_html) {
         return forbidden();
     }
@@ -493,9 +503,9 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
     let is_post = req.method() == Method::POST;
 
     match route.as_str() {
-        "/" | "/dashboard" if is_get => html_response(),
-        "/dashboard"
-        | "/api/v1/auth/status"
+        r if is_get && let Some((content_type, body)) = dashboard_asset(r) => asset_response(content_type, body),
+        r if dashboard_asset(r).is_some() => method_not_allowed("GET"),
+        "/api/v1/auth/status"
         | "/api/v1/status"
         | "/api/v1/accounts"
         | "/api/v1/forecast"
@@ -558,12 +568,14 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
     }
 }
 
-fn html_response() -> Response<ProxyBody> {
-    let mut resp = Response::new(full_body(Bytes::from_static(dashboard_html().as_bytes())));
-    resp.headers_mut().insert(
-        hyper::header::CONTENT_TYPE,
-        hyper::header::HeaderValue::from_static("text/html; charset=utf-8"),
-    );
+fn asset_response(content_type: &'static str, body: &'static str) -> Response<ProxyBody> {
+    use hyper::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderValue, X_CONTENT_TYPE_OPTIONS};
+    let mut resp = Response::new(full_body(Bytes::from_static(body.as_bytes())));
+    let headers = resp.headers_mut();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    // The files are compiled in, so a browser must not keep an old page's script after an upgrade.
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     resp
 }
 
