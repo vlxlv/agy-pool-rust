@@ -1,6 +1,8 @@
-//! Account controls for the dashboard API. Accounts are addressed by exact id only: the CLI resolver
+//! Dashboard control and inspection handlers. Accounts are addressed by exact id only: the CLI resolver
 //! also matches list positions and name substrings, which would be racy and ambiguous over HTTP.
 
+use std::path::PathBuf;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -8,6 +10,7 @@ use http_body_util::BodyExt;
 use hyper::{Request, Response, StatusCode};
 
 use super::{api_error, internal_error, json_response};
+use crate::config::StaticConfig;
 use crate::proxy::body::ProxyBody;
 use crate::storage::{Account, STATUS_DISABLED, STATUS_VALIDATION_REQUIRED};
 
@@ -314,4 +317,142 @@ async fn refresh_all() -> Response<ProxyBody> {
         }
     }
     ok(serde_json::json!({ "refreshed": refreshed, "failed": failed }))
+}
+
+const UPSTREAM_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What config reload and inspection need from the running daemon; `run_foreground` sets it.
+#[derive(Clone)]
+pub struct ConfigContext {
+    pub config_path: Option<PathBuf>,
+    /// Hash of the config.json content now applied.
+    pub config_hash: Option<String>,
+    pub pid_file: Option<PathBuf>,
+    /// The config the listeners and log writers were started with.
+    pub startup: StaticConfig,
+    /// Fields changed in config.json that only a restart applies.
+    pub restart_required: Vec<String>,
+}
+
+static CONFIG_CONTEXT: RwLock<Option<ConfigContext>> = RwLock::new(None);
+
+pub fn set_config_context(ctx: Option<ConfigContext>) {
+    *CONFIG_CONTEXT.write().unwrap_or_else(|e| e.into_inner()) = ctx;
+}
+
+fn config_context() -> Option<ConfigContext> {
+    CONFIG_CONTEXT.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// `GET /api/v1/config`: the active config without the dashboard token.
+pub fn config_response() -> Response<ProxyBody> {
+    let cfg = crate::config::get_static_config();
+    let ctx = config_context();
+    let mut config = serde_json::to_value(&cfg).unwrap_or_default();
+    if let Some(dash) = config.get_mut("dashboard").and_then(|d| d.as_object_mut()) {
+        dash.remove("auth_token");
+        let configured = cfg.dashboard.auth_token.as_deref().is_some_and(|t| !t.is_empty());
+        let env_override = std::env::var(crate::config::ENV_DASHBOARD_TOKEN).is_ok_and(|t| !t.is_empty());
+        dash.insert("auth_token_configured".to_string(), configured.into());
+        dash.insert("env_token_override".to_string(), env_override.into());
+    }
+    let body = serde_json::json!({
+        "config_path": ctx.as_ref().and_then(|c| c.config_path.as_ref()).map(|p| p.display().to_string()),
+        "config_hash": ctx.as_ref().and_then(|c| c.config_hash.clone()),
+        "restart_required_fields": ctx.map(|c| c.restart_required).unwrap_or_default(),
+        "config": config,
+    });
+    json_response(serde_json::to_vec(&body).unwrap_or_default())
+}
+
+#[derive(serde::Serialize)]
+struct Check {
+    name: &'static str,
+    status: &'static str,
+    detail: String,
+}
+
+fn check(name: &'static str, status: &'static str, detail: impl Into<String>) -> Check {
+    Check {
+        name,
+        status,
+        detail: detail.into(),
+    }
+}
+
+fn config_check() -> Check {
+    let defaults = || check("config", "ok", "no config.json; running with built-in defaults");
+    let Some(ctx) = config_context() else {
+        return defaults();
+    };
+    let Some(path) = &ctx.config_path else {
+        return defaults();
+    };
+    match crate::config::compute_config_file_hash(path) {
+        Err(e) => check("config", "warn", e.to_string()),
+        Ok(hash) if Some(&hash) != ctx.config_hash.as_ref() => check(
+            "config",
+            "warn",
+            "config.json changed since it was loaded; reload to apply it",
+        ),
+        Ok(_) if !ctx.restart_required.is_empty() => check(
+            "config",
+            "warn",
+            format!("restart the gateway to apply: {}", ctx.restart_required.join(", ")),
+        ),
+        Ok(_) => check("config", "ok", format!("{} matches the running config", path.display())),
+    }
+}
+
+fn local_checks() -> Vec<Check> {
+    let gateway = check(
+        "gateway",
+        "ok",
+        format!("agy-pool {} (pid {})", crate::VERSION, std::process::id()),
+    );
+    let state_db = match crate::storage::load_pool() {
+        Ok(pool) => {
+            let enabled = pool.accounts.iter().filter(|a| a.status != STATUS_DISABLED).count();
+            check(
+                "state_db",
+                "ok",
+                format!("{} accounts, {enabled} enabled", pool.accounts.len()),
+            )
+        }
+        Err(e) => {
+            log_error(format!("diagnostics could not read the account pool: {e}"));
+            check("state_db", "error", "cannot read state.db; see the gateway log")
+        }
+    };
+    let native_agy = match crate::diagnostics::resolve_native_agy_binary() {
+        Ok((path, source)) => check("native_agy", "ok", format!("{} (source: {source})", path.display())),
+        Err(e) => check("native_agy", "warn", e),
+    };
+    vec![gateway, state_db, config_check(), native_agy]
+}
+
+/// The probe blocks (DNS has no timeout of its own), so it runs on a blocking thread and only the wait is bounded.
+async fn upstream_check() -> Check {
+    let probe = tokio::task::spawn_blocking(crate::diagnostics::probe_upstream);
+    match tokio::time::timeout(UPSTREAM_PROBE_TIMEOUT, probe).await {
+        Ok(Ok((host, Ok(())))) => check("upstream", "ok", format!("{host}:443 reachable (DNS, TCP, TLS)")),
+        Ok(Ok((host, Err(e)))) => check("upstream", "warn", format!("{host}:443: {e}")),
+        Ok(Err(_)) => check("upstream", "error", "probe task failed"),
+        Err(_) => check(
+            "upstream",
+            "warn",
+            format!("no answer within {}s", UPSTREAM_PROBE_TIMEOUT.as_secs()),
+        ),
+    }
+}
+
+/// `GET /api/v1/diagnostics`: the `doctor` checks that matter for a running gateway, as data.
+pub async fn diagnostics_response() -> Response<ProxyBody> {
+    let (local, upstream) = tokio::join!(tokio::task::spawn_blocking(local_checks), upstream_check());
+    let Ok(mut checks) = local else {
+        return internal_error();
+    };
+    checks.push(upstream);
+    let healthy = checks.iter().all(|c| c.status != "error");
+    json_response(serde_json::to_vec(&serde_json::json!({ "healthy": healthy, "checks": checks })).unwrap_or_default())
 }

@@ -18,6 +18,9 @@ pub struct DashboardTestGuard<'a> {
 impl<'a> Drop for DashboardTestGuard<'a> {
     fn drop(&mut self) {
         agy_pool::config::set_static_config(agy_pool::config::default_static_config());
+        agy_pool::dashboard::control::set_config_context(None);
+        agy_pool::diagnostics::set_tls_prober(None);
+        agy_pool::diagnostics::set_agy_binary_finder(None);
         agy_pool::config::reset_data_dir();
         agy_pool::config::set_test_mode(false);
     }
@@ -1107,6 +1110,15 @@ fn stored_account(id: &str) -> agy_pool::storage::Account {
         .unwrap()
 }
 
+async fn get_json(addr: SocketAddr, path: &str, token: Option<&str>) -> (StatusCode, serde_json::Value) {
+    let headers = match token {
+        Some(t) => hdrs(&[("authorization", bearer(t).as_str())]),
+        None => HeaderMap::new(),
+    };
+    let (status, _, body) = send_request(addr, Method::GET, path, headers, Bytes::new()).await;
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_account_mutations() {
     let _guard = lock_test().await;
@@ -1709,6 +1721,107 @@ async fn test_tokens_endpoint() {
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 
     agy_pool::storage::tokens::clear_pending();
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_config_endpoint_redacts_token() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    let mut cfg = agy_pool::config::default_static_config();
+    cfg.dashboard.auth_token = Some(TEST_TOKEN.to_string());
+    cfg.model_mapping
+        .insert("gemini-old".to_string(), "gemini-new".to_string());
+    agy_pool::config::set_static_config(cfg);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, _) = get_json(addr, "/api/v1/config", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/config",
+        hdrs(&[("authorization", bearer(TEST_TOKEN).as_str())]),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!String::from_utf8_lossy(&body).contains(TEST_TOKEN), "token leaked");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let dash = &json["config"]["dashboard"];
+    assert!(dash.get("auth_token").is_none());
+    assert_eq!(dash["auth_token_configured"], true);
+    assert_eq!(dash["env_token_override"], false);
+    assert_eq!(json["config"]["model_mapping"]["gemini-old"], "gemini-new");
+    assert_eq!(json["config"]["server"]["port"], 8899);
+    assert_eq!(json["restart_required_fields"], serde_json::json!([]));
+
+    let (status, _, _) = send_request(
+        addr,
+        Method::POST,
+        "/api/v1/config",
+        control_headers(),
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+
+    // Without a token, config and diagnostics stay closed unless the operator opted out.
+    set_dashboard_config(None, false);
+    for path in ["/api/v1/config", "/api/v1/diagnostics"] {
+        let (status, _, body) = send_request(addr, Method::GET, path, HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(error_code(&body), "TOKEN_REQUIRED_FOR_CONTROL");
+    }
+    set_dashboard_config(None, true);
+    let (status, json) = get_json(addr, "/api/v1/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["config"]["dashboard"]["auth_token_configured"], false);
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_diagnostics_endpoint() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    agy_pool::diagnostics::set_tls_prober(Some(Arc::new(|_: &str, _: Duration| Ok::<(), String>(()))));
+    agy_pool::diagnostics::set_agy_binary_finder(Some(Arc::new(|| "/opt/agy/bin/agy".to_string())));
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, _) = get_json(addr, "/api/v1/diagnostics", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, json) = get_json(addr, "/api/v1/diagnostics", Some(TEST_TOKEN)).await;
+    assert_eq!(status, StatusCode::OK);
+    let checks = json["checks"].as_array().unwrap();
+    let names: Vec<&str> = checks.iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["gateway", "state_db", "config", "native_agy", "upstream"]);
+    assert!(checks.iter().all(|c| c["status"] == "ok"), "{json}");
+    assert_eq!(json["healthy"], true);
+    assert!(checks[1]["detail"].as_str().unwrap().contains("2 accounts"));
+    assert!(checks[3]["detail"].as_str().unwrap().contains("/opt/agy/bin/agy"));
+
+    agy_pool::diagnostics::set_tls_prober(Some(Arc::new(|_: &str, _: Duration| {
+        Err::<(), String>("dns lookup failed".to_string())
+    })));
+    agy_pool::diagnostics::set_agy_binary_finder(Some(Arc::new(String::new)));
+    let (_, json) = get_json(addr, "/api/v1/diagnostics", Some(TEST_TOKEN)).await;
+    assert_eq!(json["checks"][3]["status"], "warn");
+    assert_eq!(json["checks"][4]["status"], "warn");
+    assert!(
+        json["checks"][4]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("dns lookup failed")
+    );
+    assert_eq!(json["healthy"], true, "warnings do not make the gateway unhealthy");
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }

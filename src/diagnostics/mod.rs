@@ -503,6 +503,23 @@ fn tls_probe(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolves, connects to and TLS-handshakes the Cloud Code backend; returns the host it probed.
+/// Shared by `doctor` and the dashboard diagnostics.
+pub fn probe_upstream() -> (String, Result<(), String>) {
+    let backend_host = BACKEND_HOST_PROVIDER
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|f| f())
+        .unwrap_or_else(|| "cloudaicompanion.googleapis.com".to_string());
+    let res = if let Some(ref probe_fn) = *TLS_PROBER.read().unwrap() {
+        probe_fn(&backend_host, Duration::from_secs(5))
+    } else {
+        default_tls_probe(&backend_host, Duration::from_secs(5))
+    };
+    (backend_host, res)
+}
+
 pub fn lease_fallback_rate_high(fallbacks: u64, decisions: u64) -> bool {
     fallbacks * 100 > decisions
 }
@@ -1067,18 +1084,7 @@ pub fn run_doctor(out: &mut impl Write) -> bool {
     }
 
     // 5. Upstream Google Cloud Code Connectivity
-    let backend_host = BACKEND_HOST_PROVIDER
-        .read()
-        .unwrap()
-        .as_ref()
-        .map(|f| f())
-        .unwrap_or_else(|| "cloudaicompanion.googleapis.com".to_string());
-
-    let tls_res = if let Some(ref probe_fn) = *TLS_PROBER.read().unwrap() {
-        probe_fn(&backend_host, Duration::from_secs(5))
-    } else {
-        default_tls_probe(&backend_host, Duration::from_secs(5))
-    };
+    let (backend_host, tls_res) = probe_upstream();
 
     match tls_res {
         Ok(()) => {

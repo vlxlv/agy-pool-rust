@@ -289,6 +289,24 @@ fn read_gate(req: &Request<hyper::body::Incoming>, token: Option<&str>) -> Optio
     }
 }
 
+/// Without a token, only an operator opt-out lets requests through. Used by mutations and by
+/// the config/diagnostics reads, which expose more than the 0.3.x read API.
+fn token_gate(
+    req: &Request<hyper::body::Incoming>,
+    cfg: &DashboardConfig,
+    token: Option<&str>,
+) -> Option<Response<ProxyBody>> {
+    match token {
+        Some(_) => read_gate(req, token),
+        None if cfg.allow_unauthenticated_control => None,
+        None => Some(api_error(
+            StatusCode::FORBIDDEN,
+            "TOKEN_REQUIRED_FOR_CONTROL",
+            "set dashboard.auth_token or AGY_POOL_DASHBOARD_TOKEN to enable dashboard controls",
+        )),
+    }
+}
+
 /// Mutations need the custom header (forces a CORS preflight, which is never granted),
 /// a JSON content type, and the token unless the operator opted out.
 fn control_gate(
@@ -318,15 +336,7 @@ fn control_gate(
             "Content-Type must be application/json",
         ));
     }
-    match token {
-        Some(_) => read_gate(req, token),
-        None if cfg.allow_unauthenticated_control => None,
-        None => Some(api_error(
-            StatusCode::FORBIDDEN,
-            "TOKEN_REQUIRED_FOR_CONTROL",
-            "set dashboard.auth_token or AGY_POOL_DASHBOARD_TOKEN to enable dashboard controls",
-        )),
-    }
+    token_gate(req, cfg, token)
 }
 
 fn auth_status_response(
@@ -491,6 +501,8 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
         | "/api/v1/forecast"
         | "/api/v1/events"
         | "/api/v1/tokens"
+        | "/api/v1/config"
+        | "/api/v1/diagnostics"
             if !is_get =>
         {
             method_not_allowed("GET")
@@ -524,6 +536,11 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
                 _ => events_response(),
             }
         }
+        "/api/v1/config" | "/api/v1/diagnostics" => match token_gate(&req, &cfg, token) {
+            Some(denied) => denied,
+            None if route == "/api/v1/config" => control::config_response(),
+            None => control::diagnostics_response().await,
+        },
         r if r.starts_with("/api/v1/accounts/") && !is_post => method_not_allowed("POST"),
         r if r.starts_with("/api/v1/accounts/") => match control_gate(&req, &cfg, token) {
             Some(denied) => denied,
