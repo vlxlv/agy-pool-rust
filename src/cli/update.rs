@@ -413,6 +413,7 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
         RestartMode::Immediate if was_running => {
             let mut cmd = std::process::Command::new(&exe);
             cmd.arg("restart");
+            cmd.env_remove(crate::daemon::ENV_DAEMON_CHILD);
             let status = cmd.status();
             if status.is_err() || !status.as_ref().unwrap().success() {
                 let err_str = status
@@ -431,9 +432,13 @@ pub async fn apply_latest_update(restart: RestartMode) -> Result<Option<String>,
             let exe_clone = exe.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
-                let status =
-                    tokio::task::spawn_blocking(move || std::process::Command::new(&exe_clone).arg("restart").status())
-                        .await;
+                let status = tokio::task::spawn_blocking(move || {
+                    let mut cmd = std::process::Command::new(&exe_clone);
+                    cmd.arg("restart");
+                    cmd.env_remove(crate::daemon::ENV_DAEMON_CHILD);
+                    cmd.status()
+                })
+                .await;
                 if !matches!(status, Ok(Ok(ref s)) if s.success()) {
                     crate::observability::log_message_level(
                         crate::observability::LogLevel::Error,

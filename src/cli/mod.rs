@@ -269,7 +269,7 @@ const COMMANDS_USING_GLOBAL_HELP: &[&str] = &[
 ];
 
 pub async fn main(args: &[String], io: &mut Io<'_>) -> i32 {
-    if std::env::var("AGY_POOL_DAEMON_CHILD").as_deref() == Ok("1") {
+    if std::env::var("AGY_POOL_DAEMON_CHILD").as_deref() == Ok("1") && args.is_empty() {
         return crate::daemon::run_daemon_child(&mut io.stderr);
     }
 

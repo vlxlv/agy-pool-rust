@@ -8,7 +8,7 @@ fn main() {
     agy_pool::quota::set_user_agent_provider(Box::new(agy_ua));
     agy_pool::proxy::set_user_agent_provider(agy_ua);
 
-    if std::env::var("AGY_POOL_DAEMON_CHILD").as_deref() == Ok("1") {
+    if std::env::var("AGY_POOL_DAEMON_CHILD").as_deref() == Ok("1") && std::env::args().len() <= 1 {
         let code = agy_pool::daemon::run_daemon_child(&mut std::io::stderr());
         if code != 0 {
             std::process::exit(code);
