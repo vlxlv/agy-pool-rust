@@ -576,6 +576,10 @@ pub fn resolve_default_config_file() -> Result<PathBuf, ConfigError> {
         return Ok(abs);
     }
 
+    if is_test_mode() {
+        return Ok(PathBuf::new());
+    }
+
     let home = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
