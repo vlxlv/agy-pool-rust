@@ -1345,7 +1345,9 @@ impl Handler {
         let (status, err_msg) = if consecutive_quota_failovers >= 2 {
             (
                 StatusCode::TOO_MANY_REQUESTS,
-                format!("Circuit breaker tripped: consecutive 429 quota exhaustion detected across {consecutive_quota_failovers} accounts for request {request_id}. Halting failover to protect remaining pool accounts."),
+                format!(
+                    "Circuit breaker tripped: consecutive 429 quota exhaustion detected across {consecutive_quota_failovers} accounts for request {request_id}. Halting failover to protect remaining pool accounts."
+                ),
             )
         } else if let Some(err) = last_error {
             (StatusCode::SERVICE_UNAVAILABLE, err)
@@ -1374,7 +1376,10 @@ impl Handler {
             out_headers.insert("X-Agy-Pool-Strategy", v);
         }
         if consecutive_quota_failovers >= 2 {
-            out_headers.insert("X-Agy-Pool-Circuit-Breaker", HeaderValue::from_static("consecutive-429"));
+            out_headers.insert(
+                "X-Agy-Pool-Circuit-Breaker",
+                HeaderValue::from_static("consecutive-429"),
+            );
         }
         send_buffered(
             status,

@@ -771,7 +771,11 @@ mod tests {
         // Normal 429 or 403 quota exhaustion with markers
         assert!(is_quota_error(429, None, br#"{"error": "rate_limit_exceeded"}"#));
         assert!(is_quota_error(403, None, br#"{"error": "quota_exceeded"}"#));
-        assert!(is_quota_error(429, None, br#"{"error": "resource has been exhausted"}"#));
+        assert!(is_quota_error(
+            429,
+            None,
+            br#"{"error": "resource has been exhausted"}"#
+        ));
         assert!(!is_quota_error(500, None, br#"internal server error"#));
 
         // Fake WAF 429 without Retry-After and without quota markers must be rejected
