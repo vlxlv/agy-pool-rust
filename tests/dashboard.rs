@@ -752,6 +752,21 @@ async fn test_embedded_spa_asset_constraints() {
     }
     assert!(!body_str.contains("alert("), "use the toast instead of alert()");
 
+    // Config & health drawer (Phase 3).
+    for needle in [
+        "/api/v1/config",
+        "/api/v1/config/reload",
+        "/api/v1/diagnostics",
+        "config-dialog",
+        "config-btn",
+    ] {
+        assert!(body_str.contains(needle), "missing {needle}");
+    }
+    assert!(
+        body_str.contains("configView.textContent ="),
+        "config JSON must be rendered as text, not HTML"
+    );
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }
