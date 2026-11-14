@@ -1,25 +1,29 @@
-# Antigravity Telemetry & Panel Suite: Master AI Engineering Prompts
+# Antigravity Telemetry & Panel Suite: Complete AI Engineering Prompts
 
-> A comprehensive set of English system prompts, task specifications, and implementation guidelines for AI coding agents (Claude, Gemini, GPT, Antigravity, Cursor) to build, refactor, and maintain a production-grade Google Antigravity dashboard, telemetry monitor, and multi-account proxy.
+> A comprehensive, production-ready collection of English system prompts, task specifications, and implementation blueprints for AI coding assistants (Claude, Gemini, GPT, Antigravity, Cursor, Cline).
 >
-> Synthesized from the core architectural principles, data models, and features of:
-> - **[n2ns/antigravity-panel](https://github.com/n2ns/antigravity-panel)** (*Toolkit for Antigravity*)
-> - **[akelabs/antigravity-pulse](https://github.com/akelabs/antigravity-pulse)** (*AGY-Pulse*)
-> - **[elviscjn-cjn/antigravity-context-viewer](https://github.com/elviscjn-cjn/antigravity-context-viewer)** (*Context & Token Viewer*)
+> Synthesized from the core architectural designs, data pipelines, and telemetry models of:
+> - **[n2ns/antigravity-panel](https://github.com/n2ns/antigravity-panel)** (*Toolkit & Telemetry for Antigravity*)
+> - **[akelabs/antigravity-pulse](https://github.com/akelabs/antigravity-pulse)** (*AGY-Pulse & Floating Telemetry*)
+> - **[elviscjn-cjn/antigravity-context-viewer](https://github.com/elviscjn-cjn/antigravity-context-viewer)** (*Context Window & Token Tracker*)
 
 ---
 
 ## Table of Contents
-1. [Master System Prompt: Antigravity Telemetry & Quota Suite](#1-master-system-prompt-antigravity-telemetry--quota-suite)
-2. [Module 1 Prompt: Real-Time Generation Speed & Context Telemetry](#2-module-1-prompt-real-time-generation-speed--context-telemetry)
+
+1. [Master System Prompt: All-in-One Antigravity Telemetry & Quota Suite](#1-master-system-prompt-all-in-one-antigravity-telemetry--quota-suite)
+2. [Module 1 Prompt: Real-Time Generation Speed & Latency Telemetry](#2-module-1-prompt-real-time-generation-speed--latency-telemetry)
 3. [Module 2 Prompt: Quota Pooling Architecture & Multi-Window Tracking](#3-module-2-prompt-quota-pooling-architecture--multi-window-tracking)
 4. [Module 3 Prompt: Request Audit Inspector & Financial Valuation Engine](#4-module-3-prompt-request-audit-inspector--financial-valuation-engine)
-5. [Module 4 Prompt: Brain Task & Cache Lifecycle Governance](#5-module-4-prompt-brain-task--cache-lifecycle-governance)
-6. [Module 5 Prompt: Hands-Free Automation & Destructive Command Guard](#6-module-5-prompt-hands-free-automation--destructive-command-guard)
+5. [Module 4 Prompt: Context Window Monitoring & Compaction Gatekeeper](#5-module-4-prompt-context-window-monitoring--compaction-gatekeeper)
+6. [Module 5 Prompt: Brain Task Storage & SQLite Cache Governance](#6-module-5-prompt-brain-task-storage--sqlite-cache-governance)
+7. [Module 6 Prompt: Hands-Free Automation & Destructive Command Guard](#7-module-6-prompt-hands-free-automation--destructive-command-guard)
+8. [Module 7 Prompt: Multi-Account Load Balancing & Failover Strategy](#8-module-7-prompt-multi-account-load-balancing--failover-strategy)
+9. [Prompt Execution & Verification Checklist](#9-prompt-execution--verification-checklist)
 
 ---
 
-## 1. Master System Prompt: Antigravity Telemetry & Quota Suite
+## 1. Master System Prompt: All-in-One Antigravity Telemetry & Quota Suite
 
 ```markdown
 You are an expert systems engineer and frontend architect specializing in developer tooling for the Google Antigravity AI platform and multi-account load-balancing proxies.
@@ -62,7 +66,7 @@ Execute the implementation with minimal complexity, clean semantic code, and ful
 
 ---
 
-## 2. Module 1 Prompt: Real-Time Generation Speed & Context Telemetry
+## 2. Module 1 Prompt: Real-Time Generation Speed & Latency Telemetry
 
 ```markdown
 You are tasked with implementing the real-time telemetry, token generation speed tracker, and context window monitor for Google Antigravity.
@@ -178,7 +182,34 @@ Ensure accessibility with keyboard navigation (`Esc` to close modal, backdrop cl
 
 ---
 
-## 5. Module 4 Prompt: Brain Task & Cache Lifecycle Governance
+## 5. Module 4 Prompt: Context Window Monitoring & Compaction Gatekeeper
+
+```markdown
+You are designing the Context Window Monitor and Lossy Compaction Early-Warning System for Google Antigravity.
+
+### Functional Requirements:
+1. **Telemetry Ingestion via Language Server**:
+   - Connect to the Antigravity Language Server RPC / status pipe to read active trajectory metadata (`GetCascadeTrajectoryGeneratorMetadata`).
+   - Extract `estimatedTokensUsed` and `maxContextTokens` per conversation step.
+
+2. **Progressive Compaction Warning Gates**:
+   - Render a high-visibility gauge / bar on the composer or panel:
+     - Tier 1: `0% - 79%` (Optimal): Normal theme stroke.
+     - Tier 2: `80% - 94%` (Compaction Impending): Amber warning glow, indicating lossy cascade compression is nearing.
+     - Tier 3: `95% - 100%` (Critical Truncation): Red pulsating alert advising the user to summarize or start a new branch immediately.
+
+3. **Compaction Event Detection & History Ledger**:
+   - Track token usage deltas between consecutive turns.
+   - When token count decreases by `> 5,000 tokens` without a branch switch, mark this step as an automatic compaction event (`⚡ Compacted: -Xk tokens`).
+   - Maintain a chronological ledger of compactions within the conversation viewer to alert developers of potential lost instruction nuance.
+
+4. **Safe UI Integration**:
+   - Ensure context queries have low CPU overhead and do not block the UI thread during large token generations.
+```
+
+---
+
+## 6. Module 5 Prompt: Brain Task Storage & SQLite Cache Governance
 
 ```markdown
 You are building the Cache and Brain Task Governance module for Google Antigravity developer environments.
@@ -209,7 +240,7 @@ Provide both a CLI interface (`agy-pool cache status`, `agy-pool cache clean`) a
 
 ---
 
-## 6. Module 5 Prompt: Hands-Free Automation & Destructive Command Guard
+## 7. Module 6 Prompt: Hands-Free Automation & Destructive Command Guard
 
 ```markdown
 You are implementing the Hands-Free Auto-Accept automation engine and security guardrail system for Google Antigravity agents.
@@ -241,3 +272,49 @@ You are implementing the Hands-Free Auto-Accept automation engine and security g
 
 Implement this service with fail-safe boundaries, ensuring that execution failure defaults to manual human confirmation.
 ```
+
+---
+
+## 8. Module 7 Prompt: Multi-Account Load Balancing & Failover Strategy
+
+```markdown
+You are building the intelligent multi-account load balancing and high-availability routing engine for an Antigravity upstream proxy pool.
+
+### Functional Requirements:
+1. **Dynamic Account Health & Cooldown Tracking**:
+   - Maintain internal state for each account: `Ready`, `CoolingDown(expiry_timestamp)`, `QuotaDepleted(reset_timestamp)`, `Unauthorized(error)`.
+   - On HTTP 429 (Resource Exhausted):
+     - Extract `retry-after` header or parse quota reset timestamps from protobuf details.
+     - Place the failing account into `CoolingDown` state with exponential backoff (initial: 30s, multiplier: 2x, max: 15m).
+     - Transparently re-dispatch the active streaming request to the next healthy account without dropping client connection.
+
+2. **Load Balancing Scheduling Algorithms**:
+   - Support two selectable routing strategies:
+     - **Round-Robin with Quota Priority**: Selects the next available healthy account with `remainingFraction > 0.15`.
+     - **Least-In-Flight (LIF)**: Dispatches requests to the account currently serving the fewest concurrent turns.
+
+3. **Zero-Downtime Session Affinity**:
+   - For long-running agent conversations, bind session tokens or conversation IDs to the same upstream account when possible to maximize Google Upstream Prompt Caching hit rates.
+   - If the affinity account hits quota exhaustion (429), fall back smoothly to the next candidate while updating the session mapping.
+
+4. **Telemetry Audit Hook**:
+   - Emit audit events on every failover: record `from_account`, `to_account`, `reason`, and `retry_latency_ms` to populate the dashboard live stream.
+```
+
+---
+
+## 9. Prompt Execution & Verification Checklist
+
+When executing any of the prompts above with an AI coding assistant, enforce this validation protocol before declaring completion:
+
+1. **Self-Contained & Offline-First**:
+   - Zero external CDN dependencies (`<script src="https://cdn...">` is prohibited).
+   - All SVG assets must be inlined or locally bundled.
+2. **Iframe & Storage Resilience**:
+   - Every `localStorage` read and write must be wrapped in inline `try { ... } catch (_) {}` blocks.
+3. **Strict Size Budget**:
+   - Keep the dashboard SPA bundle strictly within `< 90,000 bytes` (or `< 100 KB`).
+4. **Data Isolation**:
+   - Backend Protobuf and JSON parsers must never leak private account tokens or authorization headers in client logs or UI DOM elements.
+5. **Full Test Suite Verification**:
+   - Run end-to-end unit, integration, and UI regression test suites to verify 100% pass rate.
