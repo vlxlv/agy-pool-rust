@@ -402,6 +402,12 @@ const FORBIDDEN_KEYS: &[&str] = &[
 ];
 
 pub fn load_config_file(path: &Path) -> Result<StaticConfig, ConfigError> {
+    load_config_file_with_hash(path).map(|(cfg, _)| cfg)
+}
+
+/// Like `load_config_file`, plus the SHA-256 of the exact bytes parsed, so the two cannot disagree.
+pub fn load_config_file_with_hash(path: &Path) -> Result<(StaticConfig, String), ConfigError> {
+    use sha2::Digest;
     let abs_path = match make_absolute(expand_user(path)) {
         Ok(a) => a,
         Err(err) => {
@@ -534,7 +540,7 @@ pub fn load_config_file(path: &Path) -> Result<StaticConfig, ConfigError> {
         }
     }
 
-    Ok(cfg)
+    Ok((cfg, hex::encode(sha2::Sha256::digest(&data))))
 }
 
 pub fn compute_config_file_hash(path: &Path) -> Result<String, ConfigError> {
