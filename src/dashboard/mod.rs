@@ -541,6 +541,11 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
             None if route == "/api/v1/config" => control::config_response(),
             None => control::diagnostics_response().await,
         },
+        "/api/v1/config/reload" if !is_post => method_not_allowed("POST"),
+        "/api/v1/config/reload" => match control_gate(&req, &cfg, token) {
+            Some(denied) => denied,
+            None => control::reload_config().await,
+        },
         r if r.starts_with("/api/v1/accounts/") && !is_post => method_not_allowed("POST"),
         r if r.starts_with("/api/v1/accounts/") => match control_gate(&req, &cfg, token) {
             Some(denied) => denied,
