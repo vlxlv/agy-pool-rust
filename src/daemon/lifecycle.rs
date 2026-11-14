@@ -57,8 +57,18 @@ impl Drop for ProcessKillGuard {
 fn apply_instance_static_config(ctx: &super::instance::InstanceContext) -> Result<(), crate::config::ConfigError> {
     use crate::config::{ConfigError, ENV_DASHBOARD_TOKEN};
     let cfg = match ctx.config_path.as_deref() {
-        Some(p) => crate::config::load_config_file(p)
-            .map_err(|e| ConfigError::Validation(format!("invalid config {}: {e}", p.display())))?,
+        Some(p) => {
+            let (cfg, hash) = crate::config::load_config_file_with_hash(p)
+                .map_err(|e| ConfigError::Validation(format!("invalid config {}: {e}", p.display())))?;
+            // The PID file and reload status carry ctx.config_hash; it must describe the config that runs.
+            if ctx.config_hash.as_ref() != Some(&hash) {
+                return Err(ConfigError::Validation(format!(
+                    "{} changed while the gateway was starting; start it again",
+                    p.display()
+                )));
+            }
+            cfg
+        }
         None => crate::config::default_static_config(),
     };
     if let Ok(token) = std::env::var(ENV_DASHBOARD_TOKEN)
@@ -551,6 +561,24 @@ mod tests {
         // Port of A remains alive
         assert!(super::super::server::is_port_listening(port));
         drop(listener);
+    }
+
+    #[test]
+    fn test_apply_static_config_rejects_config_changed_after_hashing() {
+        let env = crate::daemon::test_env();
+        let data_dir = env.temp_dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let cfg_file = env.temp_dir.path().join("config.json");
+        std::fs::write(&cfg_file, r#"{"version": 1}"#).unwrap();
+        let ctx =
+            super::super::instance::resolve_instance_context(Some(&data_dir), Some(&cfg_file), None, None).unwrap();
+
+        std::fs::write(&cfg_file, r#"{"version": 1, "model_mapping": {"a": "b"}}"#).unwrap();
+        let err = apply_instance_static_config(&ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("changed while the gateway was starting"),
+            "{err}"
+        );
     }
 
     #[test]

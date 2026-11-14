@@ -2146,25 +2146,34 @@
     const configView = document.getElementById('config-view');
 
     function renderConfig(data) {
-      configView.textContent = data.config ? JSON.stringify(Object.assign({ config_path: data.config_path }, data.config), null, 2) : '';
+      configView.textContent = data.config ? JSON.stringify(Object.assign({ config_path: data.config_path }, data.config), null, 2) : (data.error || '');
       const restart = data.restart_required_fields || [];
       const note = document.getElementById('config-restart');
       note.hidden = restart.length === 0;
       note.textContent = `Restart the gateway to apply: ${restart.join(', ')}`;
     }
 
+    let configPanelSeq = 0;
+
     async function loadConfigPanel() {
+      const seq = ++configPanelSeq;
       const list = document.getElementById('diag-list');
       list.innerHTML = '<li>Running checks…</li>';
+      let cfg = { error: 'Could not load the config.' };
+      let items;
       try {
         const [cfgRes, diagRes] = await Promise.all([agyFetch('/api/v1/config'), agyFetch('/api/v1/diagnostics')]);
-        renderConfig(cfgRes.ok ? await cfgRes.json() : {});
+        cfg = cfgRes.ok ? await cfgRes.json() : { error: `Could not load the config (HTTP ${cfgRes.status}).` };
         if (!diagRes.ok) throw new Error(`HTTP ${diagRes.status}`);
         const d = await diagRes.json();
-        list.innerHTML = d.checks.map(c => `<li class="diag-${escapeHtml(c.status)}">${DIAG_ICONS[c.status] || '?'} <strong>${escapeHtml(c.name)}</strong>: ${escapeHtml(c.detail)}</li>`).join('');
+        items = d.checks.map(c => `<li class="diag-${escapeHtml(c.status)}">${DIAG_ICONS[c.status] || '?'} <strong>${escapeHtml(c.name)}</strong>: ${escapeHtml(c.detail)}</li>`).join('');
       } catch (err) {
-        list.innerHTML = `<li class="diag-error">Checks failed: ${escapeHtml(String(err))}</li>`;
+        items = `<li class="diag-error">Checks failed: ${escapeHtml(String(err))}</li>`;
       }
+      // A later load (reload, rerun) owns the panel; a slow earlier answer must not overwrite it.
+      if (seq !== configPanelSeq) return;
+      renderConfig(cfg);
+      list.innerHTML = items;
     }
 
     document.getElementById('config-btn').addEventListener('click', () => {

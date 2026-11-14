@@ -517,11 +517,17 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
 
     super::pid::write_pid_file(&pid_file, pid_info)?;
 
+    // The active config reports what is bound (port overrides, ephemeral ports), not what config.json says.
+    let startup = crate::config::get_static_config();
+    let mut running = startup.clone();
+    running.server.listen = ctx_inst.effective_listen_targets();
+    running.server.port = i64::from(actual_port);
+    crate::config::set_static_config(running);
     crate::dashboard::control::set_config_context(Some(crate::dashboard::control::ConfigContext {
         config_path: ctx_inst.config_path.clone(),
         config_hash: ctx_inst.config_hash.clone(),
         pid_file: Some(pid_file.clone()),
-        startup: crate::config::get_static_config(),
+        startup,
         restart_required: Vec::new(),
     }));
 
@@ -684,6 +690,7 @@ pub async fn run_foreground(mut opts: ServerOptions) -> Result<(), DaemonError> 
     crate::observability::clear_on_in_flight_change();
     crate::proxy::save_affinities();
 
+    crate::dashboard::control::clear_config_context(&pid_file);
     let _ = super::pid::remove_pid_file_if_owned(&pid_file, current_pid);
     let _ = std::fs::remove_file(&runtime_file);
     drop(pid_lock);

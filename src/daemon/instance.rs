@@ -294,8 +294,11 @@ pub fn resolve_instance_context(
         && let Ok(can) = canonicalize_file(&cfg_p)
         && can.exists()
     {
-        cfg_hash = crate::config::compute_config_file_hash(&can).ok();
-        static_cfg = crate::config::load_config_file(&can).ok();
+        // One read for both, so the hash always names the bytes the config came from.
+        match crate::config::load_config_file_with_hash(&can) {
+            Ok((cfg, hash)) => (static_cfg, cfg_hash) = (Some(cfg), Some(hash)),
+            Err(_) => cfg_hash = crate::config::compute_config_file_hash(&can).ok(),
+        }
         can_config_path = Some(can);
     }
 

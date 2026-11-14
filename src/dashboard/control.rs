@@ -282,12 +282,12 @@ async fn refresh(id: &str) -> Response<ProxyBody> {
     }
 }
 
-/// Clears REFRESH_ALL_IN_FLIGHT even when the client disconnects and the handler future is dropped.
-struct RefreshAllGuard;
+/// Clears a single-flight flag even when the client disconnects and the handler future is dropped.
+struct FlagGuard(&'static AtomicBool);
 
-impl Drop for RefreshAllGuard {
+impl Drop for FlagGuard {
     fn drop(&mut self) {
-        REFRESH_ALL_IN_FLIGHT.store(false, Ordering::Release);
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -299,7 +299,7 @@ async fn refresh_all() -> Response<ProxyBody> {
             "a refresh of all accounts is already running",
         );
     }
-    let _guard = RefreshAllGuard;
+    let _guard = FlagGuard(&REFRESH_ALL_IN_FLIGHT);
     let pool = match tokio::task::spawn_blocking(crate::storage::load_pool).await {
         Ok(Ok(pool)) => pool,
         Ok(Err(e)) => return storage_failure("load the account pool", e),
@@ -320,6 +320,7 @@ async fn refresh_all() -> Response<ProxyBody> {
 }
 
 const UPSTREAM_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+static UPSTREAM_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// What config reload and inspection need from the running daemon; `run_foreground` sets it.
 #[derive(Clone)]
@@ -328,7 +329,7 @@ pub struct ConfigContext {
     /// Hash of the config.json content now applied.
     pub config_hash: Option<String>,
     pub pid_file: Option<PathBuf>,
-    /// The config the listeners and log writers were started with.
+    /// config.json as loaded at startup; reloads compare against it to find restart-only changes.
     pub startup: StaticConfig,
     /// Fields changed in config.json that only a restart applies.
     pub restart_required: Vec<String>,
@@ -340,6 +341,14 @@ pub fn set_config_context(ctx: Option<ConfigContext>) {
     *CONFIG_CONTEXT.write().unwrap_or_else(|e| e.into_inner()) = ctx;
 }
 
+/// Called at shutdown; leaves the context alone if another instance in this process has replaced it.
+pub fn clear_config_context(pid_file: &Path) {
+    let mut ctx = CONFIG_CONTEXT.write().unwrap_or_else(|e| e.into_inner());
+    if ctx.as_ref().is_some_and(|c| c.pid_file.as_deref() == Some(pid_file)) {
+        *ctx = None;
+    }
+}
+
 fn config_context() -> Option<ConfigContext> {
     CONFIG_CONTEXT.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
@@ -349,6 +358,10 @@ pub fn config_response() -> Response<ProxyBody> {
     let cfg = crate::config::get_static_config();
     let ctx = config_context();
     let mut config = serde_json::to_value(&cfg).unwrap_or_default();
+    // Nothing reads scheduler.strategy at runtime: the live strategy is kept in state.db (see /status).
+    if let Some(obj) = config.as_object_mut() {
+        obj.remove("scheduler");
+    }
     if let Some(dash) = config.get_mut("dashboard").and_then(|d| d.as_object_mut()) {
         dash.remove("auth_token");
         let configured = cfg.dashboard.auth_token.as_deref().is_some_and(|t| !t.is_empty());
@@ -410,15 +423,8 @@ fn local_checks() -> Vec<Check> {
         "ok",
         format!("agy-pool {} (pid {})", crate::VERSION, std::process::id()),
     );
-    let state_db = match crate::storage::load_pool() {
-        Ok(pool) => {
-            let enabled = pool.accounts.iter().filter(|a| a.status != STATUS_DISABLED).count();
-            check(
-                "state_db",
-                "ok",
-                format!("{} accounts, {enabled} enabled", pool.accounts.len()),
-            )
-        }
+    let state_db = match crate::storage::account_counts() {
+        Ok((total, enabled)) => check("state_db", "ok", format!("{total} accounts, {enabled} enabled")),
         Err(e) => {
             log_error(format!("diagnostics could not read the account pool: {e}"));
             check("state_db", "error", "cannot read state.db; see the gateway log")
@@ -432,8 +438,19 @@ fn local_checks() -> Vec<Check> {
 }
 
 /// The probe blocks (DNS has no timeout of its own), so it runs on a blocking thread and only the wait is bounded.
+/// One probe at a time: a hung probe must not pile up blocking threads as the page is reloaded.
 async fn upstream_check() -> Check {
-    let probe = tokio::task::spawn_blocking(crate::diagnostics::probe_upstream);
+    if UPSTREAM_PROBE_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return check(
+            "upstream",
+            "warn",
+            "an earlier probe is still waiting for upstream; try again later",
+        );
+    }
+    let probe = tokio::task::spawn_blocking(|| {
+        let _guard = FlagGuard(&UPSTREAM_PROBE_IN_FLIGHT);
+        crate::diagnostics::probe_upstream()
+    });
     match tokio::time::timeout(UPSTREAM_PROBE_TIMEOUT, probe).await {
         Ok(Ok((host, Ok(())))) => check("upstream", "ok", format!("{host}:443 reachable (DNS, TCP, TLS)")),
         Ok(Ok((host, Err(e)))) => check("upstream", "warn", format!("{host}:443: {e}")),
@@ -462,6 +479,7 @@ static RELOAD_LOCK: Mutex<()> = Mutex::new(());
 
 enum ReloadError {
     NoConfigFile(String),
+    Unreadable(String),
     Invalid(String),
 }
 
@@ -532,21 +550,29 @@ fn reload_blocking() -> Result<serde_json::Value, ReloadError> {
             "the gateway was started without a config.json; restart it with one to enable reload".to_string(),
         ));
     };
+    // A missing file is the operator's to fix; any other read failure (e.g. permissions) is CONFIG_UNREADABLE.
+    if let Ok(false) = path.try_exists() {
+        return Err(ReloadError::NoConfigFile(format!(
+            "{} no longer exists",
+            path.display()
+        )));
+    }
     // load_config_file parses and validates everything; on error nothing below runs.
     let (new_cfg, hash) = crate::config::load_config_file_with_hash(&path).map_err(|e| match e {
-        ConfigError::Io(msg) => ReloadError::NoConfigFile(msg),
+        ConfigError::Io(msg) => ReloadError::Unreadable(msg),
         other => ReloadError::Invalid(other.to_string()),
     })?;
     let hash = Some(hash);
     let restart_required = restart_required_fields(&ctx.startup, &new_cfg);
-    let applied = applied_fields(&crate::config::get_static_config(), &new_cfg);
+    let running = crate::config::get_static_config();
+    let applied = applied_fields(&running, &new_cfg);
 
-    // Restart-only fields keep their startup values so /config shows what is actually running.
+    // Restart-only fields keep their running values so /config shows what is actually running.
     let mut active = new_cfg;
-    active.server.listen = ctx.startup.server.listen.clone();
-    active.server.port = ctx.startup.server.port;
-    active.logging.backup_count = ctx.startup.logging.backup_count;
-    active.logging.audit_max_size_bytes = ctx.startup.logging.audit_max_size_bytes;
+    active.server.listen = running.server.listen;
+    active.server.port = running.server.port;
+    active.logging.backup_count = running.logging.backup_count;
+    active.logging.audit_max_size_bytes = running.logging.audit_max_size_bytes;
     crate::daemon::set_rotate_limits(active.logging.max_size_bytes, active.logging.backup_count as i32);
     crate::config::set_static_config(active);
 
@@ -579,6 +605,10 @@ pub async fn reload_config() -> Response<ProxyBody> {
     match tokio::task::spawn_blocking(reload_blocking).await {
         Ok(Ok(body)) => ok(body),
         Ok(Err(ReloadError::NoConfigFile(msg))) => api_error(StatusCode::BAD_REQUEST, "NO_CONFIG_FILE", &msg),
+        Ok(Err(ReloadError::Unreadable(msg))) => {
+            log_error(format!("config reload failed: {msg}"));
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "CONFIG_UNREADABLE", &msg)
+        }
         // The caller passed the control gate; the validation message is what they need to fix the file.
         Ok(Err(ReloadError::Invalid(msg))) => api_error(StatusCode::BAD_REQUEST, "INVALID_CONFIG", &msg),
         Err(_) => internal_error(),

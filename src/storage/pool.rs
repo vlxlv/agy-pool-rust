@@ -784,6 +784,19 @@ pub fn load_pool() -> Result<Pool, StorageError> {
     sdb.view(load_pool_from_tx)
 }
 
+/// (all accounts, accounts not disabled) without reading any tokens.
+pub fn account_counts() -> Result<(i64, i64), StorageError> {
+    ensure_dirs()?;
+    StateDb::global()?.view(|tx| {
+        Ok(tx.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(COALESCE(r.status, '') != ?1), 0)
+             FROM accounts a LEFT JOIN account_runtime r ON r.account_id = a.id",
+            [super::STATUS_DISABLED],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    })
+}
+
 /// SavePool replaces the entire pool under an immediate write transaction.
 pub fn save_pool(pool: &Pool) -> Result<(), StorageError> {
     pool_transaction(|p| {

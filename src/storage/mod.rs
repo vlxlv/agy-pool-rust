@@ -579,6 +579,26 @@ mod tests {
         assert_eq!(pool.version, 1);
         assert_eq!(pool.strategy, "smart");
         assert_eq!(pool.accounts.len(), 0);
+        assert_eq!(account_counts().unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn test_account_counts_skip_disabled() {
+        let _env = setup_test_env();
+        let mut p = Pool::new_empty();
+        for (id, status) in [
+            ("acc_1", ""),
+            ("acc_2", STATUS_DISABLED),
+            ("acc_3", STATUS_VALIDATION_REQUIRED),
+        ] {
+            p.accounts.push(Account {
+                id: id.to_string(),
+                status: status.to_string(),
+                ..Default::default()
+            });
+        }
+        save_pool(&p).unwrap();
+        assert_eq!(account_counts().unwrap(), (3, 2));
     }
 
     #[test]
