@@ -824,8 +824,8 @@
       z-index: 50;
       margin: 0;
       width: min(560px, 100vw);
-      height: 100vh;
-      max-height: 100vh;
+      height: 100dvh;
+      max-height: 100dvh;
       box-sizing: border-box;
       overflow: auto;
       padding: 16px;
@@ -1158,6 +1158,7 @@
     // keepToken: a 429 lockout may come from someone else, so the token stays valid.
     function showTokenCard(message, keepToken) {
       authOk = false;
+      document.getElementById('config-dialog').close();
       if (!keepToken) saveToken('');
       if (sseAbort) { sseAbort.abort(); sseAbort = null; }
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -2145,7 +2146,7 @@
     const configView = document.getElementById('config-view');
 
     function renderConfig(data) {
-      configView.textContent = JSON.stringify(Object.assign({ config_path: data.config_path }, data.config), null, 2);
+      configView.textContent = data.config ? JSON.stringify(Object.assign({ config_path: data.config_path }, data.config), null, 2) : '';
       const restart = data.restart_required_fields || [];
       const note = document.getElementById('config-restart');
       note.hidden = restart.length === 0;
@@ -2157,7 +2158,7 @@
       list.innerHTML = '<li>Running checks…</li>';
       try {
         const [cfgRes, diagRes] = await Promise.all([agyFetch('/api/v1/config'), agyFetch('/api/v1/diagnostics')]);
-        if (cfgRes.ok) renderConfig(await cfgRes.json());
+        renderConfig(cfgRes.ok ? await cfgRes.json() : {});
         if (!diagRes.ok) throw new Error(`HTTP ${diagRes.status}`);
         const d = await diagRes.json();
         list.innerHTML = d.checks.map(c => `<li class="diag-${escapeHtml(c.status)}">${DIAG_ICONS[c.status] || '?'} <strong>${escapeHtml(c.name)}</strong>: ${escapeHtml(c.detail)}</li>`).join('');

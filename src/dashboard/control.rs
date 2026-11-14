@@ -502,9 +502,10 @@ fn applied_fields(current: &StaticConfig, new: &StaticConfig) -> Vec<String> {
             "logging.max_size_bytes",
             current.logging.max_size_bytes != new.logging.max_size_bytes,
         ),
+        // Compares the effective tokens: AGY_POOL_DASHBOARD_TOKEN overrides config.json.
         (
             "dashboard.auth_token",
-            current.dashboard.auth_token != new.dashboard.auth_token,
+            crate::config::dashboard_token(&current.dashboard) != crate::config::dashboard_token(&new.dashboard),
         ),
         (
             "dashboard.allow_unauthenticated_control",
@@ -532,11 +533,11 @@ fn reload_blocking() -> Result<serde_json::Value, ReloadError> {
         ));
     };
     // load_config_file parses and validates everything; on error nothing below runs.
-    let new_cfg = crate::config::load_config_file(&path).map_err(|e| match e {
+    let (new_cfg, hash) = crate::config::load_config_file_with_hash(&path).map_err(|e| match e {
         ConfigError::Io(msg) => ReloadError::NoConfigFile(msg),
         other => ReloadError::Invalid(other.to_string()),
     })?;
-    let hash = crate::config::compute_config_file_hash(&path).ok();
+    let hash = Some(hash);
     let restart_required = restart_required_fields(&ctx.startup, &new_cfg);
     let applied = applied_fields(&crate::config::get_static_config(), &new_cfg);
 
