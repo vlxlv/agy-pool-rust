@@ -195,8 +195,26 @@ mod tests {
         };
         crate::storage::save_pool(&pool).unwrap();
         let now = crate::clock::now_unix() as i64;
-        crate::storage::tokens::record_token_usage_at("acc_1", 12_000, 2_000, 3_000, 1_000, false, now);
-        crate::storage::tokens::record_token_usage_at("acc_1", 50_000, 0, 0, 0, false, now - 3 * 86400);
+        crate::storage::tokens::record_token_usage_at(
+            "acc_1",
+            "gemini-3-flash",
+            12_000,
+            2_000,
+            3_000,
+            1_000,
+            false,
+            now,
+        );
+        crate::storage::tokens::record_token_usage_at(
+            "acc_1",
+            "gemini-3-flash",
+            50_000,
+            0,
+            0,
+            0,
+            false,
+            now - 3 * 86400,
+        );
         crate::storage::tokens::flush_token_usage().unwrap();
 
         let (code, stdout, stderr) = crate::cli::test_support::run_cli(&["tokens"], "").await;

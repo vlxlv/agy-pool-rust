@@ -317,6 +317,19 @@ pub struct TokenAccountDto {
     pub pool_share: Option<f64>,
 }
 
+/// One account's usage of one model on one UTC day, so the dashboard can price it at that model's rate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokenModelDto {
+    /// UTC day, YYYY-MM-DD.
+    pub day: String,
+    pub account_id: String,
+    pub model: String,
+    /// Prompts over 200K tokens, billed at the long-context rate.
+    pub long_context: bool,
+    #[serde(flatten)]
+    pub totals: TokenTotalsDto,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokensResponse {
     pub range: String,
@@ -324,6 +337,8 @@ pub struct TokensResponse {
     pub window_start: Option<i64>,
     pub summary: TokenTotalsDto,
     pub accounts: Vec<TokenAccountDto>,
+    /// The same usage split by day, account and model; usage recorded before per-model tracking is not in it.
+    pub by_model: Vec<TokenModelDto>,
 }
 
 pub fn build_tokens_response(
@@ -331,6 +346,16 @@ pub fn build_tokens_response(
     now_unix: i64,
 ) -> Result<TokensResponse, crate::storage::StorageError> {
     let usage = crate::storage::tokens::usage_by_account(range, now_unix)?;
+    let by_model = crate::storage::tokens::usage_by_model(range, now_unix)?
+        .into_iter()
+        .map(|((day, account_id, model, long_context), c)| TokenModelDto {
+            day,
+            account_id,
+            model,
+            long_context,
+            totals: (&c).into(),
+        })
+        .collect();
     let pool = crate::storage::load_pool().unwrap_or_default();
     let summary = crate::storage::tokens::sum(&usage);
     let pool_total = summary.total();
@@ -354,6 +379,7 @@ pub fn build_tokens_response(
         window_start: range.start_bucket(now_unix),
         summary: (&summary).into(),
         accounts,
+        by_model,
     })
 }
 

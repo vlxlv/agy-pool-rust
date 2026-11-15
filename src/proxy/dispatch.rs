@@ -836,6 +836,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
     if params.is_generation {
         crate::storage::tokens::record_token_usage(
             &params.acc.id,
+            params.model,
             tokens.prompt,
             tokens.cached,
             tokens.output,

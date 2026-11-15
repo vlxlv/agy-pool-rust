@@ -1,4 +1,5 @@
-//! Hourly token usage per account (`token_usage_hourly` in state.db).
+//! Hourly token usage per account (`token_usage_hourly` in state.db), and the same usage split by model
+//! (`token_usage_model_hourly`) so the dashboard can price it per model.
 //!
 //! The proxy adds each finished generation attempt to an in-memory map (no I/O on the request path);
 //! the daemon flushes the map every FLUSH_INTERVAL in one transaction, so token accounting never
@@ -19,7 +20,23 @@ pub const TOKEN_USAGE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS token_usage_hour
 	request_count INTEGER NOT NULL DEFAULT 0,
 	aborted_count INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (hour_bucket, account_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS token_usage_model_hourly (
+	hour_bucket INTEGER NOT NULL,
+	account_id TEXT NOT NULL,
+	model TEXT NOT NULL,
+	long_context INTEGER NOT NULL,
+	prompt_tokens INTEGER NOT NULL DEFAULT 0,
+	cached_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	thinking_tokens INTEGER NOT NULL DEFAULT 0,
+	request_count INTEGER NOT NULL DEFAULT 0,
+	aborted_count INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (hour_bucket, account_id, model, long_context)
 ) WITHOUT ROWID;"#;
+
+/// Requests with a prompt above this many tokens bill at the long-context rate.
+pub const LONG_CONTEXT_PROMPT_TOKENS: i64 = 200_000;
 
 /// Usage of removed accounts is kept under this id, because account ids are reused (`next_account_id`).
 pub const REMOVED_ACCOUNT_ID: &str = "_removed";
@@ -31,6 +48,18 @@ const UPSERT_SQL: &str = "INSERT INTO token_usage_hourly
 	(hour_bucket, account_id, prompt_tokens, cached_tokens, output_tokens, thinking_tokens, request_count, aborted_count)
 	VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 	ON CONFLICT(hour_bucket, account_id) DO UPDATE SET
+		prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+		cached_tokens = cached_tokens + excluded.cached_tokens,
+		output_tokens = output_tokens + excluded.output_tokens,
+		thinking_tokens = thinking_tokens + excluded.thinking_tokens,
+		request_count = request_count + excluded.request_count,
+		aborted_count = aborted_count + excluded.aborted_count";
+
+const MODEL_UPSERT_SQL: &str = "INSERT INTO token_usage_model_hourly
+	(hour_bucket, account_id, model, long_context, prompt_tokens, cached_tokens, output_tokens, thinking_tokens,
+		request_count, aborted_count)
+	VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+	ON CONFLICT(hour_bucket, account_id, model, long_context) DO UPDATE SET
 		prompt_tokens = prompt_tokens + excluded.prompt_tokens,
 		cached_tokens = cached_tokens + excluded.cached_tokens,
 		output_tokens = output_tokens + excluded.output_tokens,
@@ -112,7 +141,8 @@ pub fn hour_bucket(ts: i64) -> i64 {
     ts - ts.rem_euclid(3600)
 }
 
-type PendingMap = HashMap<(i64, String), TokenCounts>;
+/// (hour bucket, account id, model, long context) -> usage.
+type PendingMap = HashMap<(i64, String, String, bool), TokenCounts>;
 
 static PENDING: LazyLock<Mutex<PendingMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -121,13 +151,23 @@ fn pending() -> MutexGuard<'static, PendingMap> {
 }
 
 /// Adds one finished generation attempt to the pending usage. Never touches the database.
-pub fn record_token_usage(account_id: &str, prompt: i64, cached: i64, output: i64, thinking: i64, aborted: bool) {
+pub fn record_token_usage(
+    account_id: &str,
+    model: &str,
+    prompt: i64,
+    cached: i64,
+    output: i64,
+    thinking: i64,
+    aborted: bool,
+) {
     let now = crate::clock::now_unix() as i64;
-    record_token_usage_at(account_id, prompt, cached, output, thinking, aborted, now);
+    record_token_usage_at(account_id, model, prompt, cached, output, thinking, aborted, now);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record_token_usage_at(
     account_id: &str,
+    model: &str,
     prompt: i64,
     cached: i64,
     output: i64,
@@ -147,8 +187,9 @@ pub fn record_token_usage_at(
         requests: 1,
         aborted: i64::from(aborted),
     };
+    let long = delta.prompt > LONG_CONTEXT_PROMPT_TOKENS;
     pending()
-        .entry((hour_bucket(now_unix), account_id.to_string()))
+        .entry((hour_bucket(now_unix), account_id.to_string(), model.to_string(), long))
         .or_default()
         .add(&delta);
 }
@@ -158,8 +199,8 @@ pub fn clear_pending() {
     pending().clear();
 }
 
-/// Writes pending usage to state.db in one transaction and returns how many (hour, account) rows it
-/// touched. On failure the usage is put back for the next flush.
+/// Writes pending usage to state.db in one transaction and returns how many (hour, account, model) entries
+/// it wrote. On failure the usage is put back for the next flush.
 // shortcut: usage is attributed by account id at flush time, so if an id is removed and reused within one
 // flush interval (or during a stream that outlives the removal) that usage lands on the new account; key
 // pending entries by a never-reused account identity if that matters.
@@ -172,7 +213,8 @@ pub fn flush_token_usage() -> Result<usize, StorageError> {
         db.update(|tx| {
             let mut exists = tx.prepare("SELECT 1 FROM accounts WHERE id = ?1")?;
             let mut upsert = tx.prepare(UPSERT_SQL)?;
-            for ((bucket, id), c) in &batch {
+            let mut model_upsert = tx.prepare(MODEL_UPSERT_SQL)?;
+            for ((bucket, id, model, long), c) in &batch {
                 // The account was removed after the request finished: keep the usage with the other removed accounts.
                 let id = if exists.exists([id.as_str()])? {
                     id.as_str()
@@ -181,6 +223,9 @@ pub fn flush_token_usage() -> Result<usize, StorageError> {
                 };
                 upsert.execute(rusqlite::params![
                     bucket, id, c.prompt, c.cached, c.output, c.thinking, c.requests, c.aborted
+                ])?;
+                model_upsert.execute(rusqlite::params![
+                    bucket, id, model, long, c.prompt, c.cached, c.output, c.thinking, c.requests, c.aborted
                 ])?;
             }
             Ok(())
@@ -232,6 +277,26 @@ pub fn fold_removed_account_tx(tx: &rusqlite::Transaction, account_id: &str) -> 
         rusqlite::params![account_id, REMOVED_ACCOUNT_ID],
     )?;
     tx.execute("DELETE FROM token_usage_hourly WHERE account_id = ?1", [account_id])?;
+    tx.execute(
+        "INSERT INTO token_usage_model_hourly
+			(hour_bucket, account_id, model, long_context, prompt_tokens, cached_tokens, output_tokens, thinking_tokens,
+				request_count, aborted_count)
+		SELECT hour_bucket, ?2, model, long_context, prompt_tokens, cached_tokens, output_tokens, thinking_tokens,
+			request_count, aborted_count
+		FROM token_usage_model_hourly WHERE account_id = ?1
+		ON CONFLICT(hour_bucket, account_id, model, long_context) DO UPDATE SET
+			prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+			cached_tokens = cached_tokens + excluded.cached_tokens,
+			output_tokens = output_tokens + excluded.output_tokens,
+			thinking_tokens = thinking_tokens + excluded.thinking_tokens,
+			request_count = request_count + excluded.request_count,
+			aborted_count = aborted_count + excluded.aborted_count",
+        rusqlite::params![account_id, REMOVED_ACCOUNT_ID],
+    )?;
+    tx.execute(
+        "DELETE FROM token_usage_model_hourly WHERE account_id = ?1",
+        [account_id],
+    )?;
     Ok(())
 }
 
@@ -264,12 +329,70 @@ pub fn usage_by_account(range: TokenRange, now_unix: i64) -> Result<BTreeMap<Str
         }
         Ok(map)
     })?;
-    for ((bucket, id), c) in pending().iter() {
+    for ((bucket, id, _, _), c) in pending().iter() {
         if *bucket >= start {
             out.entry(id.clone()).or_default().add(c);
         }
     }
     Ok(out)
+}
+
+/// Key of one per-model usage row: UTC day (YYYY-MM-DD), account id, model, long context.
+pub type ModelUsageKey = (String, String, String, bool);
+
+/// Usage within `range` split by UTC day, account and model, including unflushed usage. The day lets a reader
+/// apply date-based price changes. Usage recorded before per-model tracking is missing here but counted by
+/// usage_by_account.
+pub fn usage_by_model(range: TokenRange, now_unix: i64) -> Result<BTreeMap<ModelUsageKey, TokenCounts>, StorageError> {
+    let start = range.start_bucket(now_unix).unwrap_or(i64::MIN);
+    let mut out = StateDb::global()?.view(|tx| {
+        let mut stmt = tx.prepare(
+            "SELECT hour_bucket - (hour_bucket % 86400) AS day, account_id, model, long_context,
+				SUM(prompt_tokens), SUM(cached_tokens), SUM(output_tokens), SUM(thinking_tokens),
+				SUM(request_count), SUM(aborted_count)
+			FROM token_usage_model_hourly WHERE hour_bucket >= ?1
+			GROUP BY day, account_id, model, long_context",
+        )?;
+        let rows = stmt.query_map([start], |r| {
+            Ok((
+                (
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
+                ),
+                TokenCounts {
+                    prompt: r.get(4)?,
+                    cached: r.get(5)?,
+                    output: r.get(6)?,
+                    thinking: r.get(7)?,
+                    requests: r.get(8)?,
+                    aborted: r.get(9)?,
+                },
+            ))
+        })?;
+        let mut map: BTreeMap<ModelUsageKey, TokenCounts> = BTreeMap::new();
+        for row in rows {
+            let ((day, id, model, long), counts) = row?;
+            map.entry((utc_day(day), id, model, long)).or_default().add(&counts);
+        }
+        Ok(map)
+    })?;
+    for ((bucket, id, model, long), c) in pending().iter() {
+        if *bucket >= start {
+            out.entry((utc_day(*bucket), id.clone(), model.clone(), *long))
+                .or_default()
+                .add(c);
+        }
+    }
+    Ok(out)
+}
+
+/// YYYY-MM-DD of the UTC day containing `ts`.
+fn utc_day(ts: i64) -> String {
+    jiff::Timestamp::from_second(ts)
+        .map(|t| t.strftime("%Y-%m-%d").to_string())
+        .unwrap_or_default()
 }
 
 /// Pool-wide total of a usage map.
@@ -368,7 +491,7 @@ mod tests {
         let _e = env();
         save_accounts(&["acc_1"]);
         // -1 is UsageTap's "cached not reported"; a sum must never go negative.
-        record_token_usage_at("acc_1", 100, -1, 20, -5, false, NOW);
+        record_token_usage_at("acc_1", "gemini-3-flash", 100, -1, 20, -5, false, NOW);
         let usage = usage_by_account(TokenRange::Hour, NOW).unwrap();
         let c = usage["acc_1"];
         assert_eq!(
@@ -389,9 +512,9 @@ mod tests {
     fn flush_aggregates_per_hour_and_account() {
         let _e = env();
         save_accounts(&["acc_1", "acc_2"]);
-        record_token_usage_at("acc_1", 1000, 400, 200, 100, false, NOW);
-        record_token_usage_at("acc_1", 10, 0, 1, 0, true, NOW + 5);
-        record_token_usage_at("acc_2", 50, 0, 5, 0, false, NOW);
+        record_token_usage_at("acc_1", "gemini-3-flash", 1000, 400, 200, 100, false, NOW);
+        record_token_usage_at("acc_1", "gemini-3-flash", 10, 0, 1, 0, true, NOW + 5);
+        record_token_usage_at("acc_2", "gemini-3-flash", 50, 0, 5, 0, false, NOW);
         assert_eq!(flush_token_usage().unwrap(), 2, "two (hour, account) keys");
         assert_eq!(flush_token_usage().unwrap(), 0, "pending map is empty after a flush");
 
@@ -417,7 +540,7 @@ mod tests {
         assert_eq!(sum(&usage).total(), 1010 + 201 + 100 + 50 + 5);
 
         // A second flush into the same hour adds to the row instead of replacing it.
-        record_token_usage_at("acc_2", 50, 0, 5, 0, false, NOW + 10);
+        record_token_usage_at("acc_2", "gemini-3-flash", 50, 0, 5, 0, false, NOW + 10);
         flush_token_usage().unwrap();
         assert_eq!(usage_by_account(TokenRange::Hour, NOW).unwrap()["acc_2"].prompt, 100);
     }
@@ -426,9 +549,9 @@ mod tests {
     fn unflushed_usage_is_visible_to_readers() {
         let _e = env();
         save_accounts(&["acc_1"]);
-        record_token_usage_at("acc_1", 7, 0, 3, 0, false, NOW);
+        record_token_usage_at("acc_1", "gemini-3-flash", 7, 0, 3, 0, false, NOW);
         flush_token_usage().unwrap();
-        record_token_usage_at("acc_1", 1, 0, 1, 0, false, NOW);
+        record_token_usage_at("acc_1", "gemini-3-flash", 1, 0, 1, 0, false, NOW);
         let usage = usage_by_account(TokenRange::Total, NOW).unwrap();
         assert_eq!(usage["acc_1"].prompt, 8);
         assert_eq!(usage["acc_1"].requests, 2);
@@ -438,10 +561,10 @@ mod tests {
     fn ranges_select_hour_buckets() {
         let _e = env();
         save_accounts(&["acc_1"]);
-        record_token_usage_at("acc_1", 1, 0, 0, 0, false, NOW); // this hour
-        record_token_usage_at("acc_1", 10, 0, 0, 0, false, NOW - 2 * 3600); // 2h ago
-        record_token_usage_at("acc_1", 100, 0, 0, 0, false, NOW - 30 * 3600); // 30h ago
-        record_token_usage_at("acc_1", 1000, 0, 0, 0, false, NOW - 200 * 3600); // ~8 days ago
+        record_token_usage_at("acc_1", "gemini-3-flash", 1, 0, 0, 0, false, NOW); // this hour
+        record_token_usage_at("acc_1", "gemini-3-flash", 10, 0, 0, 0, false, NOW - 2 * 3600); // 2h ago
+        record_token_usage_at("acc_1", "gemini-3-flash", 100, 0, 0, 0, false, NOW - 30 * 3600); // 30h ago
+        record_token_usage_at("acc_1", "gemini-3-flash", 1000, 0, 0, 0, false, NOW - 200 * 3600); // ~8 days ago
         flush_token_usage().unwrap();
         let prompt = |r| {
             usage_by_account(r, NOW)
@@ -460,9 +583,9 @@ mod tests {
     fn removed_account_usage_moves_to_removed_row() {
         let _e = env();
         save_accounts(&["acc_1", "acc_2"]);
-        record_token_usage_at("acc_1", 100, 0, 10, 0, false, NOW);
-        record_token_usage_at("acc_2", 200, 0, 20, 0, false, NOW);
-        record_token_usage_at("acc_2", 300, 0, 30, 0, false, NOW - 5 * 3600);
+        record_token_usage_at("acc_1", "gemini-3-flash", 100, 0, 10, 0, false, NOW);
+        record_token_usage_at("acc_2", "gemini-3-flash", 200, 0, 20, 0, false, NOW);
+        record_token_usage_at("acc_2", "gemini-3-flash", 300, 0, 30, 0, false, NOW - 5 * 3600);
         flush_token_usage().unwrap();
         let before = sum(&usage_by_account(TokenRange::Total, NOW).unwrap());
 
@@ -477,7 +600,7 @@ mod tests {
         assert!(!usage_by_account(TokenRange::Total, NOW).unwrap().contains_key("acc_2"));
 
         // Removing a second account merges into the same _removed rows.
-        record_token_usage_at("acc_2", 1, 0, 0, 0, false, NOW);
+        record_token_usage_at("acc_2", "gemini-3-flash", 1, 0, 0, 0, false, NOW);
         flush_token_usage().unwrap();
         save_accounts(&["acc_1"]);
         assert_eq!(
@@ -490,7 +613,7 @@ mod tests {
     fn flush_for_unknown_account_goes_to_removed() {
         let _e = env();
         save_accounts(&["acc_1"]);
-        record_token_usage_at("acc_9", 42, 0, 0, 0, false, NOW);
+        record_token_usage_at("acc_9", "gemini-3-flash", 42, 0, 0, 0, false, NOW);
         flush_token_usage().unwrap();
         let usage = usage_by_account(TokenRange::Total, NOW).unwrap();
         assert_eq!(usage[REMOVED_ACCOUNT_ID].prompt, 42);
@@ -498,9 +621,48 @@ mod tests {
     }
 
     #[test]
+    fn usage_by_model_splits_model_day_and_long_context() {
+        let _e = env();
+        save_accounts(&["acc_1", "acc_2"]);
+        let day = NOW - NOW.rem_euclid(86400);
+        record_token_usage_at("acc_1", "gemini-3-flash", 100, 10, 5, 0, false, day + 3600);
+        record_token_usage_at("acc_1", "gemini-3-flash", 300, 0, 5, 0, false, day + 7200);
+        record_token_usage_at("acc_1", "gemini-2.5-pro", 250_000, 0, 1, 0, false, day + 3600);
+        record_token_usage_at("acc_1", "gemini-3-flash", 7, 0, 0, 0, false, day - 3600); // the day before
+        flush_token_usage().unwrap();
+        record_token_usage_at("acc_2", "gemini-3-flash", 1, 0, 0, 0, false, day + 3600); // unflushed
+        let usage = usage_by_model(TokenRange::Total, day + 7200).unwrap();
+        let today = utc_day(day);
+        let key = |id: &str, model: &str, long| (today.clone(), id.to_string(), model.to_string(), long);
+        assert_eq!(
+            usage[&key("acc_1", "gemini-3-flash", false)].prompt,
+            400,
+            "hours of one day merge"
+        );
+        assert_eq!(usage[&key("acc_1", "gemini-3-flash", false)].requests, 2);
+        assert_eq!(
+            usage[&key("acc_1", "gemini-2.5-pro", true)].prompt,
+            250_000,
+            "over 200K is long context"
+        );
+        assert_eq!(usage[&key("acc_2", "gemini-3-flash", false)].prompt, 1);
+        assert_eq!(
+            usage[&(utc_day(day - 3600), "acc_1".into(), "gemini-3-flash".into(), false)].prompt,
+            7
+        );
+        assert_eq!(usage.len(), 4);
+
+        // Removing an account moves its per-model usage too.
+        save_accounts(&["acc_2"]);
+        let usage = usage_by_model(TokenRange::Total, day + 7200).unwrap();
+        assert!(usage.keys().all(|(_, id, _, _)| id != "acc_1"));
+        assert_eq!(usage[&key(REMOVED_ACCOUNT_ID, "gemini-2.5-pro", true)].prompt, 250_000);
+    }
+
+    #[test]
     fn empty_account_id_is_ignored() {
         let _e = env();
-        record_token_usage_at("", 42, 0, 0, 0, false, NOW);
+        record_token_usage_at("", "gemini-3-flash", 42, 0, 0, 0, false, NOW);
         assert_eq!(flush_token_usage().unwrap(), 0);
     }
 

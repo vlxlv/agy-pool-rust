@@ -105,6 +105,7 @@ impl<B> StreamBody<B> {
         if self.params.is_generation && self.params.status < 400 {
             crate::storage::tokens::record_token_usage(
                 &self.params.account_id,
+                &self.params.model,
                 self.usage.prompt,
                 self.usage.cached,
                 self.usage.output,

@@ -1730,11 +1730,11 @@ async fn test_tokens_endpoint() {
     setup_sample_pool();
     agy_pool::storage::tokens::clear_pending();
     let now = agy_pool::clock::now_unix() as i64;
-    agy_pool::storage::tokens::record_token_usage_at("acc_1", 1000, 400, 200, 100, false, now);
+    agy_pool::storage::tokens::record_token_usage_at("acc_1", "gemini-3-flash", 1000, 400, 200, 100, false, now);
     // cached not reported (-1) and an aborted stream
-    agy_pool::storage::tokens::record_token_usage_at("acc_2", 500, -1, 100, 0, true, now);
+    agy_pool::storage::tokens::record_token_usage_at("acc_2", "gemini-3.1-pro-high", 500, -1, 100, 0, true, now);
     // three days ago: only in 7d and total
-    agy_pool::storage::tokens::record_token_usage_at("acc_1", 7000, 0, 0, 0, false, now - 3 * 86400);
+    agy_pool::storage::tokens::record_token_usage_at("acc_1", "gemini-3-flash", 7000, 0, 0, 0, false, now - 3 * 86400);
     agy_pool::storage::tokens::flush_token_usage().unwrap();
 
     set_dashboard_config(Some(TEST_TOKEN), false);
@@ -1770,6 +1770,15 @@ async fn test_tokens_endpoint() {
     assert_eq!(accounts[0]["total_tokens"], 1300);
     assert!((accounts[0]["pool_share"].as_f64().unwrap() - 1300.0 / 1900.0).abs() < 1e-9);
     assert_eq!(accounts[1]["cached_tokens"], 0);
+    // The same usage split by model, for per-model pricing.
+    let by_model = json["by_model"].as_array().unwrap();
+    assert_eq!(by_model.len(), 2, "{by_model:?}");
+    let pro = by_model.iter().find(|r| r["account_id"] == "acc_2").unwrap();
+    assert_eq!(pro["model"], "gemini-3.1-pro-high");
+    assert_eq!(pro["long_context"], false);
+    assert_eq!(pro["prompt_tokens"], 500);
+    assert_eq!(pro["aborted_count"], 1);
+    assert_eq!(pro["day"].as_str().unwrap().len(), 10, "YYYY-MM-DD");
     assert!(
         !String::from_utf8_lossy(&body).contains("@example.com"),
         "never exposes emails"
