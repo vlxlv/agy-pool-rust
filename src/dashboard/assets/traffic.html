@@ -174,6 +174,7 @@
         </div>
         <input type="search" id="stream-search" placeholder="Filter by model, account or status" class="input-search" aria-label="Filter by model, account or status">
         <div class="tools-row">
+          <label class="toggle" title="Only show LLM model generation requests, filtering out internal control plane RPCs"><input type="checkbox" id="stream-gen-only" checked> Generations only</label>
           <button id="pause-btn" type="button" class="btn" aria-pressed="false">Pause</button>
           <button id="clear-btn" type="button" class="btn">Clear</button>
         </div>
@@ -244,6 +245,8 @@
     let streamShown = []; // the rows renderStream drew, so a click maps back to its event
     let streamFilter = 'all';
     let streamSearch = '';
+    let streamGenOnly = true;
+    try { if (localStorage.getItem('agy_stream_gen_only') === 'false') streamGenOnly = false; } catch (_) {}
     let activeTab = 'stream';
     let tokenRange = '24h';
     let tokenPolls = 0;
@@ -333,7 +336,8 @@
       let cost = 0;
       let saved = 0;
       let priced = 0;
-      for (const ev of eventList) {
+      const events = streamGenOnly ? eventList.filter((ev) => Boolean(ev.model)) : eventList;
+      for (const ev of events) {
         const c = costOf(ev);
         if (!c) continue;
         cost += c.cost;
@@ -346,6 +350,7 @@
     }
 
     function streamMatches(ev) {
+      if (streamGenOnly && !ev.model) return false;
       if (streamFilter === 'success' && ev.status >= 400) return false;
       if (streamFilter === 'failover' && !ev.failover) return false;
       if (streamFilter === 'error' && ev.status < 400) return false;
@@ -372,7 +377,7 @@
       tbody.innerHTML = streamShown.map((ev, i) => `
         <tr class="clickable" data-idx="${i}" tabindex="0" title="Show request details">
           <td class="num faint">${formatTime(ev.timestamp)}</td>
-          <td class="num">${escapeHtml(ev.model)}</td>
+          <td class="num">${escapeHtml(ev.model || '—')}</td>
           <td>${escapeHtml(ev.account)}</td>
           <td class="num">${fmtMs(ev.ttfb_ms)} / ${fmtMs(ev.total_ms)}</td>
           <td class="num">${(Number(ev.tokens) || 0).toLocaleString()}</td>
@@ -382,12 +387,13 @@
 
     function renderModelAnalytics() {
       const tbody = $('models-table-body');
-      if (eventList.length === 0) {
+      const events = streamGenOnly ? eventList.filter((ev) => Boolean(ev.model)) : eventList;
+      if (events.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="empty">No requests yet.</td></tr>';
         return;
       }
       const map = new Map();
-      for (const ev of eventList) {
+      for (const ev of events) {
         const m = ev.model || 'unknown';
         if (!map.has(m)) map.set(m, { model: m, reqs: 0, succ: 0, ttfbSum: 0, totalMsSum: 0, tokSum: 0, speedSum: 0, speedCount: 0 });
         const s = map.get(m);
@@ -491,6 +497,16 @@
       e.preventDefault();
       openRequestDetail(streamShown[row.dataset.idx]);
     });
+
+    const genOnlyInput = $('stream-gen-only');
+    if (genOnlyInput) {
+      genOnlyInput.checked = streamGenOnly;
+      genOnlyInput.addEventListener('change', (e) => {
+        streamGenOnly = e.target.checked;
+        try { localStorage.setItem('agy_stream_gen_only', streamGenOnly); } catch (_) {}
+        renderRequests();
+      });
+    }
 
     $('stream-filters').addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-stream-filter]');
