@@ -211,6 +211,10 @@
             <button type="button" data-token-range="7d">7 days</button>
             <button type="button" data-token-range="total">All time</button>
           </div>
+          <div class="seg" role="group" aria-label="Currency">
+            <button type="button" data-currency="usd">USD</button>
+            <button type="button" data-currency="cny" title="At ¥7.24 to the dollar">CNY</button>
+          </div>
         </div>
       </div>
       <div class="legend" id="token-summary">Loading token usage...</div>
@@ -218,10 +222,10 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Account</th><th>Requests</th><th>Prompt</th><th>From cache</th><th>Output</th><th>Thinking</th><th>Total</th><th>Share</th></tr>
+            <tr><th>Account</th><th>Requests</th><th>Prompt</th><th>From cache</th><th>Output</th><th>Thinking</th><th>Total</th><th>Cache Saved</th><th>Share</th></tr>
           </thead>
           <tbody id="token-usage-body">
-            <tr><td colspan="8" class="empty">Loading token usage...</td></tr>
+            <tr><td colspan="9" class="empty">Loading token usage...</td></tr>
           </tbody>
         </table>
       </div>
@@ -243,6 +247,7 @@
     let activeTab = 'stream';
     let tokenRange = '24h';
     let tokenPolls = 0;
+    let lastTokenData = null;
 
     // USD per 1M tokens, copied from https://aistudio.google.com/docs/pricing on 2026-11-15. Thinking bills as
     // output. `until` is the first day a rate stops applying; `long` is the rate for prompts over 200K tokens.
@@ -261,6 +266,9 @@
       'gemini-2.5-flash': [{ in: 0.3, out: 2.5, cache: 0.03 }],
       'gemini-2.5-flash-lite': [{ in: 0.1, out: 0.4, cache: 0.01 }],
     };
+    // Baseline pricing fallback: official Gemini 2.5 Pro commercial API rates ($1.25 prompt, $0.3125 cache, $5.00 out/1M).
+    const BASELINE_PRICE = { in: 1.25, out: 5.0, cache: 0.3125 };
+
     // Longest table key that prefixes the model ("gemini-3.8-flash-high" -> "gemini-3.8-flash"); null if unknown.
     function priceFor(model, timestamp, promptTokens) {
       const m = String(model || '').toLowerCase();
@@ -271,16 +279,26 @@
       const rate = MODEL_PRICES[key].find((r) => !r.until || day < r.until);
       return promptTokens > 200000 && rate.long ? rate.long : rate;
     }
-    // Cost of one request at list price, and what the cached part of its prompt saved; null if the model is unknown.
+    // Cost of one request at list price, and what the cached part of its prompt saved; falls back to baseline pricing.
     function costOf(ev) {
       const prompt = Number(ev.tokens) || 0;
       const cached = Math.min(Number(ev.cached_tokens) || 0, prompt);
-      const rate = priceFor(ev.model, ev.timestamp, prompt);
-      if (!rate) return null;
+      const rate = priceFor(ev.model, ev.timestamp, prompt) || BASELINE_PRICE;
       return {
         rate,
         cost: ((prompt - cached) * rate.in + cached * rate.cache + outputTokens(ev) * rate.out) / 1e6,
         saved: (cached * (rate.in - rate.cache)) / 1e6,
+      };
+    }
+    // Equivalent commercial valuation & prompt cache savings for token totals using Gemini 2.5 Pro baseline pricing.
+    function tokenCostAndSavings(prompt, cached, output, thinking) {
+      const p = Number(prompt) || 0;
+      const c = Math.min(Number(cached) || 0, p);
+      const o = Number(output) || 0;
+      const t = Number(thinking) || 0;
+      return {
+        cost: ((p - c) * 1.25 + c * 0.3125 + (o + t) * 5.0) / 1e6,
+        saved: (c * 0.9375) / 1e6,
       };
     }
 
@@ -292,19 +310,20 @@
       return (currency === 'cny' ? '¥' : '$') + v.toFixed(v > 0 && v < 0.01 ? 4 : 2);
     }
     function syncCurrencyUI() {
-      document.querySelectorAll('#currency-seg button').forEach((b) => {
+      document.querySelectorAll('button[data-currency]').forEach((b) => {
         const on = b.dataset.currency === currency;
         b.classList.toggle('active', on);
         b.setAttribute('aria-pressed', on);
       });
     }
-    $('currency-seg').addEventListener('click', (e) => {
+    document.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-currency]');
       if (!btn) return;
       currency = btn.dataset.currency;
       try { localStorage.setItem('agy_currency', currency); } catch (_) {}
       syncCurrencyUI();
       renderStreamValue();
+      if (lastTokenData) renderTokens(lastTokenData);
       const dlg = $('request-detail-dialog');
       if (dlg.open && dlg._ev) openRequestDetail(dlg._ev);
     });
@@ -322,8 +341,8 @@
         priced += 1;
       }
       $('stream-value').textContent = priced === 0 ? ''
-        : `${fmtMoney(cost)} at list price, ${fmtMoney(saved)} saved by the cache`;
-      $('stream-value').title = `Over the ${priced} recent requests with a known list price`;
+        : `${fmtMoney(cost)} at list price · ${fmtMoney(saved)} saved`;
+      $('stream-value').title = priced === 0 ? '' : `Over the ${priced} recent requests in the live stream`;
     }
 
     function streamMatches(ev) {
@@ -516,7 +535,10 @@
         const res = await agyFetch('/api/v1/tokens?range=' + encodeURIComponent(range));
         if (!res.ok) return;
         const data = await res.json();
-        if (range === tokenRange) renderTokens(data); // a slower reply for an older range must not win
+        if (range === tokenRange) {
+          lastTokenData = data;
+          renderTokens(data);
+        }
       } catch (err) {
         console.error('Failed to fetch token usage:', err);
       }
@@ -524,38 +546,50 @@
     function renderTokens(data) {
       const s = data.summary || {};
       const total = Number(s.total_tokens) || 0;
-      $('token-window').textContent = data.window_start
-        ? 'since ' + new Date(data.window_start * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-        : 'all time';
       const prompt = Number(s.prompt_tokens) || 0;
       const cached = Math.min(Number(s.cached_tokens) || 0, prompt);
+      const output = Number(s.output_tokens) || 0;
+      const thinking = Number(s.thinking_tokens) || 0;
+      const { cost: sumCost, saved: sumSaved } = tokenCostAndSavings(prompt, cached, output, thinking);
+
+      const winText = data.window_start
+        ? 'since ' + new Date(data.window_start * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : 'all time';
+      $('token-window').textContent = `${winText} · ${fmtMoney(sumCost)} value · ${fmtMoney(sumSaved)} saved`;
+
       const parts = [
         ['Total', fmtTokens(total), null],
         ['Prompt', fmtTokens(prompt), 'seg-prompt'],
         ['From cache', fmtTokens(cached) + (prompt > 0 ? ` (${((cached / prompt) * 100).toFixed(1)}%)` : ''), 'seg-cached'],
-        ['Output', fmtTokens(s.output_tokens), 'seg-output'],
-        ['Thinking', fmtTokens(s.thinking_tokens), 'seg-thinking'],
+        ['Output', fmtTokens(output), 'seg-output'],
+        ['Thinking', fmtTokens(thinking), 'seg-thinking'],
+        ['List Value', fmtMoney(sumCost), null],
+        ['Cache Saved', fmtMoney(sumSaved), null, 'var(--ok)'],
         ['Requests', String(Number(s.request_count) || 0), null],
       ];
-      $('token-summary').innerHTML = parts.map(([label, value, seg]) =>
-        `<span>${seg ? `<i class="${seg}"></i>` : ''}${label}<strong class="num">${escapeHtml(value)}</strong></span>`).join('')
+      $('token-summary').innerHTML = parts.map(([label, value, seg, color]) =>
+        `<span>${seg ? `<i class="${seg}"></i>` : ''}${label}<strong class="num"${color ? ` style="color:${color}"` : ''}>${escapeHtml(value)}</strong></span>`).join('')
         + (s.aborted_count ? `<span>${Number(s.aborted_count)} aborted, counted with partial usage</span>` : '');
       // Cached is a part of prompt: the bar shows uncached prompt + cached + output + thinking = total.
       const segments = [
         ['seg-prompt', prompt - cached],
         ['seg-cached', cached],
-        ['seg-output', Number(s.output_tokens) || 0],
-        ['seg-thinking', Number(s.thinking_tokens) || 0],
+        ['seg-output', output],
+        ['seg-thinking', thinking],
       ];
       $('token-bar').innerHTML = total <= 0 ? '' : segments.filter(([, v]) => v > 0)
         .map(([cls, v]) => `<span class="${cls}" style="width:${((v * 100) / total).toFixed(2)}%" title="${fmtTokens(v)}"></span>`).join('');
       const tbody = $('token-usage-body');
       const rows = data.accounts || [];
       if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty">No token usage in this range.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">No token usage in this range.</td></tr>';
         return;
       }
-      tbody.innerHTML = rows.map((a) => `
+      tbody.innerHTML = rows.map((a) => {
+        const aPrompt = Number(a.prompt_tokens) || 0;
+        const aCached = Math.min(Number(a.cached_tokens) || 0, aPrompt);
+        const aSaved = (aCached * 0.9375) / 1e6;
+        return `
         <tr>
           <td>${escapeHtml(a.name || a.account_id)}</td>
           <td class="num">${Number(a.request_count) || 0}</td>
@@ -564,8 +598,10 @@
           <td class="num">${fmtTokens(a.output_tokens)}</td>
           <td class="num">${fmtTokens(a.thinking_tokens)}</td>
           <td class="num">${fmtTokens(a.total_tokens)}</td>
+          <td class="num font-medium" style="color:var(--ok);">${fmtMoney(aSaved)}</td>
           <td class="num">${a.pool_share == null ? '—' : (a.pool_share * 100).toFixed(1) + '%'}</td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
     }
     document.querySelectorAll('button[data-token-range]').forEach((btn) => {
       btn.addEventListener('click', () => {
