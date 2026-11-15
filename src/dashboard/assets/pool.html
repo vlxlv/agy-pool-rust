@@ -111,19 +111,25 @@
 
   <main>
     <section class="hero" aria-label="Pool quota">
-      <div class="gauge">
-        <svg id="gauge" viewBox="0 0 100 70" role="img" aria-label="5-hour quota by account"></svg>
-        <div class="gauge-read">
-          <div class="big num" id="pool-5h-pct">—</div>
-          <div class="sub">of the 5-hour quota left. Next reset in <strong id="pool-next-reset" class="num">—</strong></div>
+      <div class="gauges">
+        <div class="gauge">
+          <svg id="gauge" viewBox="0 0 100 70" role="img" aria-label="5-hour quota by account"></svg>
+          <div class="gauge-read">
+            <div class="gauge-label">5-Hour Quota</div>
+            <div class="big num" id="pool-5h-pct">—</div>
+            <div class="sub">Next reset in <strong id="pool-next-reset" class="num">—</strong></div>
+          </div>
+        </div>
+        <div class="gauge">
+          <svg id="gauge-weekly" viewBox="0 0 100 70" role="img" aria-label="Weekly quota by account"></svg>
+          <div class="gauge-read">
+            <div class="gauge-label">Weekly Quota</div>
+            <div class="big num" id="pool-weekly-pct">—</div>
+            <div class="sub">Next reset in <strong id="pool-weekly-reset" class="num">—</strong></div>
+          </div>
         </div>
       </div>
       <dl class="readouts">
-        <div class="readout">
-          <dt>Weekly quota left</dt>
-          <dd><span id="pool-weekly-pct" class="num">—</span><small id="pool-weekly-reset"></small>
-            <div class="meter" id="pool-weekly-meter"><i style="width:0%"></i></div></dd>
-        </div>
         <div class="readout">
           <dt>Runway at the current pace</dt>
           <dd><span id="metric-runway-text">—</span><small><span id="metric-burnrate" class="num">0.0</span> requests an hour over the last <span id="metric-forecast-window">12h</span></small></dd>
@@ -189,11 +195,13 @@
       const large = startDeg - endDeg > 180 ? 1 : 0;
       return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${GAUGE.r} ${GAUGE.r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
     }
-    function renderGauge() {
+    function renderArcGauge(svgId, windowKey, windowName) {
+      const el = $(svgId);
+      if (!el) return;
       const n = accountsData.length;
       const sw = `stroke-width="${GAUGE.width}" fill="none"`;
       if (n === 0) {
-        $('gauge').innerHTML = `<path class="seg-track" d="${arcPath(GAUGE.from, GAUGE.from - GAUGE.sweep)}" ${sw}/>`;
+        el.innerHTML = `<path class="seg-track" d="${arcPath(GAUGE.from, GAUGE.from - GAUGE.sweep)}" ${sw}/>`;
         return;
       }
       const gap = n > 1 ? Math.min(3, 48 / n) : 0;
@@ -202,17 +210,22 @@
       accountsData.forEach((acc, i) => {
         const start = GAUGE.from - i * (span + gap);
         const d = arcPath(start, start - span);
-        const win = acc.five_hour;
+        const win = acc[windowKey];
         const off = acc.scheduler_state === 'disabled';
         const pct = win ? clampPct(win.remaining_percent) : null;
-        const label = `${acc.name}: ${off ? 'disabled' : (pct === null ? 'no quota data yet' : pct.toFixed(1) + '% of 5-hour quota left')}`;
+        const label = `${acc.name}: ${off ? 'disabled' : (pct === null ? 'no quota data yet' : pct.toFixed(1) + `% of ${windowName} quota left`)}`;
         html += `<g><title>${escapeHtml(label)}</title><path class="${off ? 'seg-off' : 'seg-track'}" d="${d}" ${sw}/>`;
         if (!off && pct !== null && pct > 0) {
           html += `<path class="seg-fill ${levelClass(pct)}" d="${d}" pathLength="100" stroke-dasharray="${pct.toFixed(2)} 100" ${sw}/>`;
         }
         html += '</g>';
       });
-      $('gauge').innerHTML = html;
+      el.innerHTML = html;
+    }
+
+    function renderGauge() {
+      renderArcGauge('gauge', 'five_hour', '5-hour');
+      renderArcGauge('gauge-weekly', 'weekly', 'weekly');
     }
 
     function renderHero() {
@@ -221,10 +234,15 @@
       $('gauge').setAttribute('aria-label', pool.five === null
         ? '5-hour quota by account: no data yet'
         : `5-hour quota: ${pool.five.toFixed(1)}% left on average across ${pool.active} accounts in rotation`);
-      $('pool-weekly-pct').textContent = pool.weekly === null ? '—' : `${pool.weekly.toFixed(1)}%`;
-      const meter = $('pool-weekly-meter');
-      meter.className = `meter ${pool.weekly === null ? '' : levelClass(pool.weekly)}`;
-      meter.firstElementChild.style.width = `${pool.weekly === null ? 0 : pool.weekly}%`;
+
+      $('pool-weekly-pct').innerHTML = pool.weekly === null ? '—' : `${pool.weekly.toFixed(0)}<small>%</small>`;
+      const weeklyGauge = $('gauge-weekly');
+      if (weeklyGauge) {
+        weeklyGauge.setAttribute('aria-label', pool.weekly === null
+          ? 'Weekly quota by account: no data yet'
+          : `Weekly quota: ${pool.weekly.toFixed(1)}% left on average across ${pool.active} accounts in rotation`);
+      }
+
       $('pool-active').textContent = pool.active;
       $('pool-total').textContent = `of ${accountsData.length} accounts`;
       renderResetTimes();
@@ -232,7 +250,7 @@
     function renderResetTimes() {
       const pool = poolSummary();
       $('pool-next-reset').textContent = pool.nextFiveMs === null ? '—' : formatDuration(secondsUntil(pool.nextFiveMs));
-      $('pool-weekly-reset').textContent = pool.nextWeeklyMs === null ? '' : `resets in ${formatDuration(secondsUntil(pool.nextWeeklyMs))}`;
+      $('pool-weekly-reset').textContent = pool.nextWeeklyMs === null ? '—' : formatDuration(secondsUntil(pool.nextWeeklyMs));
     }
 
     function quotaCell(win, kind, safeId) {

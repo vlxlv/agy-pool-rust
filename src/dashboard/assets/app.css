@@ -269,7 +269,8 @@ tr.clickable { cursor: pointer; }
 .row-actions { display: flex; gap: 5px; flex-wrap: wrap; }
 
 /* Pool page: the gauge is the page */
-.hero { display: grid; grid-template-columns: minmax(300px, 460px) 1fr; gap: 40px; align-items: center; }
+.hero { display: grid; grid-template-columns: minmax(460px, 1.5fr) 1fr; gap: 36px; align-items: center; }
+.gauges { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: center; }
 .gauge { position: relative; }
 .gauge svg { display: block; width: 100%; height: auto; overflow: visible; }
 .gauge .seg-track { stroke: var(--track); }
@@ -279,9 +280,10 @@ tr.clickable { cursor: pointer; }
 .gauge .seg-off { stroke: var(--rule); stroke-dasharray: 1 2.2; }
 .gauge .tick { stroke: var(--faint); }
 .gauge-read { position: absolute; left: 0; right: 0; bottom: 6%; text-align: center; }
-.gauge-read .big { font: 600 clamp(52px, 9vw, 84px)/0.95 var(--font-figure); letter-spacing: -0.01em; }
-.gauge-read .big small { font-size: 0.42em; color: var(--muted); margin-left: 2px; }
-.gauge-read .sub { color: var(--muted); margin-top: 6px; }
+.gauge-label { font: 600 11.5px/1.2 var(--font-figure); text-transform: uppercase; letter-spacing: 0.08em; color: var(--faint); margin-bottom: 2px; }
+.gauge-read .big { font: 600 clamp(36px, 4.2vw, 56px)/0.95 var(--font-figure); letter-spacing: -0.01em; }
+.gauge-read .big small { font-size: 0.45em; color: var(--muted); margin-left: 2px; }
+.gauge-read .sub { color: var(--muted); margin-top: 6px; font-size: 12.5px; }
 .gauge-read .sub strong { color: var(--ink); font-weight: 600; }
 .readouts { display: grid; gap: 22px; }
 .readout dt { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
@@ -377,13 +379,18 @@ footer {
   font-size: 12.5px;
 }
 
+@media (max-width: 960px) {
+  .hero { grid-template-columns: 1fr; gap: 28px; }
+}
 @media (max-width: 860px) {
   .topbar { height: auto; flex-wrap: wrap; padding: 10px 16px; gap: 10px 16px; }
   .tools { margin-left: 0; width: 100%; justify-content: flex-start; }
   main { padding: 20px 16px 40px; }
-  .hero { grid-template-columns: 1fr; gap: 24px; }
   .kv { grid-template-columns: repeat(2, 1fr); }
   .input-search { width: 100%; }
+}
+@media (max-width: 600px) {
+  .gauges { grid-template-columns: 1fr; gap: 24px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
