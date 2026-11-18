@@ -690,8 +690,9 @@
       const container = $('donut-chart-container');
       const meta = $('donut-meta');
       if (!container) return;
-      const valid = (accounts || []).filter((a) => Number(a.totals?.total_tokens) > 0);
-      if (!valid.length || total <= 0) {
+      const valid = (accounts || []).filter((a) => (Number(a.total_tokens) || Number(a.totals?.total_tokens) || 0) > 0);
+      const totalTokens = total > 0 ? total : valid.reduce((sum, a) => sum + (Number(a.total_tokens) || Number(a.totals?.total_tokens) || 0), 0);
+      if (!valid.length || totalTokens <= 0) {
         container.innerHTML = '<div class="empty" style="margin:auto">No token activity across accounts</div>';
         if (meta) meta.textContent = '';
         return;
@@ -704,8 +705,8 @@
       let offset = 0;
 
       const slices = valid.map((acc, i) => {
-        const tokens = Number(acc.totals?.total_tokens) || 0;
-        const share = tokens / total;
+        const tokens = Number(acc.total_tokens) || Number(acc.totals?.total_tokens) || 0;
+        const share = tokens / totalTokens;
         const pct = share < 0.001 ? '<0.1%' : (share * 100).toFixed(1) + '%';
         const length = share * circumference;
         const start = offset;
@@ -733,7 +734,7 @@
               <title>${escapeHtml(s.name)}: ${fmtTokens(s.tokens)} (${s.pct})</title>
             </circle>
           `).join('')}
-          <text x="50" y="48" text-anchor="middle" class="donut-center-val">${fmtTokens(total)}</text>
+          <text x="50" y="48" text-anchor="middle" class="donut-center-val">${fmtTokens(totalTokens)}</text>
           <text x="50" y="60" text-anchor="middle" class="donut-center-sub">TOKENS</text>
         </svg>
         <div class="donut-legend">
