@@ -388,6 +388,43 @@ pub fn usage_by_model(range: TokenRange, now_unix: i64) -> Result<BTreeMap<Model
     Ok(out)
 }
 
+/// Usage aggregated by hour bucket within `range`, including usage this process has not flushed yet.
+pub fn usage_hourly_buckets(range: TokenRange, now_unix: i64) -> Result<BTreeMap<i64, TokenCounts>, StorageError> {
+    let start = range.start_bucket(now_unix).unwrap_or(i64::MIN);
+    let mut out = StateDb::global()?.view(|tx| {
+        let mut stmt = tx.prepare(
+            "SELECT hour_bucket, SUM(prompt_tokens), SUM(cached_tokens), SUM(output_tokens), SUM(thinking_tokens),
+				SUM(request_count), SUM(aborted_count)
+			FROM token_usage_hourly WHERE hour_bucket >= ?1 GROUP BY hour_bucket ORDER BY hour_bucket ASC",
+        )?;
+        let rows = stmt.query_map([start], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                TokenCounts {
+                    prompt: r.get(1)?,
+                    cached: r.get(2)?,
+                    output: r.get(3)?,
+                    thinking: r.get(4)?,
+                    requests: r.get(5)?,
+                    aborted: r.get(6)?,
+                },
+            ))
+        })?;
+        let mut map = BTreeMap::new();
+        for row in rows {
+            let (bucket, counts) = row?;
+            map.insert(bucket, counts);
+        }
+        Ok(map)
+    })?;
+    for ((bucket, _, _, _), c) in pending().iter() {
+        if *bucket >= start {
+            out.entry(*bucket).or_default().add(c);
+        }
+    }
+    Ok(out)
+}
+
 /// YYYY-MM-DD of the UTC day containing `ts`.
 fn utc_day(ts: i64) -> String {
     jiff::Timestamp::from_second(ts)
@@ -577,6 +614,11 @@ mod tests {
         assert_eq!(prompt(TokenRange::Day), 11);
         assert_eq!(prompt(TokenRange::Week), 111);
         assert_eq!(prompt(TokenRange::Total), 1111);
+
+        let buckets_day = usage_hourly_buckets(TokenRange::Day, NOW).unwrap();
+        assert_eq!(buckets_day.len(), 2);
+        let buckets_total = usage_hourly_buckets(TokenRange::Total, NOW).unwrap();
+        assert_eq!(buckets_total.len(), 4);
     }
 
     #[test]

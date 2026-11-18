@@ -331,6 +331,17 @@ pub struct TokenModelDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokenBucketDto {
+    pub timestamp: i64,
+    pub prompt_tokens: i64,
+    pub cached_tokens: i64,
+    pub output_tokens: i64,
+    pub thinking_tokens: i64,
+    pub request_count: i64,
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokensResponse {
     pub range: String,
     /// Unix start of the first hour bucket in the range; null for "total".
@@ -339,6 +350,8 @@ pub struct TokensResponse {
     pub accounts: Vec<TokenAccountDto>,
     /// The same usage split by day, account and model; usage recorded before per-model tracking is not in it.
     pub by_model: Vec<TokenModelDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckets: Vec<TokenBucketDto>,
 }
 
 pub fn build_tokens_response(
@@ -346,6 +359,19 @@ pub fn build_tokens_response(
     now_unix: i64,
 ) -> Result<TokensResponse, crate::storage::StorageError> {
     let usage = crate::storage::tokens::usage_by_account(range, now_unix)?;
+    let buckets_map = crate::storage::tokens::usage_hourly_buckets(range, now_unix)?;
+    let buckets: Vec<TokenBucketDto> = buckets_map
+        .into_iter()
+        .map(|(ts, c)| TokenBucketDto {
+            timestamp: ts,
+            prompt_tokens: c.prompt,
+            cached_tokens: c.cached,
+            output_tokens: c.output,
+            thinking_tokens: c.thinking,
+            request_count: c.requests,
+            total_tokens: c.total(),
+        })
+        .collect();
     let by_model = crate::storage::tokens::usage_by_model(range, now_unix)?
         .into_iter()
         .map(|((day, account_id, model, long_context), c)| TokenModelDto {
@@ -380,6 +406,7 @@ pub fn build_tokens_response(
         summary: (&summary).into(),
         accounts,
         by_model,
+        buckets,
     })
 }
 
