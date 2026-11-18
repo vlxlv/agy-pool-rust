@@ -232,8 +232,11 @@
         </div>
         <div class="chart-card" id="donut-card">
           <div class="chart-card-head">
-            <span class="chart-card-title">Account Distribution</span>
-            <span class="chart-card-meta" id="donut-meta"></span>
+            <span class="chart-card-title">Token Distribution</span>
+            <div class="seg donut-seg" role="group" aria-label="Distribution by">
+              <button type="button" class="active" id="donut-by-account">Accounts</button>
+              <button type="button" id="donut-by-model">Models</button>
+            </div>
           </div>
           <div class="donut-wrap" id="donut-chart-container">
             <div class="empty" style="margin:auto">No distribution data</div>
@@ -272,6 +275,7 @@
     let tokenRange = '24h';
     let tokenPolls = 0;
     let lastTokenData = null;
+    let donutMode = 'accounts';
 
     // USD per 1M tokens, copied from https://aistudio.google.com/docs/pricing on 2026-11-15. Thinking bills as
     // output. `until` is the first day a rate stops applying; `long` is the rate for prompts over 200K tokens.
@@ -686,35 +690,60 @@
       `;
     }
 
-    function drawDonutChart(accounts, total) {
+    function drawDonutChart(data) {
       const container = $('donut-chart-container');
-      const meta = $('donut-meta');
-      if (!container) return;
-      const valid = (accounts || []).filter((a) => (Number(a.total_tokens) || Number(a.totals?.total_tokens) || 0) > 0);
-      const totalTokens = total > 0 ? total : valid.reduce((sum, a) => sum + (Number(a.total_tokens) || Number(a.totals?.total_tokens) || 0), 0);
-      if (!valid.length || totalTokens <= 0) {
-        container.innerHTML = '<div class="empty" style="margin:auto">No token activity across accounts</div>';
-        if (meta) meta.textContent = '';
+      if (!container || !data) return;
+      const s = data.summary || {};
+      const total = Number(s.total_tokens) || 0;
+
+      let items = [];
+      if (donutMode === 'models') {
+        const modelMap = new Map();
+        for (const bm of data.by_model || []) {
+          const m = bm.model || 'unknown';
+          const toks = Number(bm.total_tokens) || (Number(bm.prompt_tokens || 0) + Number(bm.output_tokens || 0) + Number(bm.thinking_tokens || 0));
+          modelMap.set(m, (modelMap.get(m) || 0) + toks);
+        }
+        items = [...modelMap.entries()]
+          .map(([model, tokens]) => ({
+            name: model.replace(/^gemini-/, '').replace(/-preview$/, ''),
+            fullName: model,
+            tokens,
+          }))
+          .filter((it) => it.tokens > 0)
+          .sort((a, b) => b.tokens - a.tokens);
+      } else {
+        items = (data.accounts || [])
+          .map((a) => ({
+            name: a.name || a.account_id,
+            fullName: a.account_id,
+            tokens: Number(a.total_tokens) || Number(a.totals?.total_tokens) || 0,
+          }))
+          .filter((it) => it.tokens > 0);
+      }
+
+      const totalTokens = total > 0 ? total : items.reduce((sum, it) => sum + it.tokens, 0);
+      if (!items.length || totalTokens <= 0) {
+        container.innerHTML = `<div class="empty" style="margin:auto">No token activity across ${donutMode}</div>`;
         return;
       }
-      if (meta) meta.textContent = `${valid.length} active`;
 
       const colors = ['#e3b04b', '#7cc59b', '#8fb4e3', '#b9a2ec', '#ec8c5b', '#ef6467', '#34d399', '#38bdf8'];
       const r = 38;
       const circumference = 2 * Math.PI * r;
       let offset = 0;
 
-      const slices = valid.map((acc, i) => {
-        const tokens = Number(acc.total_tokens) || Number(acc.totals?.total_tokens) || 0;
-        const share = tokens / totalTokens;
+      const slices = items.map((it, i) => {
+        const share = it.tokens / totalTokens;
         const pct = share < 0.001 ? '<0.1%' : (share * 100).toFixed(1) + '%';
         const length = share * circumference;
         const start = offset;
         offset += length;
         const color = colors[i % colors.length];
         return {
-          name: acc.name || acc.account_id,
-          tokens,
+          name: it.name,
+          fullName: it.fullName,
+          tokens: it.tokens,
           share,
           pct,
           length,
@@ -739,7 +768,7 @@
         </svg>
         <div class="donut-legend">
           ${slices.map((s) => `
-            <div class="donut-legend-item" title="${escapeHtml(s.name)}: ${fmtTokens(s.tokens)} (${s.pct})">
+            <div class="donut-legend-item" title="${escapeHtml(s.fullName || s.name)}: ${fmtTokens(s.tokens)} (${s.pct})">
               <span class="donut-legend-label">
                 <span class="donut-legend-dot" style="background:${s.color}"></span>
                 <span class="num">${escapeHtml(s.name)}</span>
@@ -766,7 +795,7 @@
       $('token-window').textContent = winText;
 
       drawTrendChart(data.buckets || []);
-      drawDonutChart(data.accounts || [], total);
+      drawDonutChart(data);
 
       const parts = [
         ['Total', fmtTokens(total), null],
@@ -801,11 +830,39 @@
       $('token-price-note').hidden = gaps.length === 0;
       $('token-price-note').textContent = gaps.length === 0 ? '' : `Not counted in the money figures: ${gaps.join('; ')}.`;
       if (rows.length === 0) return;
+
+      const accountModelsMap = new Map();
+      if (data.by_model) {
+        for (const bm of data.by_model) {
+          if (!accountModelsMap.has(bm.account_id)) accountModelsMap.set(bm.account_id, new Map());
+          const accMap = accountModelsMap.get(bm.account_id);
+          const m = bm.model || 'unknown';
+          if (!accMap.has(m)) accMap.set(m, { model: m, reqs: 0, tokens: 0 });
+          const entry = accMap.get(m);
+          entry.reqs += Number(bm.request_count) || 0;
+          entry.tokens += Number(bm.total_tokens) || (Number(bm.prompt_tokens || 0) + Number(bm.output_tokens || 0) + Number(bm.thinking_tokens || 0));
+        }
+      }
+
       tbody.innerHTML = rows.map((a) => {
         const money = priced.accounts.get(a.account_id);
+        const accModels = accountModelsMap.has(a.account_id)
+          ? [...accountModelsMap.get(a.account_id).values()].sort((x, y) => y.tokens - x.tokens)
+          : [];
+        const modelsHtml = accModels.length > 0
+          ? `<div class="acc-models">${accModels.map((m) => {
+              const sm = (m.model || '').replace(/^gemini-/, '').replace(/-preview$/, '');
+              const reqs = m.reqs;
+              const toks = fmtTokens(m.tokens);
+              return `<span class="model-tag" title="${escapeHtml(m.model)}: ${reqs.toLocaleString()} reqs, ${toks}">` +
+                `<span class="model-tag-name">${escapeHtml(sm)}</span>` +
+                `<span class="model-tag-count">${reqs >= 1000 ? (reqs / 1000).toFixed(1) + 'k' : reqs}</span>` +
+                `<span class="model-tag-tokens">${toks}</span></span>`;
+            }).join('')}</div>`
+          : '';
         return `
         <tr>
-          <td>${escapeHtml(a.name || a.account_id)}</td>
+          <td><span class="acc-name">${escapeHtml(a.name || a.account_id)}</span>${modelsHtml}</td>
           <td class="num">${Number(a.request_count) || 0}</td>
           <td class="num">${fmtTokens(a.prompt_tokens)}</td>
           <td class="num">${fmtTokens(a.cached_tokens)}</td>
@@ -817,6 +874,24 @@
           <td class="num">${a.pool_share == null ? '—' : (a.pool_share * 100).toFixed(1) + '%'}</td>
         </tr>`;
       }).join('');
+    }
+    const donutAccBtn = $('donut-by-account');
+    const donutModBtn = $('donut-by-model');
+    if (donutAccBtn && donutModBtn) {
+      donutAccBtn.addEventListener('click', () => {
+        if (donutMode === 'accounts') return;
+        donutMode = 'accounts';
+        donutAccBtn.classList.add('active');
+        donutModBtn.classList.remove('active');
+        if (lastTokenData) drawDonutChart(lastTokenData);
+      });
+      donutModBtn.addEventListener('click', () => {
+        if (donutMode === 'models') return;
+        donutMode = 'models';
+        donutModBtn.classList.add('active');
+        donutAccBtn.classList.remove('active');
+        if (lastTokenData) drawDonutChart(lastTokenData);
+      });
     }
     document.querySelectorAll('button[data-token-range]').forEach((btn) => {
       btn.addEventListener('click', () => {

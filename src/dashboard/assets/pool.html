@@ -283,9 +283,21 @@
             <button class="row-btn" data-act="down" data-id="${id}" title="Move down" aria-label="Move down" ${i === accountsData.length - 1 ? 'disabled' : ''}>↓</button>
             ${acc.is_cli_base ? '' : `<button class="row-btn" data-act="switch" data-id="${id}" title="Use this account in the agy CLI">Use in CLI</button>`}
           </div></td>`;
+        const modelsHtml = acc.models && acc.models.length > 0
+          ? `<div class="acc-models">${acc.models.map((m) => {
+              const sm = (m.model || '').replace(/^gemini-/, '').replace(/-preview$/, '');
+              const reqs = Number(m.requests) || 0;
+              const toks = fmtTokens(m.total_tokens);
+              return `<span class="model-tag" title="${escapeHtml(m.model)}: ${reqs.toLocaleString()} reqs, ${toks}">` +
+                `<span class="model-tag-name">${escapeHtml(sm)}</span>` +
+                `<span class="model-tag-count">${reqs >= 1000 ? (reqs / 1000).toFixed(1) + 'k' : reqs}</span>` +
+                `<span class="model-tag-tokens">${toks}</span></span>`;
+            }).join('')}</div>`
+          : '';
         html += `<tr>
           <td><span class="acc-name">${escapeHtml(acc.name)}</span>${acc.is_cli_base ? '<span class="tag" title="The agy CLI uses this account">CLI</span>' : ''}
-            <span class="acc-email">${escapeHtml(email)}</span></td>
+            <span class="acc-email">${escapeHtml(email)}</span>
+            ${modelsHtml}</td>
           <td><span class="state state-${escapeHtml(acc.scheduler_state)}">${escapeHtml(acc.scheduler_state)}</span></td>
           <td>${quotaCell(acc.five_hour, '5h', safeId)}</td>
           <td>${quotaCell(acc.weekly, 'wk', safeId)}</td>

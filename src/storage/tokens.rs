@@ -432,6 +432,73 @@ fn utc_day(ts: i64) -> String {
         .unwrap_or_default()
 }
 
+/// (model name, requests, total_tokens)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountModelSummary {
+    pub model: String,
+    pub requests: i64,
+    pub total_tokens: i64,
+}
+
+/// Aggregated usage per account id and model (all-time), including unflushed pending usage.
+/// Returns a map of account_id -> list of models sorted by total_tokens descending.
+pub fn accounts_models_summary() -> Result<BTreeMap<String, Vec<AccountModelSummary>>, StorageError> {
+    #[cfg(test)]
+    let db_res = std::panic::catch_unwind(StateDb::global)
+        .unwrap_or(Err(StorageError::Other("test db uninitialized".to_string())));
+    #[cfg(not(test))]
+    let db_res = StateDb::global();
+
+    let mut intermediate: BTreeMap<(String, String), (i64, i64)> = match db_res {
+        Ok(db) => db.view(|tx| {
+            let mut stmt = tx.prepare(
+                "SELECT account_id, model, SUM(request_count), SUM(prompt_tokens + output_tokens + thinking_tokens)
+			FROM token_usage_model_hourly GROUP BY account_id, model",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?;
+            let mut map = BTreeMap::new();
+            for row in rows {
+                let (acc_id, model, reqs, tokens) = row?;
+                map.insert((acc_id, model), (reqs, tokens));
+            }
+            Ok(map)
+        })?,
+        Err(_) => BTreeMap::new(),
+    };
+
+    for ((_bucket, id, model, _long), c) in pending().iter() {
+        let entry = intermediate.entry((id.clone(), model.clone())).or_insert((0, 0));
+        entry.0 += c.requests;
+        entry.1 += c.total();
+    }
+
+    let mut out: BTreeMap<String, Vec<AccountModelSummary>> = BTreeMap::new();
+    for ((id, model), (requests, total_tokens)) in intermediate {
+        if requests > 0 || total_tokens > 0 {
+            out.entry(id).or_default().push(AccountModelSummary {
+                model,
+                requests,
+                total_tokens,
+            });
+        }
+    }
+    for list in out.values_mut() {
+        list.sort_by(|a, b| {
+            b.total_tokens
+                .cmp(&a.total_tokens)
+                .then_with(|| b.requests.cmp(&a.requests))
+        });
+    }
+    Ok(out)
+}
+
 /// Pool-wide total of a usage map.
 pub fn sum(usage: &BTreeMap<String, TokenCounts>) -> TokenCounts {
     let mut total = TokenCounts::default();

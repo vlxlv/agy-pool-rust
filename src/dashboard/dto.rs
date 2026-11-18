@@ -27,6 +27,13 @@ pub struct QuotaWindowDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AccountModelStatDto {
+    pub model: String,
+    pub requests: i64,
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountDto {
     pub id: String,
     pub name: String,
@@ -41,6 +48,8 @@ pub struct AccountDto {
     pub in_flight: i64,
     /// The account the native `agy` CLI currently uses (`pool.active_account_id`).
     pub is_cli_base: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<AccountModelStatDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,6 +188,7 @@ pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f6
     let show_email_allowed = crate::accounts::is_show_email_enabled(Some(pool));
     let show_email = show_email_allowed && request_show_email;
     let in_flight_map = crate::observability::all_in_flight_generations();
+    let models_map = crate::storage::tokens::accounts_models_summary().unwrap_or_default();
 
     let mut accounts = Vec::with_capacity(pool.accounts.len());
 
@@ -216,6 +226,18 @@ pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f6
         let hits = acc.hits();
         let in_flight = in_flight_map.get(&acc.id).copied().unwrap_or(0);
 
+        let models = models_map
+            .get(&acc.id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| AccountModelStatDto {
+                model: m.model,
+                requests: m.requests,
+                total_tokens: m.total_tokens,
+            })
+            .collect();
+
         accounts.push(AccountDto {
             id: acc.id.clone(),
             name,
@@ -228,6 +250,7 @@ pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f6
             hits,
             in_flight,
             is_cli_base: pool.active_account_id.as_deref() == Some(acc.id.as_str()),
+            models,
         });
     }
 

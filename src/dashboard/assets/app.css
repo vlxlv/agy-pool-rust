@@ -109,13 +109,14 @@ code, pre { font-family: var(--font-code); font-size: 12px; }
 }
 .nav a:hover { color: var(--ink); }
 .nav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--brass); font-weight: 600; }
-.tools { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 28px;
+  box-sizing: border-box;
   padding: 0 10px;
   border: 1px solid var(--rule);
   border-radius: 999px;
@@ -132,6 +133,30 @@ button.chip:hover { color: var(--ink); border-color: var(--rule-strong); }
 .dot.down { background: var(--bad); }
 .version-btn.has-update { color: var(--brass); border-color: var(--brass); background: var(--brass-soft); }
 .update-flag { font-weight: 600; }
+
+#strategy-select {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 24px 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background-color: var(--panel);
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%23888" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>');
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 8px 5px;
+}
+#strategy-select:hover {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
 
 /* Live pulse pill and its popover (both pages) */
 .pulse { position: relative; }
@@ -158,14 +183,28 @@ button.chip:hover { color: var(--ink); border-color: var(--rule-strong); }
 .pulse-pop dd { text-align: right; }
 .pulse-pop .note { margin-top: 12px; }
 
-.theme-switcher { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; padding: 2px; background: var(--panel); }
+.theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--panel);
+}
 .theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
   border: 0;
   background: none;
   color: var(--muted);
-  padding: 3px 9px;
+  padding: 0 9px;
   border-radius: 999px;
   font-size: 12px;
+  line-height: 1;
   cursor: pointer;
 }
 .theme-btn.active { background: var(--raise); color: var(--ink); }
@@ -266,6 +305,24 @@ tr.clickable { cursor: pointer; }
 .tag.failover { border-color: var(--calm); color: var(--calm); }
 .acc-name { font-weight: 600; }
 .acc-email { display: block; color: var(--faint); font-size: 12.5px; }
+.acc-models { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.model-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--raise);
+  border: 1px solid var(--rule);
+  font-size: 11px;
+  font-family: var(--font-figure);
+  color: var(--muted);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.model-tag-name { color: var(--ink); font-weight: 500; }
+.model-tag-count { color: var(--brass); font-weight: 600; }
+.model-tag-tokens { color: var(--faint); font-size: 10px; }
 .row-actions { display: flex; gap: 5px; flex-wrap: wrap; }
 
 /* Pool page: the gauge is the page */
@@ -325,6 +382,7 @@ tr.clickable { cursor: pointer; }
 .donut-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .donut-center-val { font: 700 14px/1 var(--font-figure); fill: var(--ink); }
 .donut-center-sub { font: 500 9px/1 var(--font-figure); fill: var(--muted); }
+.donut-seg button { height: 22px; padding: 0 8px; font-size: 11px; }
 @media (max-width: 900px) {
   .analytics-grid { grid-template-columns: 1fr; }
 }
