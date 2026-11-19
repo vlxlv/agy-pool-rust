@@ -142,11 +142,24 @@
   </dialog>
 
   <main>
-    <dl class="vitals" aria-label="Gateway vitals">
-      <div class="vital lead"><dt>Requests in flight</dt><dd id="metric-inflight" class="num">0</dd><div class="sub"><span id="metric-qps" class="num">0.00</span> requests a second</div></div>
-      <div class="vital"><dt>First token, median</dt><dd><span id="metric-ttfb-p50" class="num">—</span><small id="metric-ttfb-unit">ms</small></dd><div class="sub">Includes model thinking time</div></div>
-      <div class="vital"><dt>Total time, median</dt><dd id="metric-total-p50" class="num">—</dd><div class="sub">95th percentile <span id="metric-total-p95" class="num">—</span></div><div class="spark-bars" id="traffic-spark-bars" aria-hidden="true"><i style="height:18%;opacity:0.25"></i></div></div>
-      <div class="vital"><dt>Gateway memory</dt><dd><span id="metric-rss" class="num">0.0</span><small>MB</small></dd><div class="sub">Resident set size</div></div>
+    <dl class="vitals pulse-grid cols-4" aria-label="Gateway vitals">
+      <div class="vital lead pulse-card">
+        <div class="pulse-head"><span>In Flight</span><span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span></div>
+        <div class="pulse-main"><span class="pulse-value num" id="metric-inflight">0</span><span class="pulse-sub">Active requests</span></div>
+      </div>
+      <div class="vital pulse-card">
+        <div class="pulse-head"><span>First Token (p50)</span><span class="badge violet">TTFT</span></div>
+        <div class="pulse-main"><span class="pulse-value num"><span id="metric-ttfb-p50" class="num">—</span><small id="metric-ttfb-unit">ms</small></span><span class="pulse-sub">Includes thinking time</span></div>
+      </div>
+      <div class="vital pulse-card">
+        <div class="pulse-head"><span>Total Duration</span><span class="pulse-sub">p95 <span id="metric-total-p95" class="num">—</span></span></div>
+        <div class="pulse-main"><span class="pulse-value num" id="metric-total-p50">—</span><span class="pulse-sub">Median latency</span></div>
+        <div class="spark-bars" id="traffic-spark-bars" aria-hidden="true"><i style="height:18%;opacity:0.25"></i></div>
+      </div>
+      <div class="vital pulse-card">
+        <div class="pulse-head"><span>Gateway Memory</span><span class="badge teal">RSS</span></div>
+        <div class="pulse-main"><span class="pulse-value num"><span id="metric-rss">0.0</span><small>MB</small></span><span class="pulse-sub">Resident set size</span></div>
+      </div>
     </dl>
 
     <section class="section" aria-labelledby="requests-title">
@@ -166,13 +179,16 @@
         </div>
       </div>
       <div class="section-head" id="stream-tools">
-        <div class="seg" id="stream-filters" role="group" aria-label="Show">
-          <button type="button" class="active" data-stream-filter="all">All</button>
-          <button type="button" data-stream-filter="success">200 OK</button>
-          <button type="button" data-stream-filter="failover">Failover</button>
-          <button type="button" data-stream-filter="error">Errors</button>
+        <div class="filter-pills" id="stream-filters" role="group" aria-label="Show">
+          <button type="button" class="filter-pill active" data-stream-filter="all">All</button>
+          <button type="button" class="filter-pill" data-stream-filter="success"><i class="dot-sm" style="background:var(--teal)"></i> 200 OK</button>
+          <button type="button" class="filter-pill" data-stream-filter="failover"><i class="dot-sm" style="background:var(--amber)"></i> Failover</button>
+          <button type="button" class="filter-pill" data-stream-filter="error"><i class="dot-sm" style="background:var(--rose)"></i> Errors</button>
         </div>
-        <input type="search" id="stream-search" placeholder="Filter by model, account or status" class="input-search" aria-label="Filter by model, account or status">
+        <div class="search-input-wrap" style="flex:1 1 240px;max-width:340px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="search" id="stream-search" placeholder="Filter by model, account or status…" aria-label="Filter by model, account or status">
+        </div>
         <div class="tools-row">
           <label class="toggle" title="Only show LLM model generation requests, filtering out internal control plane RPCs"><input type="checkbox" id="stream-gen-only" checked> Generations only</label>
           <button id="pause-btn" type="button" class="btn" aria-pressed="false">Pause</button>
@@ -421,7 +437,7 @@
         <tr class="clickable" data-idx="${i}" tabindex="0" title="Show request details">
           <td class="num faint">${formatTime(ev.timestamp)}</td>
           <td class="num">${escapeHtml(ev.model || '—')}</td>
-          <td>${escapeHtml(ev.account)}</td>
+          <td><div class="identity-cell" style="align-items:center;gap:7px"><span class="avatar" style="width:20px;height:20px;font-size:9.5px;margin:0;border-radius:5px" aria-hidden="true">${escapeHtml(accountInitials(ev.account))}</span><span>${escapeHtml(ev.account)}</span></div></td>
           <td class="num">${fmtMs(ev.ttfb_ms)} / ${fmtMs(ev.total_ms)}</td>
           <td class="num">${(Number(ev.tokens) || 0).toLocaleString()}</td>
           <td><span class="status ${statusClass(ev.status)}">${escapeHtml(ev.status)}</span>${ev.failover ? '<span class="tag failover">failover</span>' : ''}</td>

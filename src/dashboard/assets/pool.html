@@ -167,34 +167,54 @@
       </div>
     </section>
 
-    <section class="section panel" aria-labelledby="accounts-title">
-      <div class="panel-head">
-        <div class="panel-title-group">
-          <h2 id="accounts-title">Accounts</h2>
-          <span class="count" id="accounts-count-badge"></span>
+    <section class="section" aria-labelledby="accounts-title">
+      <div class="accounts-command">
+        <div class="refresh-strip">
+          <div id="bulk-status" class="bulk-status" role="status" aria-live="polite">
+            <span id="bulk-status-dot" class="dot live"></span>
+            <span id="bulk-status-text">Pool active &amp; ready</span>
+          </div>
+          <div class="tools-row">
+            <label class="toggle" id="show-email-label"><input type="checkbox" id="show_email" name="show_email"> Show full emails</label>
+            <button id="refresh-all-btn" type="button" class="btn" hidden>Refresh all quotas</button>
+          </div>
         </div>
-        <div class="tools-row">
-          <label class="toggle" id="show-email-label"><input type="checkbox" id="show_email" name="show_email"> Show full emails</label>
-          <button id="refresh-all-btn" type="button" class="btn" hidden>Refresh all quotas</button>
+        <div class="daily-filters">
+          <div class="search-input-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="search" id="account-search" placeholder="Search accounts by name or email…" aria-label="Search accounts">
+          </div>
+          <div class="filter-pills" id="account-filter-pills" role="group" aria-label="Account filter">
+            <button type="button" class="filter-pill active" data-filter="all">All</button>
+            <button type="button" class="filter-pill" data-filter="active">Active</button>
+            <button type="button" class="filter-pill" data-filter="warning">Warning</button>
+            <button type="button" class="filter-pill" data-filter="disabled">Disabled</button>
+          </div>
+          <div class="account-count-wrap">
+            <span class="count" id="accounts-count-badge">0 accounts</span>
+          </div>
         </div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Account</th>
-              <th>State</th>
-              <th>5-hour quota</th>
-              <th>Weekly quota</th>
-              <th>Requests</th>
-              <th>In flight</th>
-              <th id="actions-col" hidden>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="accounts-table-body">
-            <tr><td colspan="7" class="empty">Loading accounts...</td></tr>
-          </tbody>
-        </table>
+
+      <div class="panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>State</th>
+                <th>5-hour quota</th>
+                <th>Weekly quota</th>
+                <th>Requests</th>
+                <th>In flight</th>
+                <th id="actions-col" hidden>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="accounts-table-body">
+              <tr><td colspan="7" class="empty">Loading accounts...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   </main>
@@ -277,16 +297,29 @@
       const segBar = $('pool-segmented-bar');
       if (segBar) {
         const stateColor = (st) => {
-          if (st === 'active') return 'var(--ok)';
-          if (st === 'cooling') return 'var(--calm)';
-          if (st === 'reserve') return 'var(--low)';
-          if (st === 'restricted' || st === 'depleted') return 'var(--bad)';
-          return 'var(--faint)';
+          if (st === 'active') return 'var(--teal)';
+          if (st === 'cooling') return 'var(--cyan)';
+          if (st === 'reserve') return 'var(--amber)';
+          if (st === 'restricted' || st === 'depleted') return 'var(--rose)';
+          return 'var(--subtle)';
         };
         segBar.innerHTML = accountsData.length
           ? accountsData.map((a) => `<span style="width:${(100 / accountsData.length).toFixed(2)}%;background:${stateColor(a.scheduler_state)}" title="${escapeHtml(a.name)}: ${escapeHtml(a.scheduler_state)}"></span>`).join('')
-          : '<span style="width:100%;background:var(--rule)"></span>';
+          : '<span style="width:100%;background:var(--border)"></span>';
       }
+
+      const statusText = $('bulk-status-text');
+      const statusDot = $('bulk-status-dot');
+      if (statusText && statusDot) {
+        if (pool.active > 0) {
+          statusText.textContent = `${pool.active} of ${accountsData.length} accounts ready in rotation`;
+          statusDot.className = 'dot live';
+        } else {
+          statusText.textContent = 'No accounts currently routable';
+          statusDot.className = 'dot wait';
+        }
+      }
+
       renderResetTimes();
     }
     function renderResetTimes() {
@@ -295,23 +328,58 @@
       $('pool-weekly-reset').textContent = pool.nextWeeklyMs === null ? '—' : formatDuration(secondsUntil(pool.nextWeeklyMs));
     }
 
+    let accountFilter = 'all';
+    let accountSearch = '';
+
+    function stateBadgeClass(st) {
+      if (st === 'active') return 'teal';
+      if (st === 'cooling') return 'cyan';
+      if (st === 'reserve') return 'amber';
+      if (st === 'restricted' || st === 'depleted') return 'rose';
+      return '';
+    }
+
     function quotaCell(win, kind, safeId) {
       if (!win) return '<span class="faint">No data yet</span>';
       const pct = clampPct(win.remaining_percent);
       const reset = win._deadlineMs !== undefined ? formatDuration(secondsUntil(win._deadlineMs)) : '—';
       return `<div class="quota">
           <div class="quota-line"><span class="num">${pct.toFixed(1)}%</span><span class="num faint" id="reset-${kind}-${safeId}" title="Time until this window resets">${reset}</span></div>
-          <div class="meter ${levelClass(pct)}"><i style="width:${pct}%"></i></div>
+          <div class="daily-bar meter ${levelClass(pct)}"><i style="width:${pct}%"></i></div>
         </div>`;
     }
+
     function renderAccountsTable() {
       const tbody = $('accounts-table-body');
       if (accountsData.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="empty">No accounts yet. Add one with <code>agy-pool add</code>.</td></tr>';
+        $('accounts-count-badge').textContent = '0 accounts';
         return;
       }
+
+      const q = accountSearch.trim().toLowerCase();
+      const filtered = accountsData.filter((acc) => {
+        if (accountFilter === 'active' && acc.scheduler_state !== 'active') return false;
+        if (accountFilter === 'warning' && !(acc.scheduler_state === 'cooling' || acc.scheduler_state === 'reserve' || acc.scheduler_state === 'depleted' || acc.scheduler_state === 'restricted')) return false;
+        if (accountFilter === 'disabled' && acc.scheduler_state !== 'disabled') return false;
+        if (q) {
+          const hay = `${acc.name || ''} ${acc.email || ''} ${acc.email_masked || ''} ${acc.id || ''}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+
+      $('accounts-count-badge').textContent = filtered.length === accountsData.length
+        ? `${accountsData.length} accounts`
+        : `${filtered.length} of ${accountsData.length} accounts`;
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">No accounts match the current search or filter.</td></tr>';
+        return;
+      }
+
       let html = '';
-      for (const [i, acc] of accountsData.entries()) {
+      for (const [i, acc] of filtered.entries()) {
         const safeId = sanitizeId(acc.id);
         const id = escapeHtml(acc.id);
         const email = showEmailAllowed && showEmail && acc.email ? acc.email : (acc.email_masked || '—');
@@ -322,7 +390,7 @@
                  <button class="row-btn" data-act="refresh" data-id="${id}" title="Refresh quota">Refresh</button>`}
             <button class="row-btn" data-act="rename" data-id="${id}">Rename</button>
             <button class="row-btn" data-act="up" data-id="${id}" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
-            <button class="row-btn" data-act="down" data-id="${id}" title="Move down" aria-label="Move down" ${i === accountsData.length - 1 ? 'disabled' : ''}>↓</button>
+            <button class="row-btn" data-act="down" data-id="${id}" title="Move down" aria-label="Move down" ${i === filtered.length - 1 ? 'disabled' : ''}>↓</button>
             ${acc.is_cli_base ? '' : `<button class="row-btn" data-act="switch" data-id="${id}" title="Use this account in the agy CLI">Use in CLI</button>`}
           </div></td>`;
         const modelsHtml = acc.models && acc.models.length > 0
@@ -330,17 +398,18 @@
               const sm = (m.model || '').replace(/^gemini-/, '').replace(/-preview$/, '');
               const reqs = Number(m.requests) || 0;
               const toks = fmtTokens(m.total_tokens);
-              return `<span class="model-tag" title="${escapeHtml(m.model)}: ${reqs.toLocaleString()} reqs, ${toks}">` +
+              return `<span class="model-tag m-chip ok" title="${escapeHtml(m.model)}: ${reqs.toLocaleString()} reqs, ${toks}">` +
+                `<i class="dot-sm"></i>` +
                 `<span class="model-tag-name">${escapeHtml(sm)}</span>` +
                 `<span class="model-tag-count">${reqs >= 1000 ? (reqs / 1000).toFixed(1) + 'k' : reqs}</span>` +
                 `<span class="model-tag-tokens">${toks}</span></span>`;
             }).join('')}</div>`
           : '';
         html += `<tr>
-          <td><div class="identity-cell"><span class="avatar" aria-hidden="true">${escapeHtml(accountInitials(acc.name || email))}</span><div><span class="acc-name">${escapeHtml(acc.name)}</span>${acc.is_cli_base ? '<span class="tag" title="The agy CLI uses this account">CLI</span>' : ''}
+          <td><div class="identity-cell"><span class="avatar" aria-hidden="true">${escapeHtml(accountInitials(acc.name || email))}</span><div><span class="acc-name">${escapeHtml(acc.name)}</span>${acc.is_cli_base ? '<span class="tag cli" title="The agy CLI uses this account">CLI</span>' : ''}
             <span class="acc-email">${escapeHtml(email)}</span>
             ${modelsHtml}</div></div></td>
-          <td><span class="state state-${escapeHtml(acc.scheduler_state)}">${escapeHtml(acc.scheduler_state)}</span></td>
+          <td><span class="badge ${stateBadgeClass(acc.scheduler_state)}">${escapeHtml(acc.scheduler_state)}</span></td>
           <td>${quotaCell(acc.five_hour, '5h', safeId)}</td>
           <td>${quotaCell(acc.weekly, 'wk', safeId)}</td>
           <td class="num">${acc.hits.toLocaleString()}</td>
@@ -368,29 +437,38 @@
         const res = await agyFetch('/api/v1/forecast');
         if (!res.ok) return;
         const data = await res.json();
-        $('metric-runway-text').textContent = data.runway_text || (data.is_sustainable ? 'Sustainable' : '—');
-        $('metric-burnrate').textContent = (data.burn_rate_requests_per_hour || 0).toFixed(1);
-        $('metric-forecast-window').textContent = data.window_used || '12h';
-      } catch (err) {
-        console.error('Failed to fetch forecast:', err);
-      }
+        const f = data.forecast;
+        const fmtHours = (hrs) => hrs === null ? '—' : (hrs < 1 ? '<1h' : (hrs > 999 ? '>999h' : `${Math.round(hrs)}h`));
+        $('metric-forecast-window').textContent = data.window ? `${data.window} window` : 'runway';
+        const rw = f ? f.hours_remaining : null;
+        $('metric-runway-text').innerHTML = rw === null ? '—' : `${fmtHours(rw)}`;
+        $('metric-burnrate').textContent = f && f.req_per_hour !== null ? f.req_per_hour.toFixed(1) : '0.0';
+      } catch (_) {}
     }
 
     const showEmailCheckbox = $('show_email');
     const showEmailLabel = $('show-email-label');
-    showEmailCheckbox.checked = showEmail;
-    showEmailCheckbox.addEventListener('change', (e) => {
-      if (!showEmailAllowed) {
-        e.target.checked = false;
-        return;
+    showEmailCheckbox.addEventListener('change', () => {
+      showEmail = showEmailCheckbox.checked;
+      try { localStorage.setItem('agy_show_email', showEmail ? 'true' : 'false'); } catch (_) {}
+      renderAccountsTable();
+    });
+
+    $('account-search').addEventListener('input', (e) => {
+      accountSearch = e.target.value;
+      renderAccountsTable();
+    });
+    $('account-filter-pills').addEventListener('click', (e) => {
+      const btn = e.target.closest('.filter-pill');
+      if (!btn) return;
+      for (const p of $('account-filter-pills').querySelectorAll('.filter-pill')) {
+        p.classList.toggle('active', p === btn);
       }
-      showEmail = e.target.checked;
-      try { localStorage.setItem('agy_show_email', showEmail); } catch (_) {}
-      fetchAccounts();
+      accountFilter = btn.dataset.filter || 'all';
+      renderAccountsTable();
     });
 
     function showVerifyLink(url) {
-      if (!/^https:\/\//.test(url)) return;
       const link = $('verify-link');
       link.href = url;
       link.textContent = url;
@@ -398,14 +476,15 @@
     }
 
     $('accounts-table-body').addEventListener('click', async (e) => {
-      const btn = e.target.closest('button[data-act]');
+      const btn = e.target.closest('.row-btn');
       if (!btn || btn.disabled) return;
       const act = btn.dataset.act;
       const id = btn.dataset.id;
+      if (!act || !id) return;
       const acc = accountsData.find((a) => a.id === id);
       if (!acc) return;
-      let body = {};
       let path = `/api/v1/accounts/${encodeURIComponent(id)}/${act}`;
+      let body = {};
       if (act === 'disable') {
         const enabled = accountsData.filter((a) => a.storage_status !== 'disabled').length;
         if (enabled <= 1 && !confirm('Disable the last enabled account? The gateway will have no account to route to.')) return;
