@@ -59,7 +59,7 @@
 
   <header class="topbar">
     <a class="brand" href="/dashboard" aria-label="agy-pool dashboard">
-      <svg viewBox="0 0 22 16" aria-hidden="true"><path class="arc" d="M3 14 A8.5 8.5 0 1 1 19 14" fill="none" stroke-width="2.6" stroke-linecap="round"/></svg>
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 22 16"><path class="arc" d="M3 14 A8.5 8.5 0 1 1 19 14" fill="none" stroke-width="2.6" stroke-linecap="round"/></svg></span>
       agy-pool
     </a>
     <nav class="nav" aria-label="Pages">
@@ -111,44 +111,68 @@
 
   <main>
     <section class="hero" aria-label="Pool quota">
-      <div class="gauges">
-        <div class="gauge">
-          <svg id="gauge" viewBox="0 0 100 70" role="img" aria-label="5-hour quota by account"></svg>
-          <div class="gauge-read">
-            <div class="gauge-label">5-Hour Quota</div>
-            <div class="big num" id="pool-5h-pct">—</div>
-            <div class="sub">Next reset in <strong id="pool-next-reset" class="num">—</strong></div>
+      <div class="gauges-panel">
+        <div class="gauges">
+          <div class="gauge">
+            <svg id="gauge" viewBox="0 0 100 70" role="img" aria-label="5-hour quota by account"></svg>
+            <div class="gauge-read">
+              <div class="gauge-label">5-Hour Quota</div>
+              <div class="big num" id="pool-5h-pct">—</div>
+              <div class="sub">Next reset in <strong id="pool-next-reset" class="num">—</strong></div>
+            </div>
           </div>
-        </div>
-        <div class="gauge">
-          <svg id="gauge-weekly" viewBox="0 0 100 70" role="img" aria-label="Weekly quota by account"></svg>
-          <div class="gauge-read">
-            <div class="gauge-label">Weekly Quota</div>
-            <div class="big num" id="pool-weekly-pct">—</div>
-            <div class="sub">Next reset in <strong id="pool-weekly-reset" class="num">—</strong></div>
+          <div class="gauge">
+            <svg id="gauge-weekly" viewBox="0 0 100 70" role="img" aria-label="Weekly quota by account"></svg>
+            <div class="gauge-read">
+              <div class="gauge-label">Weekly Quota</div>
+              <div class="big num" id="pool-weekly-pct">—</div>
+              <div class="sub">Next reset in <strong id="pool-weekly-reset" class="num">—</strong></div>
+            </div>
           </div>
         </div>
       </div>
-      <dl class="readouts">
-        <div class="readout">
-          <dt>Runway at the current pace</dt>
-          <dd><span id="metric-runway-text">—</span><small><span id="metric-burnrate" class="num">0.0</span> requests an hour over the last <span id="metric-forecast-window">12h</span></small></dd>
-        </div>
-        <div class="readout">
-          <dt>Accounts in rotation</dt>
-          <dd><span id="pool-active" class="num">—</span><small id="pool-total"></small></dd>
-        </div>
-        <div class="readout">
-          <dt>Requests in flight</dt>
-          <dd><span id="metric-inflight" class="num">0</span><small><span id="metric-qps" class="num">0.00</span> requests a second</small></dd>
-        </div>
-      </dl>
+      <div class="hero-stack">
+        <article class="pulse-card">
+          <div class="pulse-head">
+            <span>Routable Account Pool</span>
+            <span class="badge teal" id="pool-ready-badge">Ready</span>
+          </div>
+          <div class="pulse-main">
+            <span class="pulse-value num"><span id="pool-active">—</span><small id="pool-total"></small></span>
+            <span class="pulse-sub" id="pool-state-summary">Accounts in rotation</span>
+          </div>
+          <div class="segmented-bar" id="pool-segmented-bar" aria-hidden="true"></div>
+        </article>
+        <article class="pulse-card">
+          <div class="pulse-head">
+            <span>Runway at Current Pace</span>
+            <span class="badge violet" id="metric-forecast-window">12h</span>
+          </div>
+          <div class="pulse-main">
+            <span class="pulse-value" id="metric-runway-text">—</span>
+            <span class="pulse-sub"><span id="metric-burnrate" class="num">0.0</span> req/hr</span>
+          </div>
+        </article>
+        <article class="pulse-card lead">
+          <div class="pulse-head">
+            <span>Gateway Throughput</span>
+            <span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span>
+          </div>
+          <div class="pulse-main">
+            <span class="pulse-value num"><span id="metric-inflight">0</span><small>in flight</small></span>
+            <span class="pulse-sub">Recent latency</span>
+          </div>
+          <div class="spark-bars" id="pool-spark-bars" aria-hidden="true"><i style="height:18%;opacity:0.25"></i></div>
+        </article>
+      </div>
     </section>
 
-    <section class="section" aria-labelledby="accounts-title">
-      <div class="section-head">
-        <h2 id="accounts-title">Accounts</h2>
-        <span class="count" id="accounts-count-badge"></span>
+    <section class="section panel" aria-labelledby="accounts-title">
+      <div class="panel-head">
+        <div class="panel-title-group">
+          <h2 id="accounts-title">Accounts</h2>
+          <span class="count" id="accounts-count-badge"></span>
+        </div>
         <div class="tools-row">
           <label class="toggle" id="show-email-label"><input type="checkbox" id="show_email" name="show_email"> Show full emails</label>
           <button id="refresh-all-btn" type="button" class="btn" hidden>Refresh all quotas</button>
@@ -244,7 +268,25 @@
       }
 
       $('pool-active').textContent = pool.active;
-      $('pool-total').textContent = `of ${accountsData.length} accounts`;
+      $('pool-total').textContent = ` / ${accountsData.length}`;
+      const badge = $('pool-ready-badge');
+      if (badge) {
+        badge.textContent = pool.active > 0 ? 'Ready' : 'Unavailable';
+        badge.className = `badge ${pool.active > 0 ? 'teal' : 'amber'}`;
+      }
+      const segBar = $('pool-segmented-bar');
+      if (segBar) {
+        const stateColor = (st) => {
+          if (st === 'active') return 'var(--ok)';
+          if (st === 'cooling') return 'var(--calm)';
+          if (st === 'reserve') return 'var(--low)';
+          if (st === 'restricted' || st === 'depleted') return 'var(--bad)';
+          return 'var(--faint)';
+        };
+        segBar.innerHTML = accountsData.length
+          ? accountsData.map((a) => `<span style="width:${(100 / accountsData.length).toFixed(2)}%;background:${stateColor(a.scheduler_state)}" title="${escapeHtml(a.name)}: ${escapeHtml(a.scheduler_state)}"></span>`).join('')
+          : '<span style="width:100%;background:var(--rule)"></span>';
+      }
       renderResetTimes();
     }
     function renderResetTimes() {
@@ -295,9 +337,9 @@
             }).join('')}</div>`
           : '';
         html += `<tr>
-          <td><span class="acc-name">${escapeHtml(acc.name)}</span>${acc.is_cli_base ? '<span class="tag" title="The agy CLI uses this account">CLI</span>' : ''}
+          <td><div class="identity-cell"><span class="avatar" aria-hidden="true">${escapeHtml(accountInitials(acc.name || email))}</span><div><span class="acc-name">${escapeHtml(acc.name)}</span>${acc.is_cli_base ? '<span class="tag" title="The agy CLI uses this account">CLI</span>' : ''}
             <span class="acc-email">${escapeHtml(email)}</span>
-            ${modelsHtml}</td>
+            ${modelsHtml}</div></div></td>
           <td><span class="state state-${escapeHtml(acc.scheduler_state)}">${escapeHtml(acc.scheduler_state)}</span></td>
           <td>${quotaCell(acc.five_hour, '5h', safeId)}</td>
           <td>${quotaCell(acc.weekly, 'wk', safeId)}</td>
@@ -421,6 +463,8 @@
       tick: tickCountdowns,
       status(s) { showLiveCounts(s.in_flight_requests, s.qps); },
       stats(s) { showLiveCounts(s.in_flight, s.qps); },
+      audit() { renderSparkBars('pool-spark-bars'); },
+      reset() { renderSparkBars('pool-spark-bars'); },
       accounts(data) {
         showEmailCheckbox.disabled = !showEmailAllowed;
         showEmailCheckbox.checked = showEmailAllowed && showEmail;

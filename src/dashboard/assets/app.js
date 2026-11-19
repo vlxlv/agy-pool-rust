@@ -144,6 +144,31 @@ function clampPct(p) {
 function secondsUntil(deadlineMs) {
   return Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
 }
+function accountInitials(name) {
+  const parts = String(name || '?').trim().split(/[\s._@+-]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return String(parts[0] || '?').slice(0, 2).toUpperCase();
+}
+function renderSparkBars(containerId) {
+  const host = $(containerId);
+  if (!host) return;
+  const sample = eventList
+    .filter((ev) => Number.isFinite(Number(ev.total_ms)) && Number(ev.total_ms) >= 0)
+    .slice(0, 26)
+    .reverse();
+  if (sample.length === 0) {
+    host.innerHTML = '<i style="height:18%;opacity:0.25"></i>';
+    return;
+  }
+  const maxMs = Math.max(1, ...sample.map((ev) => Number(ev.total_ms)));
+  host.innerHTML = sample.map((ev) => {
+    const ms = Number(ev.total_ms);
+    const h = Math.max(14, Math.round((ms / maxMs) * 100));
+    const cls = Number(ev.status) >= 400 ? ' class="err"' : '';
+    const tip = `${ev.model || 'rpc'} · ${ev.status} · ${fmtMs(ms)}`;
+    return `<i${cls} style="height:${h}%" title="${escapeHtml(tip)}"></i>`;
+  }).join('');
+}
 
 // Theme
 const themeSwitcher = $('theme-switcher');
