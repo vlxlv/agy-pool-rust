@@ -226,9 +226,10 @@ async function fetchStatus() {
     endpoint.textContent = `${window.location.host || statusData.listen}, ${statusData.strategy} routing`;
     if (statusData.listen) endpoint.title = `Listening on ${statusData.listen}`;
     if (!strategySelect.disabled) strategySelect.value = statusData.strategy;
-    versionLabel.textContent = statusData.version;
+    const ver = statusData.version.startsWith('v') ? statusData.version : `v${statusData.version}`;
+    versionLabel.textContent = ver;
     if (!versionBtn.classList.contains('has-update')) {
-      versionBtn.title = `agy-pool ${statusData.version}. Click to check for updates.`;
+      versionBtn.title = `agy-pool ${ver}. Click to check for updates.`;
     }
     renderUptime();
     renderPulse();
@@ -259,9 +260,14 @@ versionBtn.addEventListener('click', async () => {
     return;
   }
   showToast('Checking for updates...');
-  const result = await checkForUpdate(true);
-  if (!result) showToast('Could not check for updates. Try again in a minute.', true);
-  else if (!result.has_update) showToast(`agy-pool ${versionLabel.textContent} is up to date.`);
+  versionBtn.classList.add('checking');
+  try {
+    const result = await checkForUpdate(true);
+    if (!result) showToast('Could not check for updates. Try again in a minute.', true);
+    else if (!result.has_update) showToast(`agy-pool ${versionLabel.textContent} is up to date.`);
+  } finally {
+    versionBtn.classList.remove('checking');
+  }
 });
 $('update-deb-copy').addEventListener('click', async () => {
   try {
@@ -334,14 +340,15 @@ async function checkForUpdate(force = false) {
         : 'sudo apt install ./<file>.deb';
       if (!updateDismissed) updateBanner.hidden = false;
       versionBtn.classList.add('has-update');
-      versionBtn.title = `Update available: ${curVer} to ${latestVer}. Click to upgrade.`;
+      versionBtn.title = `Update available: v${curVer} → v${latestVer}. Click to upgrade.`;
       versionBadge.hidden = false;
-      versionBadge.textContent = latestVer;
+      versionBadge.textContent = `↑ v${latestVer}`;
     } else {
       if (!force) updateBanner.hidden = true;
       versionBtn.classList.remove('has-update');
       versionBtn.title = `agy-pool ${versionLabel.textContent}. Click to check for updates.`;
       versionBadge.hidden = true;
+      versionBadge.textContent = '';
     }
     return data;
   } catch (err) {

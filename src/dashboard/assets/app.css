@@ -238,7 +238,16 @@ code { color: var(--violet); }
   vertical-align: middle;
   transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
 }
-button.chip { cursor: pointer; background: var(--surface-elevated); border-color: var(--border-strong); box-shadow: 0 1px 0 inset rgb(255 255 255 / 4%), 0 1px 2px rgb(0 0 0 / 12%); }
+button.chip {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  margin: 0;
+  cursor: pointer;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 1px 0 inset rgb(255 255 255 / 4%), 0 1px 2px rgb(0 0 0 / 12%);
+}
 button.chip:hover { color: var(--text); background: var(--hover); border-color: color-mix(in srgb, var(--text) 24%, var(--border-strong)); }
 
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); flex-shrink: 0; }
@@ -247,20 +256,67 @@ button.chip:hover { color: var(--text); background: var(--hover); border-color: 
 .dot.down { background: var(--rose); box-shadow: 0 0 0 3px var(--rose-bg); }
 .dot-sm { width: 5px; height: 5px; border-radius: 50%; background: var(--subtle); display: inline-block; }
 
-.version-btn {
+button.chip.version-btn,
+.chip.version-btn {
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   background: var(--violet-bg);
   color: var(--violet);
-  border-color: color-mix(in srgb, var(--violet) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--violet) 28%, transparent);
+  box-shadow: none;
+  letter-spacing: 0;
 }
-.version-btn:hover { background: color-mix(in srgb, var(--primary) 22%, var(--surface)); color: var(--text); }
-.version-btn.has-update { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); background: var(--amber-bg); }
+button.chip.version-btn:hover,
+.chip.version-btn:hover {
+  background: color-mix(in srgb, var(--primary) 22%, var(--surface));
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border-strong));
+}
+button.chip.version-btn.has-update,
+.chip.version-btn.has-update {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  background: var(--amber-bg);
+}
+button.chip.version-btn.has-update:hover,
+.chip.version-btn.has-update:hover {
+  background: color-mix(in srgb, var(--amber) 24%, var(--surface));
+  border-color: var(--amber);
+  color: var(--text);
+}
+.version-btn.checking {
+  opacity: 0.75;
+  cursor: wait;
+}
+.version-btn #version-pill,
+.version-btn .num {
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  letter-spacing: 0;
+}
 .update-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-family: var(--font-code);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  background: var(--amber);
+  color: #1a1400;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--amber) 45%, transparent);
+  white-space: nowrap;
+}
+.update-flag:empty {
   display: inline-block;
   width: 6px;
   height: 6px;
+  min-width: 6px;
+  min-height: 6px;
+  padding: 0;
   border-radius: 50%;
   background: var(--amber);
   box-shadow: 0 0 6px var(--amber);
