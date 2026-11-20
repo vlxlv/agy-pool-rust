@@ -293,26 +293,60 @@
     let lastTokenData = null;
     let donutMode = 'accounts';
 
-    // USD per 1M tokens, copied from https://aistudio.google.com/docs/pricing on 2026-11-15. Thinking bills as
+    // USD per 1M tokens, copied from https://aistudio.google.com/docs/pricing on 2026-11-20. Thinking bills as
     // output. `until` is the first day a rate stops applying; `long` is the rate for prompts over 200K tokens.
     // shortcut: hand-copied list prices; update this table when Google changes them.
     const MODEL_PRICES = {
+      // Gemini 4 Series (Frontier)
       'gemini-4-carbon': [{ until: '2026-12-01', in: 2, out: 10, cache: 0.1 }, { in: 4, out: 20, cache: 0.2 }],
       'gemini-4-argon': [{ until: '2026-12-01', in: 2, out: 10, cache: 0.1 }, { in: 4, out: 20, cache: 0.2 }],
+      'gemini-4-neon': [{ in: 3, out: 15, cache: 0.15 }],
       'gemini-4-hydrogen': [{ in: 1.5, out: 7.5, cache: 0.075 }],
+      'gemini-carbon': [{ until: '2026-12-01', in: 2, out: 10, cache: 0.1 }, { in: 4, out: 20, cache: 0.2 }],
+      'gemini-argon': [{ until: '2026-12-01', in: 2, out: 10, cache: 0.1 }, { in: 4, out: 20, cache: 0.2 }],
+      'gemini-neon': [{ in: 3, out: 15, cache: 0.15 }],
+      'gemini-hydrogen': [{ in: 1.5, out: 7.5, cache: 0.075 }],
+
+      // Gemini 3.x Series
       'gemini-3.8-flash': [{ until: '2027-01-01', in: 0.75, out: 3.75, cache: 0.075 }, { in: 1.5, out: 7.5, cache: 0.15 }],
       'gemini-3.6-flash': [{ until: '2027-01-01', in: 0.75, out: 3.75, cache: 0.075 }, { in: 1.5, out: 7.5, cache: 0.15 }],
       'gemini-3.5-flash-lite': [{ in: 0.3, out: 2.5, cache: 0.03 }],
+      'gemini-3.5-flash': [{ in: 0.5, out: 3, cache: 0.05 }],
       'gemini-3.1-flash-lite': [{ in: 0.25, out: 1.5, cache: 0.025 }],
+      'gemini-3.1-flash': [{ in: 0.5, out: 3, cache: 0.05 }],
       'gemini-3.1-pro': [{ in: 2, out: 12, cache: 0.2, long: { in: 4, out: 18, cache: 0.4 } }],
       'gemini-3-flash': [{ in: 0.5, out: 3, cache: 0.05 }],
+      'gemini-3-pro': [{ in: 2, out: 12, cache: 0.2, long: { in: 4, out: 18, cache: 0.4 } }],
+
+      // Gemini 2.5 Series
       'gemini-2.5-pro': [{ in: 1.25, out: 10, cache: 0.125, long: { in: 2.5, out: 15, cache: 0.25 } }],
       'gemini-2.5-flash': [{ in: 0.3, out: 2.5, cache: 0.03 }],
       'gemini-2.5-flash-lite': [{ in: 0.1, out: 0.4, cache: 0.01 }],
+
+      // Gemini 2.0 Series
+      'gemini-2.0-flash-lite': [{ in: 0.075, out: 0.3, cache: 0.01875 }],
+      'gemini-2.0-flash-thinking': [{ in: 0.1, out: 0.4, cache: 0.025 }],
+      'gemini-2.0-flash': [{ in: 0.1, out: 0.4, cache: 0.025 }],
+      'gemini-2.0-pro': [{ in: 1.25, out: 5, cache: 0.125 }],
+      'gemini-2.0': [{ in: 0.1, out: 0.4, cache: 0.025 }],
+
+      // Gemini 1.5 Series
+      'gemini-1.5-flash-8b': [{ in: 0.0375, out: 0.15, cache: 0.009375, long: { in: 0.075, out: 0.3, cache: 0.01875 } }],
+      'gemini-1.5-flash': [{ in: 0.075, out: 0.3, cache: 0.01875, long: { in: 0.15, out: 0.6, cache: 0.0375 } }],
+      'gemini-1.5-pro': [{ in: 1.25, out: 5, cache: 0.3125, long: { in: 2.5, out: 10, cache: 0.625 } }],
+
+      // Gemini 1.0 & Generic Aliases
+      'gemini-1.0-pro': [{ in: 0.5, out: 1.5, cache: 0.125 }],
+      'gemini-flash-lite': [{ in: 0.1, out: 0.4, cache: 0.01 }],
+      'gemini-flash': [{ in: 0.3, out: 2.5, cache: 0.03 }],
+      'gemini-pro': [{ in: 1.25, out: 5, cache: 0.125 }],
+      'text-embedding-004': [{ in: 0.04, out: 0, cache: 0.01 }],
+      'gemini-embedding': [{ in: 0.04, out: 0, cache: 0.01 }],
     };
     // Longest table key that prefixes the model ("gemini-3.8-flash-high" -> "gemini-3.8-flash"); null if unknown.
     function priceFor(model, timestamp, promptTokens) {
-      const m = String(model || '').toLowerCase();
+      let m = String(model || '').toLowerCase();
+      if (m.startsWith('models/')) m = m.slice(7);
       const key = Object.keys(MODEL_PRICES).filter((k) => m.startsWith(k)).sort((a, b) => b.length - a.length)[0];
       if (!key) return null;
       const at = new Date(timestamp || Date.now());
