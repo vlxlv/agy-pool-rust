@@ -378,6 +378,7 @@
         return;
       }
 
+      const canReorder = accountFilter === 'all' && !accountSearch.trim();
       let html = '';
       for (const [i, acc] of filtered.entries()) {
         const safeId = sanitizeId(acc.id);
@@ -389,13 +390,13 @@
               : `<button class="row-btn" data-act="disable" data-id="${id}">Disable</button>
                  <button class="row-btn" data-act="refresh" data-id="${id}" title="Refresh quota">Refresh</button>`}
             <button class="row-btn" data-act="rename" data-id="${id}">Rename</button>
-            <button class="row-btn" data-act="up" data-id="${id}" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
-            <button class="row-btn" data-act="down" data-id="${id}" title="Move down" aria-label="Move down" ${i === filtered.length - 1 ? 'disabled' : ''}>↓</button>
+            <button class="row-btn" data-act="up" data-id="${id}" title="Move up" aria-label="Move up" ${(!canReorder || i === 0) ? 'disabled' : ''}>↑</button>
+            <button class="row-btn" data-act="down" data-id="${id}" title="Move down" aria-label="Move down" ${(!canReorder || i === filtered.length - 1) ? 'disabled' : ''}>↓</button>
             ${acc.is_cli_base ? '' : `<button class="row-btn" data-act="switch" data-id="${id}" title="Use this account in the agy CLI">Use in CLI</button>`}
           </div></td>`;
         const modelsHtml = acc.models && acc.models.length > 0
           ? `<div class="acc-models">${acc.models.map((m) => {
-              const sm = (m.model || '').replace(/^gemini-/, '').replace(/-preview$/, '');
+              const sm = (m.model || '').replace(/^(models\/)?gemini-/, '').replace(/-preview$/, '');
               const reqs = Number(m.requests) || 0;
               const toks = fmtTokens(m.total_tokens);
               return `<span class="model-tag m-chip ok" title="${escapeHtml(m.model)}: ${reqs.toLocaleString()} reqs, ${toks}">` +
@@ -438,11 +439,13 @@
         if (!res.ok) return;
         const data = await res.json();
         const f = data.forecast;
+        const rwHours = data.runway_hours ?? (f ? f.hours_remaining : null);
+        const burn = data.burn_rate_requests_per_hour ?? (f ? f.req_per_hour : null);
+        const win = data.window_used || data.window || '12h';
+        $('metric-forecast-window').textContent = `${win} window`;
         const fmtHours = (hrs) => hrs === null ? '—' : (hrs < 1 ? '<1h' : (hrs > 999 ? '>999h' : `${Math.round(hrs)}h`));
-        $('metric-forecast-window').textContent = data.window ? `${data.window} window` : 'runway';
-        const rw = f ? f.hours_remaining : null;
-        $('metric-runway-text').innerHTML = rw === null ? '—' : `${fmtHours(rw)}`;
-        $('metric-burnrate').textContent = f && f.req_per_hour !== null ? f.req_per_hour.toFixed(1) : '0.0';
+        $('metric-runway-text').textContent = data.runway_text || (rwHours !== null ? fmtHours(rwHours) : (data.is_sustainable ? 'Sustainable' : '—'));
+        $('metric-burnrate').textContent = burn !== null ? Number(burn).toFixed(1) : '0.0';
       } catch (_) {}
     }
 
@@ -469,6 +472,7 @@
     });
 
     function showVerifyLink(url) {
+      if (!/^https:\/\//i.test(url)) return;
       const link = $('verify-link');
       link.href = url;
       link.textContent = url;
