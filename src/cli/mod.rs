@@ -201,12 +201,13 @@ fn print_help(out: &mut dyn Write) {
         out,
         "{}",
         concat!(
-            "usage: agy-pool [-h] [-v] {login,add,import-current,list,ls,quota,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,tokens,forecast,runway,predict,top,watch,monitor,update,version,run} ...\n\n",
+            "usage: agy-pool [-h] [-v] {login,add,import-current,list,ls,quota,model,models,strategy,strat,rename,doctor,check,health,remove,rm,switch,export,backup,import,restore,verify,disable,enable,move,mv,swap,sort,reorder,order,config,log,logs,start,stop,restart,status,stats,tokens,forecast,runway,predict,top,watch,monitor,update,version,run} ...\n\n",
             "Antigravity Multi-Account Pool & Load Balancer for Termux & Linux\n\n",
             "Examples:\n",
             "  agy-pool login            Add/login a new Google account\n",
             "  agy-pool list [-e]        List accounts in rotation pool (-e to show email)\n",
             "  agy-pool quota [-e]       Display per-account quota progress bars (-e to show email)\n",
+            "  agy-pool model [-e]       List available models per account (-e to show email)\n",
             "  agy-pool top [-e]         Interactive real-time quota & activity dashboard (-e to show email)\n",
             "  agy-pool stats [--json]   Track and evaluate algorithm routing and rotation effectiveness\n",
             "  agy-pool tokens [-r 24h]  Show token usage per account (ranges: 1h, 24h, 7d, total)\n",
@@ -243,6 +244,8 @@ const COMMANDS_USING_GLOBAL_HELP: &[&str] = &[
     "list",
     "ls",
     "quota",
+    "model",
+    "models",
     "top",
     "watch",
     "monitor",
@@ -337,6 +340,7 @@ pub async fn main(args: &[String], io: &mut Io<'_>) -> i32 {
         },
         "list" | "ls" => accounts::list_cmd(io, &args[1..]).await,
         "quota" => accounts::quota_cmd(io, &args[1..]).await,
+        "model" | "models" => accounts::model_cmd(io, &args[1..]).await,
         "top" | "watch" | "monitor" => top::top_cmd(io, &args[1..]).await,
         "strategy" | "strat" => {
             let target = if args.len() > 1 { &args[1] } else { "" };
