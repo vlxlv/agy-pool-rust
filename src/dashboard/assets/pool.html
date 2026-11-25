@@ -438,14 +438,13 @@
         const res = await agyFetch('/api/v1/forecast');
         if (!res.ok) return;
         const data = await res.json();
-        const f = data.forecast;
-        const rwHours = data.runway_hours ?? (f ? f.hours_remaining : null);
-        const burn = data.burn_rate_requests_per_hour ?? (f ? f.req_per_hour : null);
-        const win = data.window_used || data.window || '12h';
-        $('metric-forecast-window').textContent = `${win} window`;
+        const rwHours = data.runway_hours ?? null;
+        const burn = Number(data.burn_rate_requests_per_hour);
+        const win = data.window_used || 'idle';
+        $('metric-forecast-window').textContent = (win === 'idle' || win === 'smoothed') ? win : `${win} window`;
         const fmtHours = (hrs) => hrs === null ? '—' : (hrs < 1 ? '<1h' : (hrs > 999 ? '>999h' : `${Math.round(hrs)}h`));
         $('metric-runway-text').textContent = data.runway_text || (rwHours !== null ? fmtHours(rwHours) : (data.is_sustainable ? 'Sustainable' : '—'));
-        $('metric-burnrate').textContent = burn !== null ? Number(burn).toFixed(1) : '0.0';
+        $('metric-burnrate').textContent = (data.burn_rate_requests_per_hour != null && Number.isFinite(burn)) ? burn.toFixed(1) : '0.0';
       } catch (_) {}
     }
 
@@ -472,11 +471,12 @@
     });
 
     function showVerifyLink(url) {
-      if (!/^https:\/\//i.test(url)) return;
+      if (typeof url !== 'string' || !/^https:\/\//i.test(url)) return false;
       const link = $('verify-link');
       link.href = url;
       link.textContent = url;
       $('verify-dialog').showModal();
+      return true;
     }
 
     $('accounts-table-body').addEventListener('click', async (e) => {
@@ -511,10 +511,12 @@
       const data = await control(path, body);
       btn.disabled = false;
       if (data) {
-        if (act === 'refresh' && data.validation_url) {
-          showVerifyLink(data.validation_url);
+        if (act === 'refresh' && data.validation_url && showVerifyLink(data.validation_url)) {
+          // Verification dialog opened.
         } else if (act === 'refresh' && data.status === 'validation_required') {
           showToast('Google still wants this account verified and sent no link. Run `agy-pool verify`.', true);
+        } else if (act === 'refresh' && data.validation_url) {
+          showToast('Verification link blocked: must use https://.', true);
         } else {
           showToast('Done.');
         }

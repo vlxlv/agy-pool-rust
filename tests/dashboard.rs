@@ -725,6 +725,15 @@ async fn test_embedded_spa_asset_constraints() {
         body_str.contains("/api/v1/forecast"),
         "missing /api/v1/forecast reference"
     );
+    for needle in [
+        "burn_rate_requests_per_hour",
+        "window_used",
+        "runway_text",
+        "runway_hours",
+        "is_sustainable",
+    ] {
+        assert!(body_str.contains(needle), "missing ForecastResponse field {needle}");
+    }
     assert!(body_str.contains("/api/v1/events"), "missing /api/v1/events reference");
     assert!(body_str.contains("/api/v1/tokens"), "missing /api/v1/tokens reference");
     assert!(body_str.contains("token-usage-body"), "missing token usage table");
@@ -805,6 +814,8 @@ async fn test_embedded_spa_asset_constraints() {
         "verify-dialog",
         "toast",
         "Disable the last enabled account?",
+        "accountFilter === 'all' && !accountSearch.trim()",
+        "!/^https:\\/\\//i.test(url)",
     ] {
         assert!(body_str.contains(needle), "missing {needle}");
     }
