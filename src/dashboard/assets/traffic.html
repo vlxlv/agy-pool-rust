@@ -757,7 +757,7 @@
         }
         items = [...modelMap.entries()]
           .map(([model, tokens]) => ({
-            name: model.replace(/^gemini-/, '').replace(/-preview$/, ''),
+            name: model.replace(/^(models\/)?gemini-/, '').replace(/-preview$/, ''),
             fullName: model,
             tokens,
           }))
@@ -902,7 +902,7 @@
           : [];
         const modelsHtml = accModels.length > 0
           ? `<div class="acc-models">${accModels.map((m) => {
-              const sm = (m.model || '').replace(/^gemini-/, '').replace(/-preview$/, '');
+              const sm = (m.model || '').replace(/^(models\/)?gemini-/, '').replace(/-preview$/, '');
               const reqs = m.reqs;
               const toks = fmtTokens(m.tokens);
               return `<span class="model-tag" title="${escapeHtml(m.model)}: ${reqs.toLocaleString()} reqs, ${toks}">` +
