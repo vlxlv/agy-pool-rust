@@ -867,32 +867,6 @@ pub async fn import_current() -> Result<crate::storage::Account, AccountsError> 
             .join("antigravity-oauth-token"),
         crate::config::native_agy_dir().join("antigravity-oauth-token"),
     ];
-    let mut data = None;
-    let mut last_err = None;
-    for cand in &candidates {
-        if cand.exists() {
-            crate::config::assert_safe_read_path(cand)?;
-            match std::fs::read(cand) {
-                Ok(bytes) => {
-                    data = Some(bytes);
-                    break;
-                }
-                Err(e) => last_err = Some(e),
-            }
-        }
-    }
-    let data = match data {
-        Some(d) => d,
-        None => {
-            return Err(AccountsError::Message(format!(
-                "no existing token file found: {}",
-                last_err
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "file not found".to_string())
-            )));
-        }
-    };
-
     #[derive(serde::Deserialize)]
     struct Raw {
         #[serde(default)]
@@ -910,24 +884,45 @@ pub async fn import_current() -> Result<crate::storage::Account, AccountsError> 
         refresh_token: String,
     }
 
-    let raw: Raw = serde_json::from_slice(&data)
-        .map_err(|e| AccountsError::Message(format!("failed to parse token file: {}", e)))?;
-    if raw.token.refresh_token.is_empty() {
-        return Err(AccountsError::Message(
-            "no refresh_token found in existing token file".to_string(),
-        ));
+    // Take the first candidate that parses with a refresh_token; remember why the others were skipped.
+    let mut raw = None;
+    let mut errors = Vec::new();
+    for cand in &candidates {
+        crate::config::assert_safe_read_path(cand)?;
+        let data = match std::fs::read(cand) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                errors.push(format!("{}: {}", cand.display(), e));
+                continue;
+            }
+        };
+        match serde_json::from_slice::<Raw>(&data) {
+            Ok(r) if !r.token.refresh_token.is_empty() => {
+                raw = Some(r);
+                break;
+            }
+            Ok(_) => errors.push(format!("{}: no refresh_token found", cand.display())),
+            Err(e) => errors.push(format!("{}: failed to parse token file: {}", cand.display(), e)),
+        }
     }
+    let Some(raw) = raw else {
+        return Err(AccountsError::Message(if errors.is_empty() {
+            "no existing token file found".to_string()
+        } else {
+            format!("no usable token file found: {}", errors.join("; "))
+        }));
+    };
 
     let claims = crate::auth::decode_jwt_payload(&raw.id_token);
-    let email = if !raw.id_token_email.is_empty() {
-        raw.id_token_email
-    } else {
-        claims
-            .get("email")
-            .and_then(|v| v.as_str())
-            .unwrap_or("primary_user@gmail.com")
-            .to_string()
-    };
+    let email = claims
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .or_else(|| Some(raw.id_token_email.trim()).filter(|e| !e.is_empty()))
+        .unwrap_or("primary_user@gmail.com")
+        .to_string();
 
     let now = crate::clock::now_unix() as i64;
     let zero_expiry: f64 = 0.0;
@@ -935,7 +930,7 @@ pub async fn import_current() -> Result<crate::storage::Account, AccountsError> 
 
     crate::storage::pool_transaction(|pool| {
         for a in &mut pool.accounts {
-            if a.email == email {
+            if a.email.trim().eq_ignore_ascii_case(&email) {
                 a.refresh_token = raw.token.refresh_token.clone();
                 a.access_token = raw.token.access_token.clone();
                 a.token_expiry = Some(zero_expiry);
@@ -2836,5 +2831,39 @@ mod tests {
         assert_eq!(acc.email, "jetski_user@example.com");
         assert_eq!(acc.refresh_token, "jetski-rf");
         assert_eq!(acc.access_token, "jetski-at");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn test_import_current_skips_unusable_primary_and_matches_email_case_insensitively() {
+        let _env = setup_isolated_test_dir();
+
+        crate::storage::pool_transaction(|pool| {
+            pool.accounts.push(crate::storage::Account {
+                id: "acc_1".to_string(),
+                email: "User@Example.com".to_string(),
+                refresh_token: "old-rf".to_string(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        // Primary file exists but has no refresh_token; the jetski fallback must still be used.
+        let primary = crate::config::agy_token_file();
+        std::fs::create_dir_all(primary.parent().unwrap()).unwrap();
+        std::fs::write(&primary, br#"{"token":{}}"#).unwrap();
+        let jetski = crate::config::native_agy_dir().join("jetski-standalone-oauth-token");
+        std::fs::create_dir_all(jetski.parent().unwrap()).unwrap();
+        let payload = serde_json::json!({
+            "token": {"access_token": "new-at", "refresh_token": "new-rf"},
+            "id_token_email": " user@example.com "
+        });
+        std::fs::write(&jetski, serde_json::to_vec(&payload).unwrap()).unwrap();
+
+        let acc = import_current().await.unwrap();
+        assert_eq!(acc.id, "acc_1");
+        assert_eq!(acc.refresh_token, "new-rf");
+        assert_eq!(crate::storage::load_pool().unwrap().accounts.len(), 1);
     }
 }

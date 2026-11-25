@@ -613,9 +613,8 @@ pub async fn query_available_models(account: &mut Account) -> Result<AvailableMo
     if account.status == crate::storage::STATUS_DISABLED {
         return Err(QuotaError::AccountDisabled);
     }
-    let at = do_refresh_token(account, false)
-        .await
-        .map_err(|e| QuotaError::TokenRefresh(e.to_string()))?;
+    fail_closed_test_guard()?;
+    let at = query_access_token(account).await?;
     let ua = get_user_agent();
     let models_url = format!("{}/v1internal:fetchAvailableModels", get_backend_url_base());
     let (status, body) = do_http_post(&models_url, &at, &ua, b"{}", Duration::from_secs(10))
@@ -623,6 +622,39 @@ pub async fn query_available_models(account: &mut Account) -> Result<AvailableMo
         .map_err(QuotaError::Http)?;
 
     if status >= 400 {
+        let is_val = crate::auth::is_validation_error(status, &body);
+        if is_val || crate::auth::is_auth_error(status, &body) {
+            // Persist the auth state like the quota path does, but leave last_quota alone.
+            let status_str = if is_val {
+                crate::storage::STATUS_VALIDATION_REQUIRED
+            } else {
+                crate::storage::STATUS_AUTH_ERROR
+            };
+            let cooldown = crate::clock::now_unix() + if is_val { 86400.0 } else { 3600.0 };
+            let v_url = crate::auth::extract_validation_url(&body);
+            account.status = status_str.to_string();
+            if !v_url.is_empty() {
+                account.validation_url = Some(v_url);
+            }
+            account.rate_limited_until = Some(cooldown);
+            let id = account.id.clone();
+            let s_str = account.status.clone();
+            let v_opt = account.validation_url.clone();
+            if let Err(e) = execute_pool_transaction(move |pool| {
+                if let Some(stored) = pool.accounts.iter_mut().find(|a| a.id == id) {
+                    stored.status = s_str;
+                    stored.validation_url = v_opt;
+                    stored.rate_limited_until = Some(cooldown);
+                    stored.error_count += 1;
+                }
+                Ok(())
+            }) {
+                return Err(QuotaError::Persistence(format!(
+                    "failed to persist {} state for account {}: {}",
+                    status_str, account.id, e
+                )));
+            }
+        }
         return Err(QuotaError::Upstream(format!(
             "fetchAvailableModels HTTP {}: {}",
             status,
@@ -710,7 +742,7 @@ async fn query_quota_inner(account: &mut Account) -> Result<QuotaState, QuotaErr
     res
 }
 
-async fn query_quota_exec(account: &mut Account) -> Result<QuotaState, QuotaError> {
+fn fail_closed_test_guard() -> Result<(), QuotaError> {
     if BACKEND_URL_BASE_PROVIDER
         .read()
         .unwrap_or_else(|e| e.into_inner())
@@ -721,24 +753,28 @@ async fn query_quota_exec(account: &mut Account) -> Result<QuotaState, QuotaErro
             "[FAIL-CLOSED TEST GUARD] refusing external quota query in test mode without mock backend".to_string(),
         ));
     }
+    Ok(())
+}
 
+/// Access token for a backend query; force-refreshes accounts in an auth/validation state so they can recover.
+async fn query_access_token(account: &mut Account) -> Result<String, QuotaError> {
     let force_refresh = account.status == crate::storage::STATUS_VALIDATION_REQUIRED
         || account.status == crate::storage::STATUS_AUTH_ERROR
         || account.validation_url.as_deref().is_some_and(|u| !u.is_empty());
 
-    let at = match do_refresh_token(account, force_refresh).await {
-        Ok(t) => t,
-        Err(e) => {
-            if force_refresh && !account.access_token.is_empty() {
-                account.access_token.clone()
-            } else {
-                return Err(QuotaError::TokenRefresh(format!(
-                    "token refresh failed for account {}: {}",
-                    account.id, e
-                )));
-            }
-        }
-    };
+    match do_refresh_token(account, force_refresh).await {
+        Ok(t) => Ok(t),
+        Err(_) if force_refresh && !account.access_token.is_empty() => Ok(account.access_token.clone()),
+        Err(e) => Err(QuotaError::TokenRefresh(format!(
+            "token refresh failed for account {}: {}",
+            account.id, e
+        ))),
+    }
+}
+
+async fn query_quota_exec(account: &mut Account) -> Result<QuotaState, QuotaError> {
+    fail_closed_test_guard()?;
+    let at = query_access_token(account).await?;
 
     let mut quota_data = QuotaState::default();
     if let Some(lq) = &account.last_quota {
@@ -2110,5 +2146,30 @@ mod tests {
             query_available_models(&mut err_acc).await,
             Err(QuotaError::Upstream(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn test_query_available_models_test_guard_and_auth_error() {
+        let _env = setup_quota_test_dir();
+
+        let mut acc = Account {
+            id: "acc_1".to_string(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            query_available_models(&mut acc).await,
+            Err(QuotaError::TestGuard(_))
+        ));
+
+        let srv = TestServer::start(|_| (401, vec![], b"unauthorized".to_vec()));
+        let url = srv.url();
+        let _bg = set_backend_url_base_provider_for_test(Some(Box::new(move || url.clone())));
+        let _tg = set_token_refresher_for_test(Some(Box::new(|_| Ok("tok".to_string()))));
+        assert!(matches!(
+            query_available_models(&mut acc).await,
+            Err(QuotaError::Upstream(_))
+        ));
+        assert_eq!(acc.status, crate::storage::STATUS_AUTH_ERROR);
+        assert!(acc.rate_limited_until.is_some());
     }
 }
