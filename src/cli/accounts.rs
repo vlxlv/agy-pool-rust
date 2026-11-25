@@ -322,20 +322,11 @@ pub async fn model_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
         }
     }
 
-    let mut pool = match crate::storage::load_pool() {
+    let pool = match crate::storage::load_pool() {
         Ok(p) => p,
-        Err(_) => {
-            if as_json {
-                let _ = writeln!(io.stdout, "[]");
-            } else {
-                let _ = writeln!(io.stdout, "\n{}No accounts in pool yet.{}", CLR_YELLOW, CLR_RESET);
-                let _ = writeln!(
-                    io.stdout,
-                    "Run {}agy-pool login{} or {}agy-pool import-current{} to add accounts.\n",
-                    CLR_BOLD, CLR_RESET, CLR_BOLD, CLR_RESET
-                );
-            }
-            return 0;
+        Err(e) => {
+            let _ = writeln!(io.stderr, "{}[Error] Failed to load pool: {}{}", CLR_RED, e, CLR_RESET);
+            return 1;
         }
     };
     if pool.accounts.is_empty() {
@@ -464,7 +455,7 @@ pub async fn model_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
         } else if acc.status == crate::storage::STATUS_AUTH_ERROR {
             ("Auth Error", CLR_RED)
         } else if is_cli_base {
-            ("CLI Base", CLR_GREEN)
+            ("CLI Base", if ok { CLR_GREEN } else { CLR_RED })
         } else if acc.status.is_empty() || acc.status == "active" {
             if ok {
                 ("Ready", CLR_GREEN)
@@ -476,11 +467,35 @@ pub async fn model_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
         }
     }
 
-    for idx in indices {
-        let acc = &mut pool.accounts[idx];
-        let display_id = format_display_id(acc, idx);
+    // Query accounts concurrently so N slow accounts cost one timeout, not N.
+    let total = indices.len();
+    let mut set = tokio::task::JoinSet::new();
+    for &idx in &indices {
+        let mut acc = pool.accounts[idx].clone();
+        set.spawn(async move {
+            let res = crate::quota::query_available_models(&mut acc).await;
+            (idx, acc, res.map_err(|e| e.to_string()))
+        });
+    }
+    let mut results = Vec::with_capacity(total);
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok(r) => results.push(r),
+            Err(e) => {
+                let _ = writeln!(
+                    io.stderr,
+                    "{}[Error] model query task failed: {}{}",
+                    CLR_RED, e, CLR_RESET
+                );
+            }
+        }
+    }
+    results.sort_by_key(|r| r.0);
+    let mut failed = total - results.len();
 
-        let fetch_res = crate::quota::query_available_models(acc).await;
+    for (idx, acc, fetch_res) in results {
+        let acc = &acc;
+        let display_id = format_display_id(acc, idx);
 
         match fetch_res {
             Ok(res) => {
@@ -631,6 +646,7 @@ pub async fn model_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
                 }
             }
             Err(e) => {
+                failed += 1;
                 if as_json {
                     json_results.push(AccountModelJson {
                         index: idx + 1,
@@ -671,7 +687,7 @@ pub async fn model_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
         );
     }
 
-    0
+    if total > 0 && failed == total { 1 } else { 0 }
 }
 
 pub fn format_last_used(ts: Option<i64>, now: i64) -> String {
@@ -3871,6 +3887,30 @@ mod tests {
         let (code, stdout, _) = crate::cli::test_support::run_cli(&["model", "--json"], "").await;
         assert_eq!(code, 0);
         assert_eq!(stdout.trim(), "[]");
+    }
+
+    #[tokio::test]
+    async fn test_model_cmd_exits_nonzero_when_all_fetches_fail() {
+        let _env = crate::cli::test_support::cli_test_env();
+        let srv = crate::testutil::TestServer::start(|_| (500, vec![], b"boom".to_vec()));
+        let s_url = srv.url();
+        let _bg = crate::quota::set_backend_url_base_provider_for_test(Some(Box::new(move || s_url.clone())));
+        let _tg = crate::quota::set_token_refresher_for_test(Some(Box::new(|_| Ok("tok".to_string()))));
+        let pool = crate::storage::Pool {
+            version: 1,
+            active_account_id: Some("acc_1".to_string()),
+            accounts: vec![crate::storage::Account {
+                id: "acc_1".to_string(),
+                name: "Main".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        crate::storage::save_pool(&pool).unwrap();
+
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["model", "--json"], "").await;
+        assert_eq!(code, 1);
+        assert!(stdout.contains("\"error\""), "stdout: {stdout}");
     }
 
     #[tokio::test]
