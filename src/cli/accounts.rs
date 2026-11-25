@@ -296,6 +296,384 @@ pub async fn quota_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
     0
 }
 
+pub async fn model_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
+    let (_, rem) = match crate::cli::resolve_context_for_cmd(args) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = writeln!(
+                io.stderr,
+                "{}[Error] Failed to resolve instance: {}{}",
+                CLR_RED, e, CLR_RESET
+            );
+            return 1;
+        }
+    };
+
+    let mut target = "";
+    let mut as_json = false;
+    let mut show_email = false;
+    for a in &rem {
+        if a == "--json" {
+            as_json = true;
+        } else if a == "-e" || a == "--email" || a == "--show-email" {
+            show_email = true;
+        } else if !a.starts_with('-') && target.is_empty() {
+            target = a.as_str();
+        }
+    }
+
+    let mut pool = match crate::storage::load_pool() {
+        Ok(p) => p,
+        Err(_) => {
+            if as_json {
+                let _ = writeln!(io.stdout, "[]");
+            } else {
+                let _ = writeln!(io.stdout, "\n{}No accounts in pool yet.{}", CLR_YELLOW, CLR_RESET);
+                let _ = writeln!(
+                    io.stdout,
+                    "Run {}agy-pool login{} or {}agy-pool import-current{} to add accounts.\n",
+                    CLR_BOLD, CLR_RESET, CLR_BOLD, CLR_RESET
+                );
+            }
+            return 0;
+        }
+    };
+    if pool.accounts.is_empty() {
+        if as_json {
+            let _ = writeln!(io.stdout, "[]");
+        } else {
+            let _ = writeln!(io.stdout, "\n{}No accounts in pool yet.{}", CLR_YELLOW, CLR_RESET);
+            let _ = writeln!(
+                io.stdout,
+                "Run {}agy-pool login{} or {}agy-pool import-current{} to add accounts.\n",
+                CLR_BOLD, CLR_RESET, CLR_BOLD, CLR_RESET
+            );
+        }
+        return 0;
+    }
+
+    let indices: Vec<usize> = if !target.is_empty() {
+        if let Ok(idx) = target.parse::<usize>() {
+            if idx >= 1 && idx <= pool.accounts.len() {
+                vec![idx - 1]
+            } else {
+                let _ = writeln!(
+                    io.stderr,
+                    "{}[Error] Account index {} out of range (1..{}){}",
+                    CLR_RED,
+                    idx,
+                    pool.accounts.len(),
+                    CLR_RESET
+                );
+                return 1;
+            }
+        } else {
+            let matched: Vec<usize> = pool
+                .accounts
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.id == target || a.name == target || a.email == target)
+                .map(|(i, _)| i)
+                .collect();
+            if matched.is_empty() {
+                let _ = writeln!(
+                    io.stderr,
+                    "{}[Error] No account matching '{}'{}",
+                    CLR_RED, target, CLR_RESET
+                );
+                return 1;
+            }
+            matched
+        }
+    } else {
+        (0..pool.accounts.len()).collect()
+    };
+
+    #[derive(serde::Serialize)]
+    struct AccountModelJson {
+        index: usize,
+        id: String,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+        status: String,
+        default_model: String,
+        total_models: usize,
+        models: Vec<ModelJsonItem>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct ModelJsonItem {
+        name: String,
+        category: String,
+        remaining_fraction: Option<f64>,
+        reset_time: Option<String>,
+        max_tokens: Option<i64>,
+        max_output_tokens: Option<i64>,
+        is_default: bool,
+    }
+
+    let mut json_results = Vec::new();
+
+    if !as_json {
+        let _ = writeln!(io.stdout);
+        let _ = writeln!(
+            io.stdout,
+            "===================================================================="
+        );
+        let _ = writeln!(
+            io.stdout,
+            "               {}Antigravity Backend Account Models{} (agy-pool {})",
+            CLR_BOLD,
+            CLR_RESET,
+            crate::VERSION
+        );
+        let _ = writeln!(
+            io.stdout,
+            "===================================================================="
+        );
+    }
+
+    let format_display_id = |acc: &crate::storage::Account, idx: usize| -> String {
+        if show_email && !acc.email.is_empty() {
+            if acc.name.is_empty() || acc.name == format!("Account {}", idx + 1) {
+                format!("Account {} · {} ({})", idx + 1, acc.email, acc.id)
+            } else {
+                format!("{} (#{}) · {} ({})", acc.name, idx + 1, acc.email, acc.id)
+            }
+        } else if !acc.name.is_empty() {
+            format!("{} (#{}) ({})", acc.name, idx + 1, acc.id)
+        } else {
+            format!("Account {} ({})", idx + 1, acc.id)
+        }
+    };
+
+    fn format_model_account_status<'a>(
+        acc: &'a crate::storage::Account,
+        active_id: Option<&str>,
+        ok: bool,
+    ) -> (&'a str, &'static str) {
+        let is_cli_base = active_id == Some(acc.id.as_str());
+        if acc.status == crate::storage::STATUS_DISABLED {
+            ("Disabled", CLR_RED)
+        } else if acc.status == crate::storage::STATUS_VALIDATION_REQUIRED {
+            ("Verify Required", CLR_YELLOW)
+        } else if acc.status == crate::storage::STATUS_VERIFICATION_PENDING {
+            ("Verification Pending", CLR_YELLOW)
+        } else if acc.status == crate::storage::STATUS_AUTH_ERROR {
+            ("Auth Error", CLR_RED)
+        } else if is_cli_base {
+            ("CLI Base", CLR_GREEN)
+        } else if acc.status.is_empty() || acc.status == "active" {
+            if ok {
+                ("Ready", CLR_GREEN)
+            } else {
+                ("Unknown", CLR_YELLOW)
+            }
+        } else {
+            (&acc.status, CLR_YELLOW)
+        }
+    }
+
+    for idx in indices {
+        let acc = &mut pool.accounts[idx];
+        let display_id = format_display_id(acc, idx);
+
+        let fetch_res = crate::quota::query_available_models(acc).await;
+
+        match fetch_res {
+            Ok(res) => {
+                let def_id = res.default_agent_model_id.clone();
+                let mut claude_models = Vec::new();
+                let mut gemini_models = Vec::new();
+                let mut other_models = Vec::new();
+
+                for (name, details) in &res.models {
+                    if name.starts_with("claude") {
+                        claude_models.push((name.clone(), details.clone()));
+                    } else if name.starts_with("gemini") {
+                        gemini_models.push((name.clone(), details.clone()));
+                    } else {
+                        other_models.push((name.clone(), details.clone()));
+                    }
+                }
+                claude_models.sort_by(|a, b| a.0.cmp(&b.0));
+                gemini_models.sort_by(|a, b| a.0.cmp(&b.0));
+                other_models.sort_by(|a, b| a.0.cmp(&b.0));
+
+                if as_json {
+                    let mut items = Vec::new();
+                    for (cat, list) in [
+                        ("claude", &claude_models),
+                        ("gemini", &gemini_models),
+                        ("other", &other_models),
+                    ] {
+                        for (m_name, m_det) in list {
+                            let rem = m_det.quota_info.as_ref().and_then(|q| {
+                                crate::quota::remaining_fraction(q.remaining_fraction.as_ref(), q.reset_time.as_ref())
+                            });
+                            let r_time = m_det.quota_info.as_ref().and_then(|q| {
+                                q.reset_time.as_ref().and_then(|v| match v {
+                                    serde_json::Value::String(s) => Some(s.clone()),
+                                    serde_json::Value::Null => None,
+                                    other => Some(other.to_string()),
+                                })
+                            });
+                            items.push(ModelJsonItem {
+                                name: m_name.clone(),
+                                category: cat.to_string(),
+                                remaining_fraction: rem,
+                                reset_time: r_time,
+                                max_tokens: m_det.max_tokens,
+                                max_output_tokens: m_det.max_output_tokens,
+                                is_default: m_name == &def_id,
+                            });
+                        }
+                    }
+                    json_results.push(AccountModelJson {
+                        index: idx + 1,
+                        id: acc.id.clone(),
+                        name: acc.name.clone(),
+                        email: show_email.then(|| acc.email.clone()),
+                        status: acc.status.clone(),
+                        default_model: def_id,
+                        total_models: res.models.len(),
+                        models: items,
+                        error: None,
+                    });
+                } else {
+                    let (status_str, status_color) =
+                        format_model_account_status(acc, pool.active_account_id.as_deref(), true);
+                    let _ = writeln!(
+                        io.stdout,
+                        "  {}{}{} · {}{}{}",
+                        CLR_BOLD, display_id, CLR_RESET, status_color, status_str, CLR_RESET
+                    );
+                    if !def_id.is_empty() {
+                        let _ = writeln!(io.stdout, "  Default Agent Model: {}{}{}", CLR_CYAN, def_id, CLR_RESET);
+                    }
+                    let _ = writeln!(io.stdout, "  Available Models ({}):", res.models.len());
+
+                    let format_token_k = |tokens: i64| -> String {
+                        if (tokens - 1_000_000).abs() <= 50_000 {
+                            "1M".to_string()
+                        } else if tokens >= 1_000_000 {
+                            format!("{:.1}M", tokens as f64 / 1_000_000.0)
+                        } else if (tokens - 65535).abs() <= 1 {
+                            "64k".to_string()
+                        } else if (tokens - 128000).abs() <= 100 || tokens == 131072 {
+                            "128k".to_string()
+                        } else if (tokens - 262144).abs() <= 100 || tokens == 256000 {
+                            "256k".to_string()
+                        } else if tokens % 1024 == 0 {
+                            format!("{}k", tokens / 1024)
+                        } else if tokens >= 1000 {
+                            format!("{}k", (tokens as f64 / 1000.0).round() as i64)
+                        } else {
+                            tokens.to_string()
+                        }
+                    };
+
+                    let format_entry = |name: &str, det: &crate::quota::ModelEntry| -> String {
+                        let rem_str = det
+                            .quota_info
+                            .as_ref()
+                            .and_then(|q| {
+                                crate::quota::remaining_fraction(q.remaining_fraction.as_ref(), q.reset_time.as_ref())
+                            })
+                            .map(|f| format!("{:>3.0}%", f * 100.0))
+                            .unwrap_or_else(|| " -- ".to_string());
+                        let ctx_str = det
+                            .max_tokens
+                            .map(|t| format!("ctx: {}", format_token_k(t)))
+                            .unwrap_or_default();
+                        let out_str = det
+                            .max_output_tokens
+                            .map(|t| format!("out: {}", format_token_k(t)))
+                            .unwrap_or_default();
+                        let meta = match (ctx_str.is_empty(), out_str.is_empty()) {
+                            (false, false) => format!("({ctx_str}, {out_str})"),
+                            (false, true) => format!("({ctx_str})"),
+                            (true, false) => format!("({out_str})"),
+                            (true, true) => String::new(),
+                        };
+                        let def_tag = if name == def_id {
+                            format!(" {}★ default{}", CLR_YELLOW, CLR_RESET)
+                        } else {
+                            String::new()
+                        };
+                        format!("    • {:<32} {:>5}  {:<20}{}", name, rem_str, meta, def_tag)
+                    };
+
+                    if !claude_models.is_empty() {
+                        let _ = writeln!(io.stdout, "    {}Claude:{}", CLR_BOLD, CLR_RESET);
+                        for (name, det) in &claude_models {
+                            let _ = writeln!(io.stdout, "{}", format_entry(name, det));
+                        }
+                    }
+                    if !gemini_models.is_empty() {
+                        let _ = writeln!(io.stdout, "    {}Gemini:{}", CLR_BOLD, CLR_RESET);
+                        for (name, det) in &gemini_models {
+                            let _ = writeln!(io.stdout, "{}", format_entry(name, det));
+                        }
+                    }
+                    if !other_models.is_empty() {
+                        let _ = writeln!(io.stdout, "    {}Other / System:{}", CLR_BOLD, CLR_RESET);
+                        for (name, det) in &other_models {
+                            let _ = writeln!(io.stdout, "{}", format_entry(name, det));
+                        }
+                    }
+                    let _ = writeln!(
+                        io.stdout,
+                        "--------------------------------------------------------------------"
+                    );
+                }
+            }
+            Err(e) => {
+                if as_json {
+                    json_results.push(AccountModelJson {
+                        index: idx + 1,
+                        id: acc.id.clone(),
+                        name: acc.name.clone(),
+                        email: show_email.then(|| acc.email.clone()),
+                        status: acc.status.clone(),
+                        default_model: String::new(),
+                        total_models: 0,
+                        models: Vec::new(),
+                        error: Some(e.to_string()),
+                    });
+                } else {
+                    let (status_str, status_color) =
+                        format_model_account_status(acc, pool.active_account_id.as_deref(), false);
+                    let _ = writeln!(
+                        io.stdout,
+                        "  {}{}{} · {}{}{}",
+                        CLR_BOLD, display_id, CLR_RESET, status_color, status_str, CLR_RESET
+                    );
+                    let _ = writeln!(io.stdout, "  {}Failed to fetch models: {}{}", CLR_RED, e, CLR_RESET);
+                    let _ = writeln!(
+                        io.stdout,
+                        "--------------------------------------------------------------------"
+                    );
+                }
+            }
+        }
+    }
+
+    if as_json {
+        let json_str = serde_json::to_string_pretty(&json_results).unwrap_or_default();
+        let _ = writeln!(io.stdout, "{}", json_str);
+    } else {
+        let _ = writeln!(
+            io.stdout,
+            "===================================================================="
+        );
+    }
+
+    0
+}
+
 pub fn format_last_used(ts: Option<i64>, now: i64) -> String {
     let t = match ts {
         Some(t) if t > 0 => t,
@@ -3481,5 +3859,125 @@ mod tests {
             text_cli.contains(&format!("RUNNING (127.0.0.1:{p2})")),
             "run_cli quota -p must resolve custom port: {text_cli}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_model_cmd_empty_pool() {
+        let _env = crate::cli::test_support::cli_test_env();
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["model"], "").await;
+        assert_eq!(code, 0);
+        assert!(stdout.contains("No accounts in pool yet."));
+
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["model", "--json"], "").await;
+        assert_eq!(code, 0);
+        assert_eq!(stdout.trim(), "[]");
+    }
+
+    #[tokio::test]
+    async fn test_model_cmd_mock_backend_text_json_and_show_email() {
+        let _env = crate::cli::test_support::cli_test_env();
+
+        let srv = crate::testutil::TestServer::start(|req| {
+            if req.path != "/v1internal:fetchAvailableModels" {
+                return (404, vec![], b"Not Found".to_vec());
+            }
+            let body = br#"{
+                "defaultAgentModelId": "gemini-4-hydrogen-high",
+                "models": {
+                    "claude-opus-5-5-high": {
+                        "maxTokens": 1000000,
+                        "maxOutputTokens": 128000,
+                        "quotaInfo": { "remainingFraction": 1.0 }
+                    },
+                    "gemini-4-hydrogen-high": {
+                        "maxTokens": 1048576,
+                        "maxOutputTokens": 262144,
+                        "quotaInfo": {
+                            "remainingFraction": "0.85",
+                            "resetTime": "2026-11-25T05:00:00Z"
+                        }
+                    },
+                    "gemini-4-neon-disabled": {
+                        "maxTokens": 1048576,
+                        "maxOutputTokens": 262144
+                    },
+                    "gpt-oss-120b-medium": {
+                        "maxTokens": 131072,
+                        "maxOutputTokens": 32768,
+                        "quotaInfo": { "resetTime": "2026-11-25T06:00:00Z" }
+                    }
+                }
+            }"#
+            .to_vec();
+            (
+                200,
+                vec![("content-type".to_string(), "application/json".to_string())],
+                body,
+            )
+        });
+        let s_url = srv.url();
+        let _bg = crate::quota::set_backend_url_base_provider_for_test(Some(Box::new(move || s_url.clone())));
+        let _tg = crate::quota::set_token_refresher_for_test(Some(Box::new(|acc| Ok(format!("token-{}", acc.id)))));
+
+        let pool = crate::storage::Pool {
+            version: 1,
+            active_account_id: Some("acc_1".to_string()),
+            accounts: vec![
+                crate::storage::Account {
+                    id: "acc_1".to_string(),
+                    name: "Main".to_string(),
+                    email: "secret@example.com".to_string(),
+                    ..Default::default()
+                },
+                crate::storage::Account {
+                    id: "acc_2".to_string(),
+                    name: "DisabledAcc".to_string(),
+                    email: "disabled@example.com".to_string(),
+                    status: crate::storage::STATUS_DISABLED.to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        crate::storage::save_pool(&pool).unwrap();
+
+        // Default hides email
+        let (code, stdout, stderr) = crate::cli::test_support::run_cli(&["model"], "").await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        let plain = strip_ansi(&stdout);
+        assert!(
+            !plain.contains("secret@example.com"),
+            "email must be hidden without -e:\n{plain}"
+        );
+        assert!(plain.contains("Main (#1) (acc_1) · CLI Base"));
+        assert!(plain.contains("DisabledAcc (#2) (acc_2) · Disabled"));
+        assert!(plain.contains("gemini-4-hydrogen-high"));
+        assert!(plain.contains("85%"));
+        assert!(plain.contains("★ default"));
+        assert!(plain.contains("gpt-oss-120b-medium"));
+        assert!(plain.contains("  0%"));
+
+        // -e reveals email
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["model", "-e", "1"], "").await;
+        assert_eq!(code, 0);
+        assert!(strip_ansi(&stdout).contains("secret@example.com"));
+
+        // --json without -e omits email; with -e includes it
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["model", "--json", "acc_1"], "").await;
+        assert_eq!(code, 0);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 1);
+        assert!(parsed[0].get("email").is_none());
+        assert_eq!(parsed[0]["total_models"], 4);
+
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["models", "--json", "-e", "acc_1"], "").await;
+        assert_eq!(code, 0);
+        let parsed_e: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(parsed_e[0]["email"], "secret@example.com");
+
+        // Unknown target fails
+        let (code, _, stderr) = crate::cli::test_support::run_cli(&["model", "nonexistent"], "").await;
+        assert_eq!(code, 1);
+        assert!(strip_ansi(&stderr).contains("No account matching"));
     }
 }

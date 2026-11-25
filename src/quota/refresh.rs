@@ -301,7 +301,7 @@ struct QuotaSummaryResponse {
     groups: Vec<Group>,
 }
 
-fn remaining_fraction(fraction: Option<&serde_json::Value>, reset: Option<&serde_json::Value>) -> Option<f64> {
+pub fn remaining_fraction(fraction: Option<&serde_json::Value>, reset: Option<&serde_json::Value>) -> Option<f64> {
     if fraction.is_none() && super::parse_iso_or_timestamp(reset).is_some() {
         return Some(0.0);
     }
@@ -522,37 +522,17 @@ async fn fetch_available_models_quota(
         )));
     }
 
-    #[derive(serde::Deserialize)]
-    struct QuotaInfo {
-        #[serde(default, rename = "remainingFraction")]
-        remaining_fraction: Option<serde_json::Value>,
-        #[serde(default, rename = "resetTime")]
-        reset_time: Option<serde_json::Value>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct ModelEntry {
-        #[serde(default, rename = "quotaInfo")]
-        quota_info: Option<QuotaInfo>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct AvailableModelsResponse {
-        #[serde(default, rename = "defaultAgentModelId")]
-        default_agent_model_id: String,
-        #[serde(default)]
-        models: HashMap<String, ModelEntry>,
-    }
-
     let res: AvailableModelsResponse = serde_json::from_slice(&body).map_err(QuotaError::Json)?;
 
     let mut candidates = Vec::new();
     if !res.default_agent_model_id.is_empty() {
         candidates.push(res.default_agent_model_id);
     }
+    candidates.push("gemini-3.8-flash-tiered".to_string());
     candidates.push("gemini-3.8-flash-high".to_string());
     candidates.push("gemini-3.6-flash-high".to_string());
     candidates.push("gemini-3.5-flash-medium".to_string());
+    candidates.push("gemini-3-flash".to_string());
 
     let mut rest = Vec::new();
     for name in res.models.keys() {
@@ -592,6 +572,65 @@ async fn fetch_available_models_quota(
     }
 
     Err(QuotaError::NoQuotaInfo)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ModelQuotaInfo {
+    #[serde(default, rename = "remainingFraction")]
+    pub remaining_fraction: Option<serde_json::Value>,
+    #[serde(default, rename = "resetTime")]
+    pub reset_time: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ModelEntry {
+    #[serde(default, rename = "quotaInfo")]
+    pub quota_info: Option<ModelQuotaInfo>,
+    #[serde(default, rename = "maxTokens")]
+    pub max_tokens: Option<i64>,
+    #[serde(default, rename = "maxOutputTokens")]
+    pub max_output_tokens: Option<i64>,
+    #[serde(default, rename = "apiProvider")]
+    pub api_provider: Option<String>,
+    #[serde(default, rename = "modelProvider")]
+    pub model_provider: Option<String>,
+    #[serde(default)]
+    pub recommended: Option<bool>,
+    #[serde(default, rename = "displayName")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct AvailableModelsResponse {
+    #[serde(default, rename = "defaultAgentModelId")]
+    pub default_agent_model_id: String,
+    #[serde(default)]
+    pub models: HashMap<String, ModelEntry>,
+}
+
+/// Query the upstream backend for the complete list of available models and their quota details.
+pub async fn query_available_models(account: &mut Account) -> Result<AvailableModelsResponse, QuotaError> {
+    if account.status == crate::storage::STATUS_DISABLED {
+        return Err(QuotaError::AccountDisabled);
+    }
+    let at = do_refresh_token(account, false)
+        .await
+        .map_err(|e| QuotaError::TokenRefresh(e.to_string()))?;
+    let ua = get_user_agent();
+    let models_url = format!("{}/v1internal:fetchAvailableModels", get_backend_url_base());
+    let (status, body) = do_http_post(&models_url, &at, &ua, b"{}", Duration::from_secs(10))
+        .await
+        .map_err(QuotaError::Http)?;
+
+    if status >= 400 {
+        return Err(QuotaError::Upstream(format!(
+            "fetchAvailableModels HTTP {}: {}",
+            status,
+            String::from_utf8_lossy(&body)
+        )));
+    }
+
+    serde_json::from_slice(&body).map_err(QuotaError::Json)
 }
 
 /// QueryQuota refreshes cached quota for the given account against the Google quota endpoint.
@@ -1987,5 +2026,89 @@ mod tests {
             let g5 = res.gemini_5h.expect("expected gemini_5h");
             assert_eq!(g5.fraction, Some(0.98));
         }
+    }
+
+    #[tokio::test]
+    async fn test_query_available_models_success_and_errors() {
+        let _env = setup_quota_test_dir();
+
+        let srv = TestServer::start(|req| {
+            if req.path != "/v1internal:fetchAvailableModels" {
+                return (404, vec![], b"Not Found".to_vec());
+            }
+            if req.header("authorization") != Some("Bearer mock-token") {
+                return (500, vec![], b"bad auth".to_vec());
+            }
+            let body = br#"{
+                "defaultAgentModelId": "gemini-4-hydrogen-high",
+                "models": {
+                    "gemini-4-hydrogen-high": {
+                        "displayName": "Gemini 4 Hydrogen (High)",
+                        "maxTokens": 1048576,
+                        "maxOutputTokens": 262144,
+                        "quotaInfo": {
+                            "remainingFraction": 0.95,
+                            "resetTime": "2026-11-25T05:00:00Z"
+                        }
+                    },
+                    "claude-opus-5-5-high": {
+                        "maxTokens": 1000000,
+                        "maxOutputTokens": 128000,
+                        "quotaInfo": {
+                            "remainingFraction": 1.0
+                        }
+                    }
+                }
+            }"#
+            .to_vec();
+            (
+                200,
+                vec![("content-type".to_string(), "application/json".to_string())],
+                body,
+            )
+        });
+
+        let url = srv.url();
+        let _bg = set_backend_url_base_provider_for_test(Some(Box::new(move || url.clone())));
+        let _tg = set_token_refresher_for_test(Some(Box::new(|acc| {
+            if acc.id == "acc_err" {
+                Ok("wrong-token".to_string())
+            } else {
+                Ok("mock-token".to_string())
+            }
+        })));
+
+        let mut acc = Account {
+            id: "acc_1".to_string(),
+            ..Default::default()
+        };
+        let res = query_available_models(&mut acc)
+            .await
+            .expect("query_available_models failed");
+        assert_eq!(res.default_agent_model_id, "gemini-4-hydrogen-high");
+        assert_eq!(res.models.len(), 2);
+        assert_eq!(
+            res.models["gemini-4-hydrogen-high"].display_name.as_deref(),
+            Some("Gemini 4 Hydrogen (High)")
+        );
+
+        let mut disabled = Account {
+            id: "acc_disabled".to_string(),
+            status: crate::storage::STATUS_DISABLED.to_string(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            query_available_models(&mut disabled).await,
+            Err(QuotaError::AccountDisabled)
+        ));
+
+        let mut err_acc = Account {
+            id: "acc_err".to_string(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            query_available_models(&mut err_acc).await,
+            Err(QuotaError::Upstream(_))
+        ));
     }
 }
