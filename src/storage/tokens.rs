@@ -100,6 +100,8 @@ pub enum TokenRange {
     Hour,
     Day,
     Week,
+    Month,
+    Quarter,
     Total,
 }
 
@@ -109,6 +111,8 @@ impl TokenRange {
             "1h" => Some(TokenRange::Hour),
             "24h" => Some(TokenRange::Day),
             "7d" => Some(TokenRange::Week),
+            "30d" => Some(TokenRange::Month),
+            "90d" => Some(TokenRange::Quarter),
             "total" => Some(TokenRange::Total),
             _ => None,
         }
@@ -119,18 +123,22 @@ impl TokenRange {
             TokenRange::Hour => "1h",
             TokenRange::Day => "24h",
             TokenRange::Week => "7d",
+            TokenRange::Month => "30d",
+            TokenRange::Quarter => "90d",
             TokenRange::Total => "total",
         }
     }
 
-    /// First hour bucket inside the range: 1h is the current clock hour; 24h and 7d are the current
-    /// hour plus the 23 / 167 before it; total has no start.
+    /// First hour bucket inside the range: 1h is the current clock hour; 24h / 7d / 30d / 90d are the current
+    /// hour plus the preceding hours in that span; total has no start.
     pub fn start_bucket(self, now_unix: i64) -> Option<i64> {
         let cur = hour_bucket(now_unix);
         match self {
             TokenRange::Hour => Some(cur),
             TokenRange::Day => Some(cur - 23 * 3600),
             TokenRange::Week => Some(cur - 167 * 3600),
+            TokenRange::Month => Some(cur - (30 * 24 - 1) * 3600),
+            TokenRange::Quarter => Some(cur - (90 * 24 - 1) * 3600),
             TokenRange::Total => None,
         }
     }

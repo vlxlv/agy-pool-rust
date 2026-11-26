@@ -63,8 +63,8 @@
       agy-pool
     </a>
     <nav class="nav" aria-label="Pages">
-      <a href="/dashboard" aria-current="page">Pool</a>
-      <a href="/dashboard/traffic">Traffic</a>
+      <a href="/dashboard" aria-current="page" data-i18n>Pool</a>
+      <a href="/dashboard/traffic" data-i18n>Traffic</a>
     </nav>
     <div class="tools">
       <div class="pulse">
@@ -86,15 +86,16 @@
       </div>
       <span class="chip" id="conn" title="Connecting"><span id="conn-dot" class="dot wait"></span><span id="conn-text">Connecting</span></span>
       <button id="version-btn" type="button" class="chip version-btn"><span id="version-pill" class="num">…</span><span id="version-update-badge" class="update-flag" hidden></span></button>
-      <button id="config-btn" type="button" class="chip" hidden>Config &amp; health</button>
+      <button id="config-btn" type="button" class="chip" hidden data-i18n>Config &amp; health</button>
       <select id="strategy-select" aria-label="Routing strategy" title="Routing strategy" hidden>
         <option value="smart">Smart routing</option>
         <option value="max_quota">Most quota first</option>
       </select>
+      <button id="lang-btn" type="button" class="chip lang-btn" title="Switch language / 切换语言">中文</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="Theme">
-        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true">Auto</button>
-        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false">Light</button>
-        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false">Dark</button>
+        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true" data-i18n>Auto</button>
+        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false" data-i18n>Light</button>
+        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false" data-i18n>Dark</button>
       </div>
     </div>
   </header>
@@ -112,11 +113,18 @@
   <main>
     <section class="hero" aria-label="Pool quota">
       <div class="gauges-panel">
+        <div class="gauges-head">
+          <span class="gauges-head-title" id="pool-gauge-title">Gemini quota pool</span>
+          <div class="seg" id="pool-kind-seg" role="group" aria-label="Quota pool">
+            <button type="button" class="active" data-pool-kind="gemini">Gemini</button>
+            <button type="button" data-pool-kind="3p">Claude &amp; GPT (3P)</button>
+          </div>
+        </div>
         <div class="gauges">
           <div class="gauge">
             <svg id="gauge" viewBox="0 0 100 70" role="img" aria-label="5-hour quota by account"></svg>
             <div class="gauge-read">
-              <div class="gauge-label">5-Hour Quota</div>
+              <div class="gauge-label" data-i18n>5-Hour Quota</div>
               <div class="big num" id="pool-5h-pct">—</div>
               <div class="sub">Next reset in <strong id="pool-next-reset" class="num">—</strong></div>
             </div>
@@ -124,7 +132,7 @@
           <div class="gauge">
             <svg id="gauge-weekly" viewBox="0 0 100 70" role="img" aria-label="Weekly quota by account"></svg>
             <div class="gauge-read">
-              <div class="gauge-label">Weekly Quota</div>
+              <div class="gauge-label" data-i18n>Weekly Quota</div>
               <div class="big num" id="pool-weekly-pct">—</div>
               <div class="sub">Next reset in <strong id="pool-weekly-reset" class="num">—</strong></div>
             </div>
@@ -134,7 +142,7 @@
       <div class="hero-stack">
         <article class="pulse-card">
           <div class="pulse-head">
-            <span>Routable Account Pool</span>
+            <span data-i18n>Routable Account Pool</span>
             <span class="badge teal" id="pool-ready-badge">Ready</span>
           </div>
           <div class="pulse-main">
@@ -145,7 +153,7 @@
         </article>
         <article class="pulse-card">
           <div class="pulse-head">
-            <span>Runway at Current Pace</span>
+            <span data-i18n>Runway at Current Pace</span>
             <span class="badge violet" id="metric-forecast-window">12h</span>
           </div>
           <div class="pulse-main">
@@ -155,7 +163,7 @@
         </article>
         <article class="pulse-card lead">
           <div class="pulse-head">
-            <span>Gateway Throughput</span>
+            <span data-i18n>Gateway Throughput</span>
             <span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span>
           </div>
           <div class="pulse-main">
@@ -167,6 +175,22 @@
       </div>
     </section>
 
+    <section class="section" aria-labelledby="quota-hist-title">
+      <div class="chart-card">
+        <div class="chart-card-head">
+          <span class="chart-card-title" id="quota-hist-title" data-i18n>Quota burn history</span>
+          <div class="quota-hist-legend" id="quota-hist-legend"></div>
+          <div class="seg" id="quota-hist-seg" role="group" aria-label="History window">
+            <button type="button" class="active" data-qh-hours="24">24h</button>
+            <button type="button" data-qh-hours="168">7d</button>
+          </div>
+        </div>
+        <div class="chart-svg-wrap" id="quota-hist-wrap">
+          <div class="empty" style="padding:26px 0">Loading quota history...</div>
+        </div>
+      </div>
+    </section>
+
     <section class="section" aria-labelledby="accounts-title">
       <div class="accounts-command">
         <div class="refresh-strip">
@@ -175,8 +199,8 @@
             <span id="bulk-status-text">Pool active &amp; ready</span>
           </div>
           <div class="tools-row">
-            <label class="toggle" id="show-email-label"><input type="checkbox" id="show_email" name="show_email"> Show full emails</label>
-            <button id="refresh-all-btn" type="button" class="btn" hidden>Refresh all quotas</button>
+            <label class="toggle" id="show-email-label"><input type="checkbox" id="show_email" name="show_email"> <span data-i18n>Show full emails</span></label>
+            <button id="refresh-all-btn" type="button" class="btn" hidden data-i18n>Refresh all quotas</button>
           </div>
         </div>
         <div class="daily-filters">
@@ -185,10 +209,10 @@
             <input type="search" id="account-search" placeholder="Search accounts by name or email…" aria-label="Search accounts">
           </div>
           <div class="filter-pills" id="account-filter-pills" role="group" aria-label="Account filter">
-            <button type="button" class="filter-pill active" data-filter="all">All</button>
-            <button type="button" class="filter-pill" data-filter="active">Active</button>
-            <button type="button" class="filter-pill" data-filter="warning">Warning</button>
-            <button type="button" class="filter-pill" data-filter="disabled">Disabled</button>
+            <button type="button" class="filter-pill active" data-filter="all" data-i18n>All</button>
+            <button type="button" class="filter-pill" data-filter="active" data-i18n>Active</button>
+            <button type="button" class="filter-pill" data-filter="warning" data-i18n>Warning</button>
+            <button type="button" class="filter-pill" data-filter="disabled" data-i18n>Disabled</button>
           </div>
           <div class="account-count-wrap">
             <span class="count" id="accounts-count-badge">0 accounts</span>
@@ -201,13 +225,13 @@
           <table>
             <thead>
               <tr>
-                <th>Account</th>
-                <th>State</th>
-                <th>5-hour quota</th>
-                <th>Weekly quota</th>
-                <th>Requests</th>
-                <th>In flight</th>
-                <th id="actions-col" hidden>Actions</th>
+                <th data-i18n>Account</th>
+                <th data-i18n>State</th>
+                <th data-i18n>5-hour quota</th>
+                <th data-i18n>Weekly quota</th>
+                <th data-i18n>Requests</th>
+                <th data-i18n>In flight</th>
+                <th id="actions-col" hidden data-i18n>Actions</th>
               </tr>
             </thead>
             <tbody id="accounts-table-body">
@@ -267,13 +291,38 @@
       el.innerHTML = html;
     }
 
+    let quotaPoolKind = 'gemini';
+    try { if (localStorage.getItem('agy_quota_pool') === '3p') quotaPoolKind = '3p'; } catch (_) {}
+
     function renderGauge() {
-      renderArcGauge('gauge', 'five_hour', '5-hour');
-      renderArcGauge('gauge-weekly', 'weekly', 'weekly');
+      const k5 = quotaPoolKind === '3p' ? 'third_party_5h' : 'five_hour';
+      const kw = quotaPoolKind === '3p' ? 'third_party_weekly' : 'weekly';
+      renderArcGauge('gauge', k5, '5-hour');
+      renderArcGauge('gauge-weekly', kw, 'weekly');
     }
 
+    function syncPoolKindUI() {
+      const title = $('pool-gauge-title');
+      if (title) title.textContent = quotaPoolKind === '3p' ? 'Claude & GPT (3P) quota pool' : 'Gemini quota pool';
+      document.querySelectorAll('#pool-kind-seg button').forEach((b) => {
+        const on = b.dataset.poolKind === quotaPoolKind;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+    syncPoolKindUI();
+    $('pool-kind-seg').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-pool-kind]');
+      if (!btn || btn.dataset.poolKind === quotaPoolKind) return;
+      quotaPoolKind = btn.dataset.poolKind;
+      try { localStorage.setItem('agy_quota_pool', quotaPoolKind); } catch (_) {}
+      syncPoolKindUI();
+      renderGauge();
+      renderHero();
+    });
+
     function renderHero() {
-      const pool = poolSummary();
+      const pool = poolSummary(quotaPoolKind);
       $('pool-5h-pct').innerHTML = pool.five === null ? '—' : `${pool.five.toFixed(0)}<small>%</small>`;
       $('gauge').setAttribute('aria-label', pool.five === null
         ? '5-hour quota by account: no data yet'
@@ -323,7 +372,7 @@
       renderResetTimes();
     }
     function renderResetTimes() {
-      const pool = poolSummary();
+      const pool = poolSummary(quotaPoolKind);
       $('pool-next-reset').textContent = pool.nextFiveMs === null ? '—' : formatDuration(secondsUntil(pool.nextFiveMs));
       $('pool-weekly-reset').textContent = pool.nextWeeklyMs === null ? '—' : formatDuration(secondsUntil(pool.nextWeeklyMs));
     }
@@ -339,14 +388,25 @@
       return '';
     }
 
-    function quotaCell(win, kind, safeId) {
-      if (!win) return '<span class="faint">No data yet</span>';
-      const pct = clampPct(win.remaining_percent);
-      const reset = win._deadlineMs !== undefined ? formatDuration(secondsUntil(win._deadlineMs)) : '—';
-      return `<div class="quota">
-          <div class="quota-line"><span class="num">${pct.toFixed(1)}%</span><span class="num faint" id="reset-${kind}-${safeId}" title="Time until this window resets">${reset}</span></div>
-          <div class="daily-bar meter ${levelClass(pct)}"><i style="width:${pct}%"></i></div>
-        </div>`;
+    function quotaCell(win, tpWin, kind, tpKind, safeId) {
+      if (!win && !tpWin) return '<span class="faint">No data yet</span>';
+      let primary = '<span class="faint">No Gemini data</span>';
+      if (win) {
+        const pct = clampPct(win.remaining_percent);
+        const reset = win._deadlineMs !== undefined ? formatDuration(secondsUntil(win._deadlineMs)) : '—';
+        primary = `<div class="quota-line"><span class="num">${pct.toFixed(1)}%</span><span class="num faint" id="reset-${kind}-${safeId}" title="Time until this window resets">${reset}</span></div>
+          <div class="daily-bar meter ${levelClass(pct)}"><i style="width:${pct}%"></i></div>`;
+      }
+      let secondary = '';
+      if (tpWin) {
+        const tpPct = clampPct(tpWin.remaining_percent);
+        const tpReset = tpWin._deadlineMs !== undefined ? formatDuration(secondsUntil(tpWin._deadlineMs)) : '—';
+        secondary = `<div class="quota-sub">
+            <div class="quota-sub-line"><span><span class="quota-pool-tag">3P</span> <span class="num">${tpPct.toFixed(1)}%</span></span><span class="num faint" id="reset-${tpKind}-${safeId}" title="Claude & GPT (3P) window reset">${tpReset}</span></div>
+            <div class="daily-bar sub ${levelClass(tpPct)}"><i style="width:${tpPct}%"></i></div>
+          </div>`;
+      }
+      return `<div class="quota">${primary}${secondary}</div>`;
     }
 
     function renderAccountsTable() {
@@ -406,13 +466,19 @@
                 `<span class="model-tag-tokens">${toks}</span></span>`;
             }).join('')}</div>`
           : '';
+        const coolText = acc.scheduler_state === 'cooling' && acc._cooldownDeadlineMs
+          ? ` <span class="num" id="cool-${safeId}">${formatDuration(secondsUntil(acc._cooldownDeadlineMs))}</span>` : '';
+        const metaParts = [];
+        if (Number(acc.error_count) > 0) metaParts.push(`<span class="num">${acc.error_count} err${acc.error_count === 1 ? '' : 's'}</span>`);
+        if (acc.validation_url) metaParts.push(`<button type="button" class="row-btn" data-act="verify" data-id="${id}">Verify</button>`);
+        const stateMeta = metaParts.length ? `<div class="state-meta">${metaParts.join('')}</div>` : '';
         html += `<tr>
           <td><div class="identity-cell"><span class="avatar" aria-hidden="true">${escapeHtml(accountInitials(acc.name || email))}</span><div><span class="acc-name">${escapeHtml(acc.name)}</span>${acc.is_cli_base ? '<span class="tag cli" title="The agy CLI uses this account">CLI</span>' : ''}
             <span class="acc-email">${escapeHtml(email)}</span>
             ${modelsHtml}</div></div></td>
-          <td><span class="badge ${stateBadgeClass(acc.scheduler_state)}">${escapeHtml(acc.scheduler_state)}</span></td>
-          <td>${quotaCell(acc.five_hour, '5h', safeId)}</td>
-          <td>${quotaCell(acc.weekly, 'wk', safeId)}</td>
+          <td><span class="badge ${stateBadgeClass(acc.scheduler_state)}">${escapeHtml(acc.scheduler_state)}${coolText}</span>${stateMeta}</td>
+          <td>${quotaCell(acc.five_hour, acc.third_party_5h, '5h', 'tp5h', safeId)}</td>
+          <td>${quotaCell(acc.weekly, acc.third_party_weekly, 'wk', 'tpwk', safeId)}</td>
           <td class="num">${acc.hits.toLocaleString()}</td>
           <td class="num ${acc.in_flight > 0 ? '' : 'faint'}">${acc.in_flight}</td>
           ${actions}
@@ -425,10 +491,12 @@
     function tickCountdowns() {
       for (const acc of accountsData) {
         const safeId = sanitizeId(acc.id);
-        for (const [kind, win] of [['5h', acc.five_hour], ['wk', acc.weekly]]) {
+        for (const [kind, win] of [['5h', acc.five_hour], ['wk', acc.weekly], ['tp5h', acc.third_party_5h], ['tpwk', acc.third_party_weekly]]) {
           const el = win && win._deadlineMs !== undefined && document.getElementById(`reset-${kind}-${safeId}`);
           if (el) el.textContent = formatDuration(secondsUntil(win._deadlineMs));
         }
+        const coolEl = acc._cooldownDeadlineMs && document.getElementById(`cool-${safeId}`);
+        if (coolEl) coolEl.textContent = formatDuration(secondsUntil(acc._cooldownDeadlineMs));
       }
       renderResetTimes();
     }
@@ -487,6 +555,12 @@
       if (!act || !id) return;
       const acc = accountsData.find((a) => a.id === id);
       if (!acc) return;
+      if (act === 'verify') {
+        if (!acc.validation_url || !showVerifyLink(acc.validation_url)) {
+          showToast('Verification link unavailable or blocked.', true);
+        }
+        return;
+      }
       let path = `/api/v1/accounts/${encodeURIComponent(id)}/${act}`;
       let body = {};
       if (act === 'disable') {
@@ -538,13 +612,101 @@
       $('metric-qps').textContent = (qps || 0).toFixed(2);
     }
 
+    let quotaHistHours = 24;
+    let quotaHistPolls = 0;
+    const HIST_COLORS = ['#34d399', '#22d3ee', '#818cf8', '#fbbf24', '#fb7185', '#a78bfa'];
+
+    function drawQuotaHistory(data) {
+      const wrap = $('quota-hist-wrap');
+      const legend = $('quota-hist-legend');
+      if (!wrap || !legend) return;
+      const pts = (data && data.points) || [];
+      if (pts.length === 0) {
+        legend.innerHTML = '';
+        wrap.innerHTML = `<div class="empty" style="padding:22px 0">${lang === 'zh' ? '暂无配额变化记录，刷新配额变化后将自动绘制。' : 'Quota history builds automatically as quota snapshots change.'}</div>`;
+        return;
+      }
+      const byAcc = new Map();
+      let tMin = Infinity, tMax = -Infinity;
+      for (const p of pts) {
+        if (p.ts < tMin) tMin = p.ts;
+        if (p.ts > tMax) tMax = p.ts;
+        if (!byAcc.has(p.account_id)) byAcc.set(p.account_id, { name: p.name || p.account_id, items: [] });
+        byAcc.get(p.account_id).items.push(p);
+      }
+      if (tMax <= tMin) tMin = tMax - 3600;
+      const W = 720, H = 128, padL = 32, padR = 12, padT = 10, padB = 20;
+      const cW = W - padL - padR, cH = H - padT - padB;
+      const toX = (ts) => padL + ((ts - tMin) / (tMax - tMin)) * cW;
+      const toY = (pct) => padT + cH - (clampPct(pct) / 100) * cH;
+
+      let paths = '', dots = '', legHtml = '';
+      let idx = 0;
+      for (const [, series] of byAcc) {
+        const color = HIST_COLORS[idx % HIST_COLORS.length];
+        idx += 1;
+        const coords = series.items.map((p) => `${toX(p.ts).toFixed(1)},${toY(p.five_hour_pct).toFixed(1)}`);
+        if (coords.length >= 2) {
+          paths += `<polyline fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" points="${coords.join(' ')}" />`;
+        }
+        for (const p of series.items) {
+          const tip = `${series.name} · 5h ${p.five_hour_pct.toFixed(1)}% · Weekly ${p.weekly_pct.toFixed(1)}% · ${new Date(p.ts * 1000).toLocaleString()}`;
+          dots += `<circle cx="${toX(p.ts).toFixed(1)}" cy="${toY(p.five_hour_pct).toFixed(1)}" r="2.8" fill="var(--surface)" stroke="${color}" stroke-width="1.6"><title>${escapeHtml(tip)}</title></circle>`;
+        }
+        const last = series.items[series.items.length - 1];
+        legHtml += `<span class="quota-hist-item"><i class="quota-hist-dot" style="background:${color}"></i><span>${escapeHtml(series.name)}</span><strong class="num">${last.five_hour_pct.toFixed(0)}%</strong></span>`;
+      }
+      legend.innerHTML = legHtml;
+      const fmtTick = (ts) => {
+        const d = new Date(ts * 1000);
+        return quotaHistHours > 24
+          ? d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+          : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      };
+      wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        ${[0, 50, 100].map((v) => {
+          const y = toY(v).toFixed(1);
+          return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--rule)" stroke-dasharray="${v === 0 ? '' : '2 3'}" />` +
+            `<text x="${padL - 5}" y="${Number(y) + 3}" font-size="9" fill="var(--faint)" text-anchor="end">${v}%</text>`;
+        }).join('')}
+        ${paths}${dots}
+        <text x="${padL}" y="${H - 4}" font-size="9" fill="var(--faint)" text-anchor="start">${escapeHtml(fmtTick(tMin))}</text>
+        <text x="${(padL + cW / 2).toFixed(1)}" y="${H - 4}" font-size="9" fill="var(--faint)" text-anchor="middle">${escapeHtml(fmtTick(Math.round((tMin + tMax) / 2)))}</text>
+        <text x="${W - padR}" y="${H - 4}" font-size="9" fill="var(--faint)" text-anchor="end">${escapeHtml(fmtTick(tMax))}</text>
+      </svg>`;
+    }
+
+    async function fetchQuotaHistory() {
+      try {
+        const res = await agyFetch(`/api/v1/quota/history?hours=${quotaHistHours}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        drawQuotaHistory(data);
+      } catch (_) {}
+    }
+
+    $('quota-hist-seg').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-qh-hours]');
+      if (!btn) return;
+      const hrs = Number(btn.dataset.qhHours) || 24;
+      if (hrs === quotaHistHours) return;
+      quotaHistHours = hrs;
+      document.querySelectorAll('#quota-hist-seg button').forEach((b) => b.classList.toggle('active', b === btn));
+      fetchQuotaHistory();
+    });
+
     Object.assign(agyPage, {
       start() {
         $('refresh-all-btn').hidden = !controlEnabled;
         $('actions-col').hidden = !controlEnabled;
         fetchForecast();
+        fetchQuotaHistory();
       },
-      poll: fetchForecast,
+      poll() {
+        fetchForecast();
+        if (++quotaHistPolls % 6 === 0) fetchQuotaHistory();
+      },
+      i18n() { fetchQuotaHistory(); },
       tick: tickCountdowns,
       status(s) { showLiveCounts(s.in_flight_requests, s.qps); },
       stats(s) { showLiveCounts(s.in_flight, s.qps); },

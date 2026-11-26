@@ -42,6 +42,12 @@ pub struct DashboardAuditEvent {
     pub thinking_tokens: i64,
     pub status: u16,
     pub failover: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -284,6 +290,9 @@ mod tests {
                     thinking_tokens: 0,
                     status: 200,
                     failover: false,
+                    reason: None,
+                    from_account: None,
+                    attempt: None,
                 },
                 true,
             );
@@ -328,6 +337,9 @@ mod tests {
                     thinking_tokens: 0,
                     status: 429,
                     failover: true,
+                    reason: None,
+                    from_account: None,
+                    attempt: None,
                 },
                 false,
             );
@@ -359,6 +371,9 @@ mod tests {
                 thinking_tokens: 0,
                 status: 200,
                 failover: false,
+                reason: None,
+                from_account: None,
+                attempt: None,
             },
             true,
         );
@@ -392,6 +407,9 @@ mod tests {
                         thinking_tokens: 0,
                         status: 200,
                         failover: false,
+                        reason: None,
+                        from_account: None,
+                        attempt: None,
                     },
                     true,
                 );
@@ -416,6 +434,9 @@ mod tests {
                     thinking_tokens: 0,
                     status: 200,
                     failover: false,
+                    reason: None,
+                    from_account: None,
+                    attempt: None,
                 },
                 true,
             );

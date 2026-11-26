@@ -57,8 +57,8 @@
       agy-pool
     </a>
     <nav class="nav" aria-label="Pages">
-      <a href="/dashboard">Pool</a>
-      <a href="/dashboard/traffic" aria-current="page">Traffic</a>
+      <a href="/dashboard" data-i18n>Pool</a>
+      <a href="/dashboard/traffic" aria-current="page" data-i18n>Traffic</a>
     </nav>
     <div class="tools">
       <div class="pulse">
@@ -80,15 +80,16 @@
       </div>
       <span class="chip" id="conn" title="Connecting"><span id="conn-dot" class="dot wait"></span><span id="conn-text">Connecting</span></span>
       <button id="version-btn" type="button" class="chip version-btn"><span id="version-pill" class="num">…</span><span id="version-update-badge" class="update-flag" hidden></span></button>
-      <button id="config-btn" type="button" class="chip" hidden>Config &amp; health</button>
+      <button id="config-btn" type="button" class="chip" hidden data-i18n>Config &amp; health</button>
       <select id="strategy-select" aria-label="Routing strategy" title="Routing strategy" hidden>
         <option value="smart">Smart routing</option>
         <option value="max_quota">Most quota first</option>
       </select>
+      <button id="lang-btn" type="button" class="chip lang-btn" title="Switch language / 切换语言">中文</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="Theme">
-        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true">Auto</button>
-        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false">Light</button>
-        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false">Dark</button>
+        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true" data-i18n>Auto</button>
+        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false" data-i18n>Light</button>
+        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false" data-i18n>Dark</button>
       </div>
     </div>
   </header>
@@ -131,6 +132,7 @@
       <div><dt>Total</dt><dd id="audit-total-tokens" class="num">—</dd></div>
       <div><dt><i class="seg-output"></i>Output</dt><dd id="audit-output-tokens" class="num">—</dd></div>
       <div><dt><i class="seg-thinking"></i>Thinking</dt><dd id="audit-thinking-tokens" class="num">—</dd></div>
+      <div><dt>Context window</dt><dd id="audit-context-window" class="num">—</dd></div>
     </dl>
     <p class="sub-head">Cost at API list prices</p>
     <dl class="kv">
@@ -144,30 +146,30 @@
   <main>
     <dl class="vitals pulse-grid cols-4" aria-label="Gateway vitals">
       <div class="vital lead pulse-card">
-        <div class="pulse-head"><span>In Flight</span><span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span></div>
+        <div class="pulse-head"><span data-i18n>In Flight</span><span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span></div>
         <div class="pulse-main"><span class="pulse-value num" id="metric-inflight">0</span><span class="pulse-sub">Active requests</span></div>
       </div>
       <div class="vital pulse-card">
-        <div class="pulse-head"><span>First Token (p50)</span><span class="badge violet">TTFT</span></div>
+        <div class="pulse-head"><span data-i18n>First Token (p50)</span><span class="badge violet">TTFT</span></div>
         <div class="pulse-main"><span class="pulse-value num"><span id="metric-ttfb-p50" class="num">—</span><small id="metric-ttfb-unit">ms</small></span><span class="pulse-sub">Includes thinking time</span></div>
       </div>
       <div class="vital pulse-card">
-        <div class="pulse-head"><span>Total Duration</span><span class="pulse-sub">p95 <span id="metric-total-p95" class="num">—</span></span></div>
+        <div class="pulse-head"><span data-i18n>Total Duration</span><span class="pulse-sub">p95 <span id="metric-total-p95" class="num">—</span></span></div>
         <div class="pulse-main"><span class="pulse-value num" id="metric-total-p50">—</span><span class="pulse-sub">Median latency</span></div>
         <div class="spark-bars" id="traffic-spark-bars" aria-hidden="true"><i style="height:18%;opacity:0.25"></i></div>
       </div>
       <div class="vital pulse-card">
-        <div class="pulse-head"><span>Gateway Memory</span><span class="badge teal">RSS</span></div>
+        <div class="pulse-head"><span data-i18n>Gateway Memory</span><span class="badge teal">RSS</span></div>
         <div class="pulse-main"><span class="pulse-value num"><span id="metric-rss">0.0</span><small>MB</small></span><span class="pulse-sub">Resident set size</span></div>
       </div>
     </dl>
 
     <section class="section" aria-labelledby="requests-title">
       <div class="section-head">
-        <h2 id="requests-title">Requests</h2>
+        <h2 id="requests-title" data-i18n>Requests</h2>
         <div class="seg" role="tablist" aria-label="View">
-          <button id="tab-stream-btn" type="button" role="tab" aria-selected="true" class="active">Recent</button>
-          <button id="tab-models-btn" type="button" role="tab" aria-selected="false">By model</button>
+          <button id="tab-stream-btn" type="button" role="tab" aria-selected="true" class="active" data-i18n>Recent</button>
+          <button id="tab-models-btn" type="button" role="tab" aria-selected="false" data-i18n>By model</button>
         </div>
         <span class="count" id="stream-count-badge">0 requests</span>
         <div class="tools-row">
@@ -219,14 +221,20 @@
 
     <section class="section" aria-labelledby="tokens-title">
       <div class="section-head">
-        <h2 id="tokens-title">Token usage</h2>
+        <h2 id="tokens-title" data-i18n>Token usage</h2>
+        <div class="seg" id="token-view-seg" role="group" aria-label="Breakdown">
+          <button type="button" class="active" data-token-view="accounts" data-i18n>By account</button>
+          <button type="button" data-token-view="models" data-i18n>By model</button>
+        </div>
         <span class="count" id="token-window">—</span>
+        <button type="button" class="badge violet" id="heat-filter-pill" hidden title="Click to clear day filter"></button>
         <div class="tools-row">
           <div class="seg" role="group" aria-label="Range">
-            <button type="button" data-token-range="1h" title="Since the start of the current hour">This hour</button>
-            <button type="button" class="active" data-token-range="24h">24 hours</button>
-            <button type="button" data-token-range="7d">7 days</button>
-            <button type="button" data-token-range="total">All time</button>
+            <button type="button" data-token-range="1h" title="Since the start of the current hour" data-i18n>This hour</button>
+            <button type="button" class="active" data-token-range="24h" data-i18n>24 hours</button>
+            <button type="button" data-token-range="7d" data-i18n>7 days</button>
+            <button type="button" data-token-range="30d" data-i18n>30 days</button>
+            <button type="button" data-token-range="total" data-i18n>All time</button>
           </div>
           <div class="seg" role="group" aria-label="Currency">
             <button type="button" data-currency="usd">USD</button>
@@ -239,7 +247,7 @@
       <div class="analytics-grid" id="analytics-grid">
         <div class="chart-card" id="trend-card">
           <div class="chart-card-head">
-            <span class="chart-card-title">Token Velocity Trend</span>
+            <span class="chart-card-title" data-i18n>Token Velocity Trend</span>
             <span class="chart-card-meta" id="trend-peak-meta"></span>
           </div>
           <div class="chart-svg-wrap" id="trend-chart-container">
@@ -248,10 +256,10 @@
         </div>
         <div class="chart-card" id="donut-card">
           <div class="chart-card-head">
-            <span class="chart-card-title">Token Distribution</span>
+            <span class="chart-card-title" data-i18n>Token Distribution</span>
             <div class="seg donut-seg" role="group" aria-label="Distribution by">
-              <button type="button" class="active" id="donut-by-account">Accounts</button>
-              <button type="button" id="donut-by-model">Models</button>
+              <button type="button" class="active" id="donut-by-account" data-i18n>Accounts</button>
+              <button type="button" id="donut-by-model" data-i18n>Models</button>
             </div>
           </div>
           <div class="donut-wrap" id="donut-chart-container">
@@ -259,9 +267,23 @@
           </div>
         </div>
       </div>
+      <div class="chart-card heatmap-card">
+        <div class="chart-card-head">
+          <span class="chart-card-title" data-i18n>90-Day Activity</span>
+          <span class="chart-card-meta" id="heatmap-meta"></span>
+        </div>
+        <div class="heatmap-wrap">
+          <div class="heatmap-months" id="heatmap-months"></div>
+          <div class="heatmap-grid" id="heatmap-grid"></div>
+        </div>
+        <div class="heatmap-foot">
+          <span id="heatmap-hint" data-i18n>Click any day cell to filter token breakdown below.</span>
+          <span class="hm-scale"><span>Less</span><i></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><span>More</span></span>
+        </div>
+      </div>
       <div class="table-wrap">
         <table>
-          <thead>
+          <thead id="token-usage-head">
             <tr><th>Account</th><th>Requests</th><th>Prompt</th><th>From cache</th><th>Output</th><th>Thinking</th><th>Total</th><th title="At API list prices, per model">Value</th><th title="At API list prices, per model">Saved by cache</th><th>Share</th></tr>
           </thead>
           <tbody id="token-usage-body">
@@ -291,7 +313,20 @@
     let tokenRange = '24h';
     let tokenPolls = 0;
     let lastTokenData = null;
+    let heatTokenData = null;
+    let selectedHeatDay = null;
     let donutMode = 'accounts';
+    let tokenViewMode = 'accounts';
+    try { if (localStorage.getItem('agy_token_view') === 'models') tokenViewMode = 'models'; } catch (_) {}
+
+    function contextLimitFor(model) {
+      const m = String(model || '').toLowerCase();
+      if (!m) return null;
+      if (m.includes('claude')) return 200000;
+      if (m.includes('gpt-')) return 128000;
+      if (m.includes('gemini')) return 1000000;
+      return null;
+    }
 
     // USD per 1M tokens. Google Gemini from https://aistudio.google.com/docs/pricing, Anthropic Claude from
     // https://claude.com/pricing, and gpt-oss-120b from Google Cloud Vertex AI MaaS PayGo (checked 2026-11-25).
@@ -449,7 +484,7 @@
       try { localStorage.setItem('agy_currency', currency); } catch (_) {}
       syncCurrencyUI();
       renderStreamValue();
-      if (lastTokenData) renderTokens(lastTokenData);
+      if (lastTokenData) renderTokens(effectiveTokenData(lastTokenData));
       const dlg = $('request-detail-dialog');
       if (dlg.open && dlg._ev) openRequestDetail(dlg._ev);
     });
@@ -497,15 +532,28 @@
         tbody.innerHTML = '<tr><td colspan="6" class="empty">No requests match this filter.</td></tr>';
         return;
       }
-      tbody.innerHTML = streamShown.map((ev, i) => `
+      tbody.innerHTML = streamShown.map((ev, i) => {
+        const prompt = Number(ev.tokens) || 0;
+        const ctxMax = contextLimitFor(ev.model);
+        const ctxPct = ctxMax && prompt > 0 ? Math.min(100, (prompt * 100) / ctxMax) : null;
+        const ctxCls = ctxPct === null ? '' : (ctxPct >= 95 ? 'bad' : (ctxPct >= 80 ? 'low' : ''));
+        const longTag = prompt > 200000 ? '<span class="tag long" title="Prompts over 200K bill at long-context rates">&gt;200K</span>' : '';
+        const ctxHtml = ctxPct === null
+          ? `${prompt.toLocaleString()}${longTag}`
+          : `<div class="ctx-cell"><div class="ctx-line"><span class="num">${prompt.toLocaleString()}</span><span class="num faint">${ctxPct.toFixed(0)}%</span>${longTag}</div><div class="ctx-bar ${ctxCls}" title="${fmtTokens(prompt)} / ${fmtTokens(ctxMax)} (${ctxPct.toFixed(1)}%)"><i style="width:${ctxPct.toFixed(1)}%"></i></div></div>`;
+        const foTip = [ev.from_account ? `From ${ev.from_account}` : '', ev.reason || ''].filter(Boolean).join(' · ');
+        const reasonTag = (!ev.failover && ev.status >= 400 && ev.reason)
+          ? ` <span class="faint" style="font-size:11px">${escapeHtml(ev.reason)}</span>` : '';
+        return `
         <tr class="clickable" data-idx="${i}" tabindex="0" title="Show request details">
           <td class="num faint">${formatTime(ev.timestamp)}</td>
           <td class="num">${escapeHtml(ev.model || '—')}</td>
           <td><div class="identity-cell" style="align-items:center;gap:7px"><span class="avatar" style="width:20px;height:20px;font-size:9.5px;margin:0;border-radius:5px" aria-hidden="true">${escapeHtml(accountInitials(ev.account))}</span><span>${escapeHtml(ev.account)}</span></div></td>
           <td class="num">${fmtMs(ev.ttfb_ms)} / ${fmtMs(ev.total_ms)}</td>
-          <td class="num">${(Number(ev.tokens) || 0).toLocaleString()}</td>
-          <td><span class="status ${statusClass(ev.status)}">${escapeHtml(ev.status)}</span>${ev.failover ? '<span class="tag failover">failover</span>' : ''}</td>
-        </tr>`).join('');
+          <td class="num">${ctxHtml}</td>
+          <td><span class="status ${statusClass(ev.status)}">${escapeHtml(ev.status)}</span>${ev.failover ? `<span class="tag failover" title="${escapeHtml(foTip)}">failover</span>` : ''}${reasonTag}</td>
+        </tr>`;
+      }).join('');
     }
 
     function renderModelAnalytics() {
@@ -577,6 +625,16 @@
       $('audit-total-tokens').textContent = total.toLocaleString();
       $('audit-output-tokens').textContent = output.toLocaleString();
       $('audit-thinking-tokens').textContent = thinking.toLocaleString();
+      const ctxMax = contextLimitFor(ev.model);
+      const ctxEl = $('audit-context-window');
+      if (ctxMax && prompt > 0) {
+        const ctxPct = (prompt * 100) / ctxMax;
+        ctxEl.textContent = `${fmtTokens(prompt)} / ${fmtTokens(ctxMax)} (${ctxPct.toFixed(1)}%)${prompt > 200000 ? ' · >200K' : ''}`;
+        ctxEl.style.color = ctxPct >= 95 ? 'var(--rose)' : (ctxPct >= 80 ? 'var(--amber)' : '');
+      } else {
+        ctxEl.textContent = prompt > 0 ? `${fmtTokens(prompt)}${prompt > 200000 ? ' · >200K' : ''}` : '—';
+        ctxEl.style.color = '';
+      }
       const pct = (n) => `${total > 0 ? (n / total) * 100 : 0}%`;
       $('audit-bar-prompt').style.width = pct(prompt - cached);
       $('audit-bar-cached').style.width = pct(cached);
@@ -594,13 +652,19 @@
         valueEl.title = savedEl.title = 'No list price known for this model';
       }
       const note = $('audit-diag-note');
-      if (ev.status === 429) {
-        note.textContent = 'The provider rate-limited this account (429), so the pool put it on cooldown.';
+      if (ev.failover) {
+        const hop = ev.from_account ? `from ${ev.from_account} to ${ev.account}` : `to ${ev.account}`;
+        const why = ev.reason ? ` (${ev.reason})` : '';
+        note.textContent = `Failover${ev.attempt ? ` #${ev.attempt}` : ''}: switched ${hop}${why}.`;
+        note.className = 'note calm';
+        note.hidden = false;
+      } else if (ev.status === 429) {
+        note.textContent = `The provider rate-limited ${ev.account || 'this account'} (429${ev.reason ? ', ' + ev.reason : ''}), so the pool put it on cooldown.`;
         note.className = 'note';
         note.hidden = false;
-      } else if (ev.failover) {
-        note.textContent = 'This request failed over: the pool retried it on another account.';
-        note.className = 'note calm';
+      } else if (ev.status >= 400 && ev.reason) {
+        note.textContent = `Upstream error on ${ev.account || 'account'}: HTTP ${ev.status} (${ev.reason}).`;
+        note.className = 'note';
         note.hidden = false;
       } else {
         note.hidden = true;
@@ -672,15 +736,106 @@
     async function fetchTokens() {
       try {
         const range = tokenRange;
-        const res = await agyFetch('/api/v1/tokens?range=' + encodeURIComponent(range));
+        const [res, heatRes] = await Promise.all([
+          agyFetch('/api/v1/tokens?range=' + encodeURIComponent(range)),
+          range === '90d' || range === 'total' ? Promise.resolve(null) : agyFetch('/api/v1/tokens?range=90d'),
+        ]);
         if (!res.ok) return;
         const data = await res.json();
+        if (range === '90d' || range === 'total') {
+          heatTokenData = data;
+        } else if (heatRes && heatRes.ok) {
+          heatTokenData = await heatRes.json();
+        }
+        if (heatTokenData) renderHeatmap(heatTokenData);
         if (range === tokenRange) {
           lastTokenData = data;
-          renderTokens(data);
+          renderTokens(effectiveTokenData(data));
         }
       } catch (err) {
         console.error('Failed to fetch token usage:', err);
+      }
+    }
+
+    function effectiveTokenData(data) {
+      if (!selectedHeatDay) return data;
+      const src = heatTokenData || data;
+      const rows = (src.by_model || []).filter((r) => r.day === selectedHeatDay);
+      const accMap = new Map();
+      const summary = { total_tokens: 0, prompt_tokens: 0, cached_tokens: 0, output_tokens: 0, thinking_tokens: 0, request_count: 0, aborted_count: 0 };
+      const accNames = new Map((src.accounts || []).map((a) => [a.account_id, a.name]));
+      for (const r of rows) {
+        const p = Number(r.prompt_tokens) || 0, ca = Number(r.cached_tokens) || 0;
+        const out = Number(r.output_tokens) || 0, th = Number(r.thinking_tokens) || 0;
+        const reqs = Number(r.request_count) || 0, ab = Number(r.aborted_count) || 0;
+        const tot = Number(r.total_tokens) || (p + out + th);
+        summary.prompt_tokens += p; summary.cached_tokens += ca;
+        summary.output_tokens += out; summary.thinking_tokens += th;
+        summary.total_tokens += tot; summary.request_count += reqs; summary.aborted_count += ab;
+        if (!accMap.has(r.account_id)) {
+          accMap.set(r.account_id, { account_id: r.account_id, name: accNames.get(r.account_id) || r.account_id, prompt_tokens: 0, cached_tokens: 0, output_tokens: 0, thinking_tokens: 0, total_tokens: 0, request_count: 0, aborted_count: 0 });
+        }
+        const a = accMap.get(r.account_id);
+        a.prompt_tokens += p; a.cached_tokens += ca; a.output_tokens += out; a.thinking_tokens += th;
+        a.total_tokens += tot; a.request_count += reqs; a.aborted_count += ab;
+      }
+      const accounts = [...accMap.values()].sort((a, b) => b.total_tokens - a.total_tokens).map((a) => ({
+        ...a,
+        pool_share: summary.total_tokens > 0 ? a.total_tokens / summary.total_tokens : null,
+      }));
+      return { range: 'day', window_start: null, summary, accounts, by_model: rows, buckets: data.buckets || [] };
+    }
+
+    function renderHeatmap(data) {
+      const grid = $('heatmap-grid');
+      const months = $('heatmap-months');
+      const meta = $('heatmap-meta');
+      if (!grid || !months) return;
+      const dayMap = new Map();
+      for (const r of data.by_model || []) {
+        if (!r.day) continue;
+        const cur = dayMap.get(r.day) || { tokens: 0, reqs: 0 };
+        cur.tokens += Number(r.total_tokens) || 0;
+        cur.reqs += Number(r.request_count) || 0;
+        dayMap.set(r.day, cur);
+      }
+      const now = new Date();
+      const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+      const dow = new Date(todayUtc).getUTCDay();
+      const endUtc = todayUtc + (6 - dow) * 86400000;
+      const startUtc = endUtc - 90 * 86400000;
+      const vals = [...dayMap.values()].map((d) => d.tokens).filter((v) => v > 0);
+      const maxTok = vals.length ? Math.max(...vals) : 0;
+      let activeDays = 0, totalTok = 0;
+      let colsHtml = '', monthsHtml = '', prevMonth = '';
+      for (let w = 0; w < 13; w++) {
+        const wDate = new Date(startUtc + w * 7 * 86400000);
+        const mLabel = wDate.toLocaleDateString([], { month: 'short', timeZone: 'UTC' });
+        monthsHtml += `<span>${mLabel !== prevMonth ? escapeHtml(mLabel) : ''}</span>`;
+        prevMonth = mLabel;
+        let col = '<div class="hm-col">';
+        for (let d = 0; d < 7; d++) {
+          const ts = startUtc + (w * 7 + d) * 86400000;
+          const ymd = new Date(ts).toISOString().slice(0, 10);
+          const future = ts > todayUtc;
+          const rec = dayMap.get(ymd);
+          const tok = rec ? rec.tokens : 0;
+          if (!future && tok > 0) { activeDays += 1; totalTok += tok; }
+          const ratio = maxTok > 0 ? tok / maxTok : 0;
+          const lvl = tok <= 0 ? '' : (ratio > 0.75 ? 'l4' : ratio > 0.45 ? 'l3' : ratio > 0.18 ? 'l2' : 'l1');
+          const sel = selectedHeatDay === ymd ? ' selected' : '';
+          const tip = future ? ymd : `${ymd} · ${fmtTokens(tok)} tokens · ${rec ? rec.reqs : 0} reqs`;
+          col += `<button type="button" class="hm-cell ${lvl}${future ? ' future' : ''}${sel}" data-day="${ymd}" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}"></button>`;
+        }
+        colsHtml += col + '</div>';
+      }
+      months.innerHTML = monthsHtml;
+      grid.innerHTML = colsHtml;
+      if (meta) meta.textContent = `${activeDays} active days · ${fmtTokens(totalTok)}`;
+      const pill = $('heat-filter-pill');
+      if (pill) {
+        pill.hidden = !selectedHeatDay;
+        if (selectedHeatDay) pill.textContent = `Day: ${selectedHeatDay} ✕`;
       }
     }
     // Monotonic cubic spline interpolation for smooth token velocity curve
@@ -1001,16 +1156,73 @@
       $('token-bar').innerHTML = total <= 0 ? '' : segments.filter(([, v]) => v > 0)
         .map(([cls, v]) => `<span class="${cls}" style="width:${((v * 100) / total).toFixed(2)}%" title="${fmtTokens(v)}"></span>`).join('');
       const tbody = $('token-usage-body');
+      const thead = $('token-usage-head');
       const rows = data.accounts || [];
-      if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty">No token usage in this range.</td></tr>';
-      }
       const gaps = [];
       if (priced.untracked > 0) gaps.push(`${fmtTokens(priced.untracked)} tokens were recorded before usage was tracked per model`);
       if (priced.unknown.size > 0) gaps.push(`${fmtTokens(priced.unpricedKnown)} tokens are from models without a known list price (${[...priced.unknown].join(', ')})`);
       $('token-price-note').hidden = gaps.length === 0;
       $('token-price-note').textContent = gaps.length === 0 ? '' : `Not counted in the money figures: ${gaps.join('; ')}.`;
-      if (rows.length === 0) return;
+
+      const thCols = (firstCol) => `<tr><th>${escapeHtml(t(firstCol))}</th><th>${escapeHtml(t('Requests'))}</th><th>${escapeHtml(t('Prompt'))}</th><th>${escapeHtml(t('From cache'))}</th><th>${escapeHtml(t('Output'))}</th><th>${escapeHtml(t('Thinking'))}</th><th>${escapeHtml(t('Total'))}</th><th title="At API list prices">${escapeHtml(t('Value'))}</th><th title="At API list prices">${escapeHtml(t('Saved by cache'))}</th><th>${escapeHtml(t('Share'))}</th></tr>`;
+
+      if (tokenViewMode === 'models') {
+        if (thead) thead.innerHTML = thCols('Model');
+        const mMap = new Map();
+        let trackedAll = 0;
+        for (const bm of data.by_model || []) {
+          const m = bm.model || 'unknown';
+          if (!mMap.has(m)) mMap.set(m, { model: m, reqs: 0, prompt: 0, cached: 0, output: 0, thinking: 0, total: 0, cost: 0, saved: 0, priced: false });
+          const cur = mMap.get(m);
+          const p = Number(bm.prompt_tokens) || 0;
+          const ca = Math.min(Number(bm.cached_tokens) || 0, p);
+          const out = Number(bm.output_tokens) || 0;
+          const th = Number(bm.thinking_tokens) || 0;
+          const tot = Number(bm.total_tokens) || (p + out + th);
+          cur.reqs += Number(bm.request_count) || 0;
+          cur.prompt += p;
+          cur.cached += ca;
+          cur.output += out;
+          cur.thinking += th;
+          cur.total += tot;
+          trackedAll += tot;
+          const rate = priceFor(bm.model, bm.day, bm.long_context ? Infinity : 0);
+          if (rate) {
+            cur.priced = true;
+            cur.cost += ((p - ca) * rate.in + ca * rate.cache + (out + th) * rate.out) / 1e6;
+            cur.saved += (ca * (rate.in - rate.cache)) / 1e6;
+          }
+        }
+        const modelRows = [...mMap.values()].sort((a, b) => b.total - a.total || a.model.localeCompare(b.model));
+        if (modelRows.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="10" class="empty">No per-model token usage in this range.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = modelRows.map((m) => {
+          const hitPct = m.prompt > 0 ? ` <span class="faint">(${((m.cached * 100) / m.prompt).toFixed(0)}%)</span>` : '';
+          const share = trackedAll > 0 ? ((m.total * 100) / trackedAll).toFixed(1) + '%' : '—';
+          return `
+          <tr>
+            <td class="num"><span class="acc-name">${escapeHtml(m.model)}</span></td>
+            <td class="num">${m.reqs}</td>
+            <td class="num">${fmtTokens(m.prompt)}</td>
+            <td class="num">${fmtTokens(m.cached)}${hitPct}</td>
+            <td class="num">${fmtTokens(m.output)}</td>
+            <td class="num">${fmtTokens(m.thinking)}</td>
+            <td class="num">${fmtTokens(m.total)}</td>
+            <td class="num">${m.priced ? fmtMoney(m.cost) : '—'}</td>
+            <td class="num" style="color:var(--ok);">${m.priced ? fmtMoney(m.saved) : '—'}</td>
+            <td class="num">${share}</td>
+          </tr>`;
+        }).join('');
+        return;
+      }
+
+      if (thead) thead.innerHTML = thCols('Account');
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">No token usage in this range.</td></tr>';
+        return;
+      }
 
       const accountModelsMap = new Map();
       if (data.by_model) {
@@ -1074,8 +1286,38 @@
         if (lastTokenData) drawDonutChart(lastTokenData);
       });
     }
+    function syncTokenViewUI() {
+      document.querySelectorAll('#token-view-seg button').forEach((b) => {
+        const on = b.dataset.tokenView === tokenViewMode;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+    syncTokenViewUI();
+    $('token-view-seg').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-token-view]');
+      if (!btn || btn.dataset.tokenView === tokenViewMode) return;
+      tokenViewMode = btn.dataset.tokenView;
+      try { localStorage.setItem('agy_token_view', tokenViewMode); } catch (_) {}
+      syncTokenViewUI();
+      if (lastTokenData) renderTokens(effectiveTokenData(lastTokenData));
+    });
+    $('heatmap-grid').addEventListener('click', (e) => {
+      const cell = e.target.closest('.hm-cell[data-day]');
+      if (!cell || cell.classList.contains('future')) return;
+      const day = cell.dataset.day;
+      selectedHeatDay = selectedHeatDay === day ? null : day;
+      if (heatTokenData) renderHeatmap(heatTokenData);
+      if (lastTokenData) renderTokens(effectiveTokenData(lastTokenData));
+    });
+    $('heat-filter-pill').addEventListener('click', () => {
+      selectedHeatDay = null;
+      if (heatTokenData) renderHeatmap(heatTokenData);
+      if (lastTokenData) renderTokens(effectiveTokenData(lastTokenData));
+    });
     document.querySelectorAll('button[data-token-range]').forEach((btn) => {
       btn.addEventListener('click', () => {
+        selectedHeatDay = null;
         tokenRange = btn.dataset.tokenRange;
         document.querySelectorAll('button[data-token-range]').forEach((b) => b.classList.toggle('active', b === btn));
         fetchTokens();
@@ -1105,6 +1347,7 @@
       stats(s) { showLiveCounts(s.in_flight, s.qps, s.rss_mb); },
       audit() { renderSparkBars('traffic-spark-bars'); if (!streamPaused) renderRequests(); },
       reset() { renderSparkBars('traffic-spark-bars'); renderRequests(); },
+      i18n() { if (lastTokenData) renderTokens(effectiveTokenData(lastTokenData)); renderRequests(); },
     });
     agyBoot();
   </script>

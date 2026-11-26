@@ -77,6 +77,8 @@ pub struct StreamBodyParams {
     pub path: String,
     pub attempt: usize,
     pub quota_before: crate::observability::AuditQuota,
+    pub from_account: Option<String>,
+    pub failover_reason: Option<String>,
 }
 
 /// StreamBody wraps an incoming upstream streaming body, tapping usage, enforcing Content-Length,
@@ -127,7 +129,14 @@ impl<B> StreamBody<B> {
                 output_tokens: self.usage.output.max(0),
                 thinking_tokens: self.usage.thinking.max(0),
                 status: self.params.status,
-                failover: false,
+                failover: self.params.has_failed_over,
+                reason: if !reason.is_empty() {
+                    Some(reason.to_string())
+                } else {
+                    self.params.failover_reason.clone()
+                },
+                from_account: self.params.from_account.clone(),
+                attempt: (self.params.attempt > 1).then_some(self.params.attempt as u32),
             },
             record_latency,
         );

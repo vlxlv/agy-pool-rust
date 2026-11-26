@@ -53,6 +53,8 @@ pub struct DispatchParams<'a> {
     pub in_flight_guard: Option<InFlightGuard>,
     pub lease_guard: Option<LeaseGuard>,
     pub request_id: &'a str,
+    pub from_account: Option<&'a str>,
+    pub failover_reason: Option<&'a str>,
 }
 
 fn audit_quota_from_routing_event(ev: &RoutingEvent) -> AuditQuota {
@@ -106,6 +108,11 @@ fn write_attempt_audit(
             thinking_tokens: tokens.thinking.max(0),
             status: status_code,
             failover: is_failover,
+            reason: (!reason.is_empty())
+                .then(|| reason.to_string())
+                .or_else(|| params.failover_reason.map(ToString::to_string)),
+            from_account: params.from_account.map(ToString::to_string),
+            attempt: (params.attempt > 1).then_some(params.attempt as u32),
         },
         record_latency,
     );
@@ -703,6 +710,8 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
             path: params.path.to_string(),
             attempt: params.attempt,
             quota_before,
+            from_account: params.from_account.map(ToString::to_string),
+            failover_reason: params.failover_reason.map(ToString::to_string),
         };
         let stream_body = StreamBody::new(incoming_body, stream_params);
         let resp = send_stream(status, &out_headers, stream_body.boxed());
@@ -849,7 +858,7 @@ pub async fn dispatch_account(params: DispatchParams<'_>) -> (Attempt, Option<To
         &disp_name,
         status_code,
         "",
-        false,
+        params.has_failed_over,
         params.is_generation,
         ttfb,
         start.elapsed(),

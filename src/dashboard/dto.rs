@@ -44,6 +44,18 @@ pub struct AccountDto {
     pub scheduler_state: String,
     pub five_hour: Option<QuotaWindowDto>,
     pub weekly: Option<QuotaWindowDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub third_party_5h: Option<QuotaWindowDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub third_party_weekly: Option<QuotaWindowDto>,
+    #[serde(default)]
+    pub cooldown_secs: u64,
+    #[serde(default)]
+    pub error_count: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_url: Option<String>,
     pub hits: i64,
     pub in_flight: i64,
     /// The account the native `agy` CLI currently uses (`pool.active_account_id`).
@@ -184,6 +196,19 @@ fn build_quota_window_dto(
     })
 }
 
+fn build_quota_window_from_state(win: Option<&crate::storage::QuotaWindow>, now_ts: f64) -> Option<QuotaWindowDto> {
+    let win = win?;
+    let fraction = crate::quota::parse_quota_fraction(win.fraction)?;
+    let reset_time = crate::quota::parse_iso_or_timestamp(win.reset_time.as_ref()).and_then(|ts| {
+        if ts >= 0.0 {
+            Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs_f64(ts))
+        } else {
+            None
+        }
+    });
+    build_quota_window_dto(Some(fraction), reset_time, now_ts)
+}
+
 pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f64) -> AccountsResponse {
     let show_email_allowed = crate::accounts::is_show_email_enabled(Some(pool));
     let show_email = show_email_allowed && request_show_email;
@@ -198,6 +223,22 @@ pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f6
 
         let five_hour = build_quota_window_dto(q5_frac, cap.reset5_time, now_ts);
         let weekly = build_quota_window_dto(qw_frac, cap.reset7_time, now_ts);
+        let third_party_5h =
+            build_quota_window_from_state(acc.last_quota.as_ref().and_then(|q| q.third_party_5h.as_ref()), now_ts);
+        let third_party_weekly = build_quota_window_from_state(
+            acc.last_quota.as_ref().and_then(|q| q.third_party_weekly.as_ref()),
+            now_ts,
+        );
+        let cooldown_secs = acc
+            .rate_limited_until
+            .filter(|&r| r > now_ts)
+            .map(|r| (r - now_ts).ceil() as u64)
+            .unwrap_or(0);
+        let validation_url = (acc.status == crate::storage::STATUS_VALIDATION_REQUIRED)
+            .then_some(acc.validation_url.as_deref())
+            .flatten()
+            .filter(|u| u.starts_with("https://"))
+            .map(ToString::to_string);
 
         let scheduler_state = if acc.status == crate::storage::STATUS_DISABLED {
             "disabled".to_string()
@@ -247,6 +288,12 @@ pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f6
             scheduler_state,
             five_hour,
             weekly,
+            third_party_5h,
+            third_party_weekly,
+            cooldown_secs,
+            error_count: acc.error_count,
+            last_used_at: acc.last_used_at,
+            validation_url,
             hits,
             in_flight,
             is_cli_base: pool.active_account_id.as_deref() == Some(acc.id.as_str()),
@@ -375,6 +422,48 @@ pub struct TokensResponse {
     pub by_model: Vec<TokenModelDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub buckets: Vec<TokenBucketDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaHistoryPointDto {
+    pub account_id: String,
+    pub name: String,
+    pub five_hour_pct: f64,
+    pub weekly_pct: f64,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaHistoryResponse {
+    pub hours: u64,
+    pub points: Vec<QuotaHistoryPointDto>,
+}
+
+pub fn build_quota_history_response(
+    pool: &Pool,
+    records: &[crate::quota::QuotaHistoryRecord],
+    hours: u64,
+    now_unix: i64,
+) -> QuotaHistoryResponse {
+    const MAX_POINTS: usize = 400;
+    let cutoff = now_unix.saturating_sub((hours as i64).saturating_mul(3600));
+    let mut points: Vec<QuotaHistoryPointDto> = records
+        .iter()
+        .filter(|r| r.ts >= cutoff)
+        .map(|r| QuotaHistoryPointDto {
+            account_id: r.account.clone(),
+            name: crate::storage::tokens::account_label(pool, &r.account),
+            five_hour_pct: (r.g5.clamp(0.0, 1.0) * 1000.0).round() / 10.0,
+            weekly_pct: (r.gw.clamp(0.0, 1.0) * 1000.0).round() / 10.0,
+            ts: r.ts,
+        })
+        .collect();
+    points.sort_by_key(|p| p.ts);
+    if points.len() > MAX_POINTS {
+        let drop = points.len() - MAX_POINTS;
+        points.drain(..drop);
+    }
+    QuotaHistoryResponse { hours, points }
 }
 
 pub fn build_tokens_response(
@@ -570,6 +659,99 @@ mod tests {
         assert!(states.contains(&"reserve"));
         assert!(states.contains(&"cooling"));
         assert!(states.contains(&"disabled"));
+    }
+
+    #[test]
+    fn test_accounts_dto_dual_pool_cooldown_and_validation() {
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let now = 1700000000.0;
+        let mut pool = Pool::default();
+        pool.accounts.push(Account {
+            id: "acc_tp".to_string(),
+            name: "Grace".to_string(),
+            email: "grace@example.com".to_string(),
+            status: crate::storage::STATUS_VALIDATION_REQUIRED.to_string(),
+            validation_url: Some("https://accounts.google.com/verify?x=1".to_string()),
+            rate_limited_until: Some(now + 42.3),
+            error_count: 3,
+            last_used_at: Some(1699999900),
+            last_quota: Some(QuotaState {
+                gemini_5h: Some(QuotaWindow {
+                    fraction: Some(0.9),
+                    ..Default::default()
+                }),
+                third_party_5h: Some(QuotaWindow {
+                    fraction: Some(0.45),
+                    reset_time: Some(serde_json::json!(now + 3600.0)),
+                    ..Default::default()
+                }),
+                third_party_weekly: Some(QuotaWindow {
+                    fraction: Some(0.8),
+                    reset_time: Some(serde_json::json!(now + 86400.0)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        // Non-https validation_url must never be exposed.
+        pool.accounts.push(Account {
+            id: "acc_http".to_string(),
+            name: "Heidi".to_string(),
+            status: crate::storage::STATUS_VALIDATION_REQUIRED.to_string(),
+            validation_url: Some("http://insecure.example.com".to_string()),
+            ..Default::default()
+        });
+
+        let res = build_accounts_response(&pool, false, now);
+        let a = &res.accounts[0];
+        assert_eq!(a.cooldown_secs, 43);
+        assert_eq!(a.error_count, 3);
+        assert_eq!(a.last_used_at, Some(1699999900));
+        assert_eq!(
+            a.validation_url.as_deref(),
+            Some("https://accounts.google.com/verify?x=1")
+        );
+        assert_eq!(a.third_party_5h.as_ref().unwrap().remaining_percent, 45.0);
+        assert_eq!(a.third_party_5h.as_ref().unwrap().reset_in_secs, 3600);
+        assert_eq!(a.third_party_weekly.as_ref().unwrap().remaining_percent, 80.0);
+        assert!(res.accounts[1].validation_url.is_none());
+    }
+
+    #[test]
+    fn test_quota_history_dto_filtering_and_cap() {
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let now = 1700000000_i64;
+        let mut pool = Pool::default();
+        pool.accounts.push(Account {
+            id: "acc_1".to_string(),
+            name: "Alice".to_string(),
+            ..Default::default()
+        });
+        let records = vec![
+            crate::quota::QuotaHistoryRecord {
+                account: "acc_1".to_string(),
+                g5: 0.9,
+                g5_reset: None,
+                gw: 0.8,
+                gw_reset: None,
+                ts: now - 30 * 3600, // outside 24h
+            },
+            crate::quota::QuotaHistoryRecord {
+                account: "acc_1".to_string(),
+                g5: 0.725,
+                g5_reset: None,
+                gw: 0.65,
+                gw_reset: None,
+                ts: now - 100,
+            },
+        ];
+        let res = build_quota_history_response(&pool, &records, 24, now);
+        assert_eq!(res.hours, 24);
+        assert_eq!(res.points.len(), 1);
+        assert_eq!(res.points[0].name, "Alice");
+        assert_eq!(res.points[0].five_hour_pct, 72.5);
+        assert_eq!(res.points[0].weekly_pct, 65.0);
     }
 
     #[test]
