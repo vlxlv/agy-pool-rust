@@ -293,9 +293,11 @@
     let lastTokenData = null;
     let donutMode = 'accounts';
 
-    // USD per 1M tokens, copied from https://aistudio.google.com/docs/pricing on 2026-11-20. Thinking bills as
-    // output. `until` is the first day a rate stops applying; `long` is the rate for prompts over 200K tokens.
-    // shortcut: hand-copied list prices; update this table when Google changes them.
+    // USD per 1M tokens. Google Gemini from https://aistudio.google.com/docs/pricing, Anthropic Claude from
+    // https://claude.com/pricing, and gpt-oss-120b from Google Cloud Vertex AI MaaS PayGo (checked 2026-11-25).
+    // Thinking bills as output; `cache` is the cache-read rate. `until` is the first day a rate stops applying;
+    // `long` is the rate for prompts over 200K tokens.
+    // shortcut: hand-copied list prices; update this table when providers change them.
     const MODEL_PRICES = {
       // Gemini 4 Series (Frontier)
       'gemini-4-carbon': [{ until: '2026-12-01', in: 2, out: 10, cache: 0.1 }, { in: 4, out: 20, cache: 0.2 }],
@@ -313,6 +315,7 @@
       'gemini-3.5-flash-lite': [{ in: 0.3, out: 2.5, cache: 0.03 }],
       'gemini-3.5-flash': [{ in: 0.5, out: 3, cache: 0.05 }],
       'gemini-3.1-flash-lite': [{ in: 0.25, out: 1.5, cache: 0.025 }],
+      'gemini-3.1-flash-image': [{ in: 0.5, out: 3, cache: 0.05 }], // Text/multimodal rate; image output is $60/1M
       'gemini-3.1-flash': [{ in: 0.5, out: 3, cache: 0.05 }],
       'gemini-3.1-pro': [{ in: 2, out: 12, cache: 0.2, long: { in: 4, out: 18, cache: 0.4 } }],
       'gemini-3-flash': [{ in: 0.5, out: 3, cache: 0.05 }],
@@ -342,6 +345,33 @@
       'gemini-pro': [{ in: 1.25, out: 5, cache: 0.125 }],
       'text-embedding-004': [{ in: 0.04, out: 0, cache: 0.01 }],
       'gemini-embedding': [{ in: 0.04, out: 0, cache: 0.01 }],
+
+      // Anthropic Claude 5.x Series
+      'claude-fable-5-2': [{ in: 8, out: 40, cache: 0.2 }],
+      'claude-opus-5-5': [{ in: 4, out: 20, cache: 0.2 }],
+      'claude-sonnet-5-5': [{ in: 2, out: 10, cache: 0.1 }],
+      'claude-haiku-5-5': [{ in: 0.1, out: 0.5, cache: 0.01, long: { in: 0.5, out: 2.5, cache: 0.05 } }], // Anthropic steps up at >100K; dashboard tracks >200K
+
+      // Anthropic Claude 4.x Series
+      'claude-opus-4-6': [{ in: 5, out: 25, cache: 0.5, long: { in: 10, out: 37.5, cache: 1 } }],
+      'claude-sonnet-4-6': [{ in: 3, out: 15, cache: 0.3 }],
+      'claude-opus-4-5': [{ in: 5, out: 25, cache: 0.5 }],
+      'claude-sonnet-4-5': [{ in: 3, out: 15, cache: 0.3, long: { in: 6, out: 22.5, cache: 0.6 } }],
+      'claude-haiku-4-5': [{ in: 1, out: 5, cache: 0.1 }],
+      'claude-opus-4-1': [{ in: 15, out: 75, cache: 1.5 }],
+      'claude-opus-4': [{ in: 15, out: 75, cache: 1.5 }],
+      'claude-sonnet-4': [{ in: 3, out: 15, cache: 0.3, long: { in: 6, out: 22.5, cache: 0.6 } }],
+
+      // Anthropic Claude 3.x Series
+      'claude-3-7-sonnet': [{ in: 3, out: 15, cache: 0.3 }],
+      'claude-3-5-sonnet': [{ in: 3, out: 15, cache: 0.3 }],
+      'claude-3-5-haiku': [{ in: 0.8, out: 4, cache: 0.08 }],
+      'claude-3-opus': [{ in: 15, out: 75, cache: 1.5 }],
+      'claude-3-sonnet': [{ in: 3, out: 15, cache: 0.3 }],
+      'claude-3-haiku': [{ in: 0.25, out: 1.25, cache: 0.03 }],
+
+      // OpenAI / Partner MaaS
+      'gpt-oss-120b': [{ in: 0.09, out: 0.36, cache: 0.09 }], // Vertex AI PayGo (no cache discount)
     };
     // Longest table key that prefixes the model ("gemini-3.8-flash-high" -> "gemini-3.8-flash"); null if unknown.
     function priceFor(model, timestamp, promptTokens) {
@@ -708,13 +738,30 @@
       const baseY = padTop + chartH;
       const areaPath = `${linePath} L${lastX},${baseY} L${firstX},${baseY} Z`;
 
-      const step = Math.max(1, Math.floor(data.length / 5));
-      const labels = data.filter((_, i) => i % step === 0 || i === data.length - 1).map((d) => {
-        const origIdx = data.indexOf(d);
-        const x = points[origIdx][0];
-        const date = new Date(d.time * 1000);
+      const labelW = 50;
+      const minGap = 12;
+      const lastIdx = data.length - 1;
+      const step = Math.max(1, Math.ceil(lastIdx / 5));
+      const labelIndices = [0];
+      if (lastIdx > 0) {
+        let prevRight = points[0][0] + labelW;
+        const lastLeft = points[lastIdx][0] - labelW;
+        for (let i = step; i < lastIdx; i += step) {
+          const x = points[i][0];
+          const left = x - labelW / 2;
+          const right = x + labelW / 2;
+          if (left >= prevRight + minGap && right + minGap <= lastLeft) {
+            labelIndices.push(i);
+            prevRight = right;
+          }
+        }
+        labelIndices.push(lastIdx);
+      }
+      const labels = labelIndices.map((idx) => {
+        const x = points[idx][0];
+        const date = new Date(data[idx].time * 1000);
         const text = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const anchor = origIdx === 0 ? 'start' : (origIdx === data.length - 1 ? 'end' : 'middle');
+        const anchor = lastIdx === 0 ? 'middle' : (idx === 0 ? 'start' : (idx === lastIdx ? 'end' : 'middle'));
         return `<text x="${x}" y="${height - 4}" font-size="9" fill="var(--faint)" text-anchor="${anchor}">${escapeHtml(text)}</text>`;
       }).join('');
 
