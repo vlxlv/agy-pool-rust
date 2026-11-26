@@ -486,6 +486,9 @@ async fn test_sse_events_replay_and_live_stream() {
             thinking_tokens: 0,
             status: 200,
             failover: false,
+            reason: None,
+            from_account: None,
+            attempt: None,
         },
         true,
     );
@@ -555,6 +558,9 @@ async fn test_sse_events_replay_and_live_stream() {
             thinking_tokens: 0,
             status: 200,
             failover: true,
+            reason: Some("QuotaExhausted".to_string()),
+            from_account: Some("Alice".to_string()),
+            attempt: Some(2),
         },
         false,
     );
@@ -597,6 +603,9 @@ async fn test_sse_events_replay_and_live_stream() {
                     thinking_tokens: 0,
                     status: 200,
                     failover: false,
+                    reason: None,
+                    from_account: None,
+                    attempt: None,
                 },
                 false,
             );
@@ -1799,6 +1808,17 @@ async fn test_tokens_endpoint() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["summary"]["prompt_tokens"], 8500);
 
+    let (status, _, body) = get("/api/v1/tokens?range=30d").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["range"], "30d");
+    assert_eq!(json["summary"]["prompt_tokens"], 8500);
+
+    let (status, _, body) = get("/api/v1/tokens?range=90d").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["range"], "90d");
+
     let (_, _, body) = get("/api/v1/tokens?range=total").await;
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json["window_start"].is_null());
@@ -1818,6 +1838,68 @@ async fn test_tokens_endpoint() {
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 
     agy_pool::storage::tokens::clear_pending();
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_quota_history_endpoint() {
+    let _guard = lock_test().await;
+    let _tmp = setup_test_env();
+    setup_sample_pool();
+    set_dashboard_config(Some(TEST_TOKEN), false);
+    let (addr, server_task, shutdown_tx) = start_server().await;
+
+    let (status, _, _) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/quota/history",
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let auth = bearer(TEST_TOKEN);
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/quota/history?hours=24",
+        hdrs(&[("authorization", auth.as_str())]),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let empty_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(empty_json["hours"], 24);
+    assert_eq!(empty_json["points"].as_array().unwrap().len(), 0);
+
+    let now = agy_pool::clock::now_unix() as i64;
+    let hist_path = agy_pool::config::data_dir().join(agy_pool::quota::QUOTA_HISTORY_FILE);
+    let line = serde_json::json!({
+        "account": "acc_1",
+        "g5": 0.84,
+        "gw": 0.91,
+        "ts": now - 60,
+    });
+    std::fs::write(&hist_path, format!("{line}\n")).unwrap();
+
+    let (status, _, body) = send_request(
+        addr,
+        Method::GET,
+        "/api/v1/quota/history?hours=48",
+        hdrs(&[("authorization", auth.as_str())]),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let pts = json["points"].as_array().unwrap();
+    assert_eq!(pts.len(), 1);
+    assert_eq!(pts[0]["account_id"], "acc_1");
+    assert_eq!(pts[0]["five_hour_pct"], 84.0);
+    assert_eq!(pts[0]["weekly_pct"], 91.0);
+
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
 }

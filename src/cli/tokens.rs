@@ -2,9 +2,9 @@ use crate::cli::Io;
 use crate::cli::{CLR_BOLD, CLR_RED, CLR_RESET};
 use crate::storage::tokens::{self, TokenCounts, TokenRange};
 
-const USAGE: &str = "usage: agy-pool tokens [--range 1h|24h|7d|total]\n\n\
+const USAGE: &str = "usage: agy-pool tokens [--range 1h|24h|7d|30d|90d|total]\n\n\
 Show token usage per account and for the whole pool (default range: 24h).\n\
-  1h is the current clock hour; 24h and 7d are the current hour plus the 23 / 167 before it.\n\
+  1h is the current clock hour; 24h, 7d, 30d and 90d count back from the current hour.\n\
   Cached tokens are part of prompt tokens; Total = prompt + output + thinking.\n";
 
 /// Formats a token count compactly: 950, 12.3K, 1.85M, 2.10B.
@@ -26,6 +26,8 @@ fn range_label(range: TokenRange, now_unix: i64) -> String {
         TokenRange::Hour => "this hour",
         TokenRange::Day => "last 24h",
         TokenRange::Week => "last 7d",
+        TokenRange::Month => "last 30d",
+        TokenRange::Quarter => "last 90d",
         TokenRange::Total => return "all time".to_string(),
     };
     let since = range
@@ -97,7 +99,7 @@ pub async fn tokens_cmd(io: &mut Io<'_>, args: &[String]) -> i32 {
             None => {
                 let _ = writeln!(
                     io.stderr,
-                    "agy-pool tokens: error: --range must be one of 1h, 24h, 7d, total"
+                    "agy-pool tokens: error: --range must be one of 1h, 24h, 7d, 30d, 90d, total"
                 );
                 return 2;
             }
@@ -232,9 +234,13 @@ mod tests {
         assert_eq!(code, 0);
         assert!(stdout.contains("all time"), "{stdout}");
 
+        let (code, stdout, _) = crate::cli::test_support::run_cli(&["tokens", "--range", "30d"], "").await;
+        assert_eq!(code, 0);
+        assert!(stdout.contains("last 30d"), "{stdout}");
+
         let (code, _, stderr) = crate::cli::test_support::run_cli(&["tokens", "--range", "2d"], "").await;
         assert_eq!(code, 2);
-        assert!(stderr.contains("1h, 24h, 7d, total"), "{stderr}");
+        assert!(stderr.contains("1h, 24h, 7d, 30d, 90d, total"), "{stderr}");
 
         let (code, stdout, _) = crate::cli::test_support::run_cli(&["tokens", "--help"], "").await;
         assert_eq!(code, 0);

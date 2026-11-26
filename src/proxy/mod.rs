@@ -1205,6 +1205,8 @@ impl Handler {
         let mut has_failed_over = false;
         let mut consecutive_quota_failovers = 0;
         let mut last_error: Option<String> = None;
+        let mut last_failed_account: Option<String> = None;
+        let mut last_failover_reason: Option<&'static str> = None;
 
         for acc in &candidates {
             let is_pending = pending_claim.as_ref().map(|c| c.account_id == acc.id).unwrap_or(false);
@@ -1271,6 +1273,8 @@ impl Handler {
                 in_flight_guard: cur_ifg,
                 lease_guard: cur_lg,
                 request_id: &request_id,
+                from_account: last_failed_account.as_deref(),
+                failover_reason: last_failover_reason,
             };
 
             let (outcome, tokens) = dispatch_account(dispatch_params).await;
@@ -1314,6 +1318,8 @@ impl Handler {
                     return resp;
                 }
                 Attempt::Failover { reason, err } => {
+                    last_failed_account = Some(display_account_name(Some(acc), Some(false)));
+                    last_failover_reason = Some(reason.rsplit(':').next().unwrap_or(reason));
                     if let Some(e) = err {
                         last_error = Some(e);
                     }

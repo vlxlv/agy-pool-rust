@@ -434,11 +434,14 @@ async function fetchAccounts() {
     const fetchedAtMs = Date.now();
     showEmailAllowed = Boolean(data.show_email_allowed);
     accountsData = (data.accounts || []).map((acc) => {
-      for (const win of [acc.five_hour, acc.weekly]) {
+      for (const win of [acc.five_hour, acc.weekly, acc.third_party_5h, acc.third_party_weekly]) {
         if (win && win.reset_at_unix > 0) {
           win._deadlineMs = fetchedAtMs + (Number(win.reset_in_secs) || 0) * 1000;
         }
       }
+      acc._cooldownDeadlineMs = Number(acc.cooldown_secs) > 0
+        ? fetchedAtMs + Number(acc.cooldown_secs) * 1000
+        : null;
       return acc;
     });
     renderPulse();
@@ -449,22 +452,26 @@ async function fetchAccounts() {
 }
 
 // Pool-wide quota: the average over accounts in rotation, and the soonest reset of each window.
-function poolSummary() {
+function poolSummary(poolKind = 'gemini') {
+  const k5 = poolKind === '3p' ? 'third_party_5h' : 'five_hour';
+  const kw = poolKind === '3p' ? 'third_party_weekly' : 'weekly';
   const sum = { five: null, weekly: null, nextFiveMs: null, nextWeeklyMs: null, active: 0 };
   let five = 0, fiveN = 0, wk = 0, wkN = 0;
   for (const acc of accountsData) {
     if (acc.scheduler_state !== 'active') continue;
     sum.active += 1;
-    if (acc.five_hour) {
-      five += clampPct(acc.five_hour.remaining_percent);
+    const w5 = acc[k5];
+    if (w5) {
+      five += clampPct(w5.remaining_percent);
       fiveN += 1;
-      const d = acc.five_hour._deadlineMs;
+      const d = w5._deadlineMs;
       if (d !== undefined && (sum.nextFiveMs === null || d < sum.nextFiveMs)) sum.nextFiveMs = d;
     }
-    if (acc.weekly) {
-      wk += clampPct(acc.weekly.remaining_percent);
+    const ww = acc[kw];
+    if (ww) {
+      wk += clampPct(ww.remaining_percent);
       wkN += 1;
-      const d = acc.weekly._deadlineMs;
+      const d = ww._deadlineMs;
       if (d !== undefined && (sum.nextWeeklyMs === null || d < sum.nextWeeklyMs)) sum.nextWeeklyMs = d;
     }
   }

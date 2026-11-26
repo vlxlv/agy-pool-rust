@@ -511,6 +511,7 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
         | "/api/v1/forecast"
         | "/api/v1/events"
         | "/api/v1/tokens"
+        | "/api/v1/quota/history"
         | "/api/v1/config"
         | "/api/v1/diagnostics"
             if !is_get =>
@@ -534,15 +535,25 @@ pub async fn serve(req: Request<hyper::body::Incoming>) -> Response<ProxyBody> {
             Some(denied) => denied,
             None => update_apply_response().await,
         },
-        "/api/v1/status" | "/api/v1/accounts" | "/api/v1/forecast" | "/api/v1/events" | "/api/v1/tokens" => {
+        "/api/v1/status"
+        | "/api/v1/accounts"
+        | "/api/v1/forecast"
+        | "/api/v1/events"
+        | "/api/v1/tokens"
+        | "/api/v1/quota/history" => {
             if let Some(denied) = read_gate(&req, token) {
                 return denied;
             }
             match route.as_str() {
                 "/api/v1/status" => status_response().await,
-                "/api/v1/accounts" => accounts_response(req.uri().query()).await,
+                "/api/v1/accounts" => {
+                    // The verification URL is a control-grade secret: only reveal it when controls are authorised.
+                    let expose_validation_url = token.is_some() || cfg.allow_unauthenticated_control;
+                    accounts_response(req.uri().query(), expose_validation_url).await
+                }
                 "/api/v1/forecast" => forecast_response().await,
                 "/api/v1/tokens" => tokens_response(req.uri().query()).await,
+                "/api/v1/quota/history" => quota_history_response(req.uri().query()).await,
                 _ => events_response(),
             }
         }
@@ -586,14 +597,14 @@ async fn status_response() -> Response<ProxyBody> {
     json_response(serde_json::to_vec(&status).unwrap_or_default())
 }
 
-async fn accounts_response(query: Option<&str>) -> Response<ProxyBody> {
+async fn accounts_response(query: Option<&str>, expose_validation_url: bool) -> Response<ProxyBody> {
     let request_show_email = query
         .map(|q| url::form_urlencoded::parse(q.as_bytes()).any(|(k, v)| k == "show_email" && (v == "true" || v == "1")))
         .unwrap_or(false);
     let Ok(accounts) = tokio::task::spawn_blocking(move || {
         let pool = crate::storage::load_pool().unwrap_or_default();
         let now_ts = jiff::Timestamp::now().as_second() as f64;
-        dto::build_accounts_response(&pool, request_show_email, now_ts)
+        dto::build_accounts_response(&pool, request_show_email, expose_validation_url, now_ts)
     })
     .await
     else {
@@ -627,7 +638,7 @@ async fn tokens_response(query: Option<&str>) -> Response<ProxyBody> {
         return api_error(
             StatusCode::BAD_REQUEST,
             "INVALID_ARGUMENT",
-            "range must be one of 1h, 24h, 7d, total",
+            "range must be one of 1h, 24h, 7d, 30d, 90d, total",
         );
     };
     let now = crate::clock::now_unix() as i64;
@@ -649,6 +660,34 @@ async fn tokens_response(query: Option<&str>) -> Response<ProxyBody> {
             )
         }
     }
+}
+
+async fn quota_history_response(query: Option<&str>) -> Response<ProxyBody> {
+    let hours = query
+        .and_then(|q| {
+            url::form_urlencoded::parse(q.as_bytes())
+                .find(|(k, _)| k == "hours")
+                .and_then(|(_, v)| v.parse::<u64>().ok())
+        })
+        .unwrap_or(24)
+        .clamp(1, 168);
+    let now = crate::clock::now_unix() as i64;
+    let Ok(body) = tokio::task::spawn_blocking(move || {
+        let pool = crate::storage::load_pool().unwrap_or_default();
+        let path = crate::config::data_dir().join(crate::quota::QUOTA_HISTORY_FILE);
+        // Include the rotated file so the window survives a rotation.
+        let mut records = crate::quota::read_quota_history(Some(
+            &path.with_file_name(format!("{}.1", crate::quota::QUOTA_HISTORY_FILE)),
+        ))
+        .unwrap_or_default();
+        records.extend(crate::quota::read_quota_history(Some(&path)).unwrap_or_default());
+        dto::build_quota_history_response(&pool, &records, hours, now)
+    })
+    .await
+    else {
+        return internal_error();
+    };
+    json_response(serde_json::to_vec(&body).unwrap_or_default())
 }
 
 fn events_response() -> Response<ProxyBody> {

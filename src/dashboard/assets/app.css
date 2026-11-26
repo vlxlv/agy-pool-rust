@@ -769,6 +769,51 @@ tr.clickable { cursor: pointer; }
 .meter.bad > i, .daily-bar.bad > i { background: var(--rose); }
 .quota { display: grid; gap: 5px; min-width: 152px; }
 .quota-line { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; font-weight: 560; }
+.quota-sub { display: grid; gap: 3px; margin-top: 2px; padding-top: 4px; border-top: 1px dashed var(--border); }
+.quota-sub-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+.quota-pool-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  font: 700 9.5px/1.45 var(--font-figure);
+  letter-spacing: 0.04em;
+  background: var(--violet-bg);
+  color: var(--violet);
+}
+.daily-bar.sub { height: 3px; }
+.state-meta { margin-top: 4px; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gauges-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.gauges-head-title { font: 650 11px/1.2 var(--font-figure); text-transform: uppercase; letter-spacing: 0.055em; color: var(--muted); }
+.ctx-cell { display: grid; gap: 4px; min-width: 104px; }
+.ctx-line { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ctx-bar { position: relative; height: 3px; border-radius: 999px; background: var(--inset); overflow: hidden; }
+.ctx-bar > i { position: absolute; inset: 0 auto 0 0; background: var(--cyan); border-radius: 999px; }
+.ctx-bar.low > i { background: var(--amber); }
+.ctx-bar.bad > i { background: var(--rose); }
+.tag.long { background: var(--amber-bg); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 28%, transparent); }
+.heatmap-card { margin-bottom: 14px; }
+.heatmap-wrap { display: flex; flex-direction: column; gap: 6px; overflow-x: auto; }
+.heatmap-months { display: grid; grid-template-columns: repeat(13, minmax(14px, 1fr)); gap: 4px; font-size: 10px; color: var(--subtle); }
+.heatmap-grid { display: grid; grid-template-columns: repeat(13, minmax(14px, 1fr)); gap: 4px; }
+.hm-col { display: grid; grid-template-rows: repeat(7, 13px); gap: 4px; }
+.hm-cell { border-radius: 3px; background: var(--inset); border: 1px solid var(--border); cursor: pointer; padding: 0; transition: transform 100ms ease, border-color 100ms ease; }
+.hm-cell:hover { transform: scale(1.14); border-color: var(--border-strong); }
+.hm-cell.future { opacity: 0.25; cursor: default; pointer-events: none; }
+.hm-cell.l1 { background: color-mix(in srgb, var(--teal) 26%, var(--inset)); border-color: color-mix(in srgb, var(--teal) 30%, transparent); }
+.hm-cell.l2 { background: color-mix(in srgb, var(--teal) 48%, var(--inset)); border-color: color-mix(in srgb, var(--teal) 45%, transparent); }
+.hm-cell.l3 { background: color-mix(in srgb, var(--teal) 72%, var(--inset)); border-color: color-mix(in srgb, var(--teal) 65%, transparent); }
+.hm-cell.l4 { background: var(--teal); border-color: var(--teal); }
+.hm-cell.selected { outline: 2px solid var(--violet); outline-offset: 1px; }
+.heatmap-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+.hm-scale { display: inline-flex; align-items: center; gap: 4px; }
+.hm-scale i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--border); background: var(--inset); }
+.hm-scale i.l1 { background: color-mix(in srgb, var(--teal) 26%, var(--inset)); }
+.hm-scale i.l2 { background: color-mix(in srgb, var(--teal) 48%, var(--inset)); }
+.hm-scale i.l3 { background: color-mix(in srgb, var(--teal) 72%, var(--inset)); }
+.hm-scale i.l4 { background: var(--teal); }
+.quota-hist-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 11.5px; color: var(--muted); }
+.quota-hist-item { display: inline-flex; align-items: center; gap: 5px; }
+.quota-hist-dot { width: 8px; height: 8px; border-radius: 50%; }
 
 /* Identity avatar + state marks */
 .identity-cell { display: flex; align-items: flex-start; gap: 10px; }
