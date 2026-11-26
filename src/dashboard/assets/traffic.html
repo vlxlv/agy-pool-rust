@@ -57,8 +57,8 @@
       agy-pool
     </a>
     <nav class="nav" aria-label="Pages">
-      <a href="/dashboard" data-i18n>Pool</a>
-      <a href="/dashboard/traffic" aria-current="page" data-i18n>Traffic</a>
+      <a href="/dashboard">Pool</a>
+      <a href="/dashboard/traffic" aria-current="page">Traffic</a>
     </nav>
     <div class="tools">
       <div class="pulse">
@@ -80,16 +80,15 @@
       </div>
       <span class="chip" id="conn" title="Connecting"><span id="conn-dot" class="dot wait"></span><span id="conn-text">Connecting</span></span>
       <button id="version-btn" type="button" class="chip version-btn"><span id="version-pill" class="num">…</span><span id="version-update-badge" class="update-flag" hidden></span></button>
-      <button id="config-btn" type="button" class="chip" hidden data-i18n>Config &amp; health</button>
+      <button id="config-btn" type="button" class="chip" hidden>Config &amp; health</button>
       <select id="strategy-select" aria-label="Routing strategy" title="Routing strategy" hidden>
         <option value="smart">Smart routing</option>
         <option value="max_quota">Most quota first</option>
       </select>
-      <button id="lang-btn" type="button" class="chip lang-btn" title="Switch language / 切换语言">中文</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="Theme">
-        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true" data-i18n>Auto</button>
-        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false" data-i18n>Light</button>
-        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false" data-i18n>Dark</button>
+        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true">Auto</button>
+        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false">Light</button>
+        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false">Dark</button>
       </div>
     </div>
   </header>
@@ -146,30 +145,30 @@
   <main>
     <dl class="vitals pulse-grid cols-4" aria-label="Gateway vitals">
       <div class="vital lead pulse-card">
-        <div class="pulse-head"><span data-i18n>In Flight</span><span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span></div>
+        <div class="pulse-head"><span>In Flight</span><span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span></div>
         <div class="pulse-main"><span class="pulse-value num" id="metric-inflight">0</span><span class="pulse-sub">Active requests</span></div>
       </div>
       <div class="vital pulse-card">
-        <div class="pulse-head"><span data-i18n>First Token (p50)</span><span class="badge violet">TTFT</span></div>
+        <div class="pulse-head"><span>First Token (p50)</span><span class="badge violet">TTFT</span></div>
         <div class="pulse-main"><span class="pulse-value num"><span id="metric-ttfb-p50" class="num">—</span><small id="metric-ttfb-unit">ms</small></span><span class="pulse-sub">Includes thinking time</span></div>
       </div>
       <div class="vital pulse-card">
-        <div class="pulse-head"><span data-i18n>Total Duration</span><span class="pulse-sub">p95 <span id="metric-total-p95" class="num">—</span></span></div>
+        <div class="pulse-head"><span>Total Duration</span><span class="pulse-sub">p95 <span id="metric-total-p95" class="num">—</span></span></div>
         <div class="pulse-main"><span class="pulse-value num" id="metric-total-p50">—</span><span class="pulse-sub">Median latency</span></div>
         <div class="spark-bars" id="traffic-spark-bars" aria-hidden="true"><i style="height:18%;opacity:0.25"></i></div>
       </div>
       <div class="vital pulse-card">
-        <div class="pulse-head"><span data-i18n>Gateway Memory</span><span class="badge teal">RSS</span></div>
+        <div class="pulse-head"><span>Gateway Memory</span><span class="badge teal">RSS</span></div>
         <div class="pulse-main"><span class="pulse-value num"><span id="metric-rss">0.0</span><small>MB</small></span><span class="pulse-sub">Resident set size</span></div>
       </div>
     </dl>
 
     <section class="section" aria-labelledby="requests-title">
       <div class="section-head">
-        <h2 id="requests-title" data-i18n>Requests</h2>
+        <h2 id="requests-title">Requests</h2>
         <div class="seg" role="tablist" aria-label="View">
-          <button id="tab-stream-btn" type="button" role="tab" aria-selected="true" class="active" data-i18n>Recent</button>
-          <button id="tab-models-btn" type="button" role="tab" aria-selected="false" data-i18n>By model</button>
+          <button id="tab-stream-btn" type="button" role="tab" aria-selected="true" class="active">Recent</button>
+          <button id="tab-models-btn" type="button" role="tab" aria-selected="false">By model</button>
         </div>
         <span class="count" id="stream-count-badge">0 requests</span>
         <div class="tools-row">
@@ -221,20 +220,20 @@
 
     <section class="section" aria-labelledby="tokens-title">
       <div class="section-head">
-        <h2 id="tokens-title" data-i18n>Token usage</h2>
+        <h2 id="tokens-title">Token usage</h2>
         <div class="seg" id="token-view-seg" role="group" aria-label="Breakdown">
-          <button type="button" class="active" data-token-view="accounts" data-i18n>By account</button>
-          <button type="button" data-token-view="models" data-i18n>By model</button>
+          <button type="button" class="active" data-token-view="accounts">By account</button>
+          <button type="button" data-token-view="models">By model</button>
         </div>
         <span class="count" id="token-window">—</span>
         <button type="button" class="badge violet" id="heat-filter-pill" hidden title="Click to clear day filter"></button>
         <div class="tools-row">
           <div class="seg" role="group" aria-label="Range">
-            <button type="button" data-token-range="1h" title="Since the start of the current hour" data-i18n>This hour</button>
-            <button type="button" class="active" data-token-range="24h" data-i18n>24 hours</button>
-            <button type="button" data-token-range="7d" data-i18n>7 days</button>
-            <button type="button" data-token-range="30d" data-i18n>30 days</button>
-            <button type="button" data-token-range="total" data-i18n>All time</button>
+            <button type="button" data-token-range="1h" title="Since the start of the current hour">This hour</button>
+            <button type="button" class="active" data-token-range="24h">24 hours</button>
+            <button type="button" data-token-range="7d">7 days</button>
+            <button type="button" data-token-range="30d">30 days</button>
+            <button type="button" data-token-range="total">All time</button>
           </div>
           <div class="seg" role="group" aria-label="Currency">
             <button type="button" data-currency="usd">USD</button>
@@ -247,7 +246,7 @@
       <div class="analytics-grid" id="analytics-grid">
         <div class="chart-card" id="trend-card">
           <div class="chart-card-head">
-            <span class="chart-card-title" data-i18n>Token Velocity Trend</span>
+            <span class="chart-card-title">Token Velocity Trend</span>
             <span class="chart-card-meta" id="trend-peak-meta"></span>
           </div>
           <div class="chart-svg-wrap" id="trend-chart-container">
@@ -256,10 +255,10 @@
         </div>
         <div class="chart-card" id="donut-card">
           <div class="chart-card-head">
-            <span class="chart-card-title" data-i18n>Token Distribution</span>
+            <span class="chart-card-title">Token Distribution</span>
             <div class="seg donut-seg" role="group" aria-label="Distribution by">
-              <button type="button" class="active" id="donut-by-account" data-i18n>Accounts</button>
-              <button type="button" id="donut-by-model" data-i18n>Models</button>
+              <button type="button" class="active" id="donut-by-account">Accounts</button>
+              <button type="button" id="donut-by-model">Models</button>
             </div>
           </div>
           <div class="donut-wrap" id="donut-chart-container">
@@ -269,7 +268,7 @@
       </div>
       <div class="chart-card heatmap-card">
         <div class="chart-card-head">
-          <span class="chart-card-title" data-i18n>90-Day Activity</span>
+          <span class="chart-card-title">90-Day Activity</span>
           <span class="chart-card-meta" id="heatmap-meta"></span>
         </div>
         <div class="heatmap-wrap">
@@ -277,7 +276,7 @@
           <div class="heatmap-grid" id="heatmap-grid"></div>
         </div>
         <div class="heatmap-foot">
-          <span id="heatmap-hint" data-i18n>Click any day cell to filter token breakdown below.</span>
+          <span id="heatmap-hint">Click any day cell to filter token breakdown below.</span>
           <span class="hm-scale"><span>Less</span><i></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><span>More</span></span>
         </div>
       </div>
@@ -1187,7 +1186,7 @@
       $('token-price-note').hidden = gaps.length === 0;
       $('token-price-note').textContent = gaps.length === 0 ? '' : `Not counted in the money figures: ${gaps.join('; ')}.`;
 
-      const thCols = (firstCol) => `<tr><th>${escapeHtml(t(firstCol))}</th><th>${escapeHtml(t('Requests'))}</th><th>${escapeHtml(t('Prompt'))}</th><th>${escapeHtml(t('From cache'))}</th><th>${escapeHtml(t('Output'))}</th><th>${escapeHtml(t('Thinking'))}</th><th>${escapeHtml(t('Total'))}</th><th title="At API list prices">${escapeHtml(t('Value'))}</th><th title="At API list prices">${escapeHtml(t('Saved by cache'))}</th><th>${escapeHtml(t('Share'))}</th></tr>`;
+      const thCols = (firstCol) => `<tr><th>${escapeHtml(firstCol)}</th><th>Requests</th><th>Prompt</th><th>From cache</th><th>Output</th><th>Thinking</th><th>Total</th><th title="At API list prices">Value</th><th title="At API list prices">Saved by cache</th><th>Share</th></tr>`;
 
       if (tokenViewMode === 'models') {
         if (thead) thead.innerHTML = thCols('Model');
@@ -1370,7 +1369,6 @@
       stats(s) { showLiveCounts(s.in_flight, s.qps, s.rss_mb); },
       audit() { renderSparkBars('traffic-spark-bars'); if (!streamPaused) renderRequests(); },
       reset() { renderSparkBars('traffic-spark-bars'); renderRequests(); },
-      i18n() { if (lastTokenData) renderTokens(effectiveTokenData(lastTokenData)); renderRequests(); },
     });
     agyBoot();
   </script>

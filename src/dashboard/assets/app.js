@@ -5,50 +5,6 @@ let showEmail = false;
 try { showEmail = localStorage.getItem('agy_show_email') === 'true'; } catch (_) {}
 let showEmailAllowed = false;
 let themeMode = window.__agyThemeSaved;
-let lang = 'en';
-try { if (localStorage.getItem('agy_lang') === 'zh') lang = 'zh'; } catch (_) {}
-const ZH_MAP = {
-  'Pool': '账号池', 'Traffic': '流量与用量', 'Config & health': '配置与健康',
-  'Smart routing': '智能路由', 'Most quota first': '最大配额优先',
-  '5-Hour Quota': '5 小时配额', 'Weekly Quota': '每周配额',
-  'Routable Account Pool': '可路由账号池', 'Runway at Current Pace': '当前速率续航',
-  'Gateway Throughput': '网关吞吐', 'Quota burn history (Gemini)': '配额消耗曲线（Gemini）',
-  'Show full emails': '显示完整邮箱', 'Refresh all quotas': '刷新全部配额',
-  'All': '全部', 'Active': '可用', 'Warning': '告警', 'Disabled': '已禁用',
-  'Account': '账号', 'State': '状态', '5-hour quota': '5 小时配额', 'Weekly quota': '每周配额',
-  'Requests': '请求数', 'In flight': '并发中', 'Actions': '操作',
-  'Gemini': 'Gemini', 'Claude & GPT (3P)': 'Claude & GPT (3P)',
-  'In Flight': '当前并发', 'First Token (p50)': '首字延迟 (p50)',
-  'Total Duration': '总耗时', 'Gateway Memory': '网关内存',
-  'Recent': '实时流', 'By model': '按模型', 'By account': '按账号',
-  '200 OK': '200 正常', 'Failover': '故障切换', 'Errors': '异常',
-  'Generations only': '仅看生成请求', 'Pause': '暂停', 'Resume': '继续', 'Clear': '清空',
-  'Time': '时间', 'Model': '模型', 'First token / total': '首字 / 总耗时',
-  'Prompt tokens': '输入 Token', 'Status': '状态',
-  'Token usage': 'Token 用量', 'This hour': '本小时', '24 hours': '24 小时',
-  '7 days': '7 天', '30 days': '30 天', 'All time': '全部',
-  '90-Day Activity': '90 天活跃热力图', 'Token Velocity Trend': 'Token 速率趋势',
-  'Token Distribution': 'Token 占比分布', 'Accounts': '账号', 'Models': '模型',
-  'Prompt': '输入', 'From cache': '缓存命中', 'Output': '输出', 'Thinking': '思考',
-  'Total': '总计', 'Value': '参考费用', 'Saved by cache': '缓存节省', 'Share': '占比',
-  'Request details': '请求详情', 'Close': '关闭', 'Auto': '自动', 'Light': '浅色', 'Dark': '深色',
-  'Click any day cell to filter token breakdown below.': '点击任意日期格可按天过滤下方 Token 明细。',
-};
-function t(en) { return lang === 'zh' && ZH_MAP[en] ? ZH_MAP[en] : en; }
-function applyI18n(notify = true) {
-  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
-  const lb = $('lang-btn');
-  if (lb) lb.textContent = lang === 'zh' ? 'EN' : '中文';
-  document.querySelectorAll('[data-i18n]').forEach((el) => {
-    if (el._i18nEn === undefined) el._i18nEn = el.textContent;
-    el.textContent = t(el._i18nEn);
-  });
-  document.querySelectorAll('[data-i18n-ph]').forEach((el) => {
-    if (el._i18nPh === undefined) el._i18nPh = el.placeholder;
-    el.placeholder = t(el._i18nPh);
-  });
-  if (notify) callHook('i18n', lang);
-}
 let accountsData = [];
 let statusData = null;
 // The server replays its last 50 events on connect; keep as many so both pages see the same window.
@@ -727,14 +683,5 @@ function start() {
   }, 15 * 60 * 1000);
 }
 function agyBoot() {
-  const lb = $('lang-btn');
-  if (lb) {
-    lb.addEventListener('click', () => {
-      lang = lang === 'zh' ? 'en' : 'zh';
-      try { localStorage.setItem('agy_lang', lang); } catch (_) {}
-      applyI18n();
-    });
-  }
-  applyI18n(false); // page hooks may fetch; they must not run before auth is set up
   checkAuthAndStart();
 }

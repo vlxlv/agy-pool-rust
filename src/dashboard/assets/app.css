@@ -791,7 +791,6 @@ tr.clickable { cursor: pointer; }
 .ctx-bar.low > i { background: var(--amber); }
 .ctx-bar.bad > i { background: var(--rose); }
 .tag.long { background: var(--amber-bg); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 28%, transparent); }
-.lang-btn { font-weight: 620; min-width: 44px; justify-content: center; }
 .heatmap-card { margin-bottom: 14px; }
 .heatmap-wrap { display: flex; flex-direction: column; gap: 6px; overflow-x: auto; }
 .heatmap-months { display: grid; grid-template-columns: repeat(13, minmax(14px, 1fr)); gap: 4px; font-size: 10px; color: var(--subtle); }

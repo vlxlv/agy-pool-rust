@@ -63,8 +63,8 @@
       agy-pool
     </a>
     <nav class="nav" aria-label="Pages">
-      <a href="/dashboard" aria-current="page" data-i18n>Pool</a>
-      <a href="/dashboard/traffic" data-i18n>Traffic</a>
+      <a href="/dashboard" aria-current="page">Pool</a>
+      <a href="/dashboard/traffic">Traffic</a>
     </nav>
     <div class="tools">
       <div class="pulse">
@@ -86,16 +86,15 @@
       </div>
       <span class="chip" id="conn" title="Connecting"><span id="conn-dot" class="dot wait"></span><span id="conn-text">Connecting</span></span>
       <button id="version-btn" type="button" class="chip version-btn"><span id="version-pill" class="num">…</span><span id="version-update-badge" class="update-flag" hidden></span></button>
-      <button id="config-btn" type="button" class="chip" hidden data-i18n>Config &amp; health</button>
+      <button id="config-btn" type="button" class="chip" hidden>Config &amp; health</button>
       <select id="strategy-select" aria-label="Routing strategy" title="Routing strategy" hidden>
         <option value="smart">Smart routing</option>
         <option value="max_quota">Most quota first</option>
       </select>
-      <button id="lang-btn" type="button" class="chip lang-btn" title="Switch language / 切换语言">中文</button>
       <div id="theme-switcher" class="theme-switcher" role="group" aria-label="Theme">
-        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true" data-i18n>Auto</button>
-        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false" data-i18n>Light</button>
-        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false" data-i18n>Dark</button>
+        <button type="button" class="theme-btn" data-theme-value="system" title="Follow the system theme" aria-pressed="true">Auto</button>
+        <button type="button" class="theme-btn" data-theme-value="light" aria-pressed="false">Light</button>
+        <button type="button" class="theme-btn" data-theme-value="dark" aria-pressed="false">Dark</button>
       </div>
     </div>
   </header>
@@ -124,7 +123,7 @@
           <div class="gauge">
             <svg id="gauge" viewBox="0 0 100 70" role="img" aria-label="5-hour quota by account"></svg>
             <div class="gauge-read">
-              <div class="gauge-label" data-i18n>5-Hour Quota</div>
+              <div class="gauge-label">5-Hour Quota</div>
               <div class="big num" id="pool-5h-pct">—</div>
               <div class="sub">Next reset in <strong id="pool-next-reset" class="num">—</strong></div>
             </div>
@@ -132,7 +131,7 @@
           <div class="gauge">
             <svg id="gauge-weekly" viewBox="0 0 100 70" role="img" aria-label="Weekly quota by account"></svg>
             <div class="gauge-read">
-              <div class="gauge-label" data-i18n>Weekly Quota</div>
+              <div class="gauge-label">Weekly Quota</div>
               <div class="big num" id="pool-weekly-pct">—</div>
               <div class="sub">Next reset in <strong id="pool-weekly-reset" class="num">—</strong></div>
             </div>
@@ -142,7 +141,7 @@
       <div class="hero-stack">
         <article class="pulse-card">
           <div class="pulse-head">
-            <span data-i18n>Routable Account Pool</span>
+            <span>Routable Account Pool</span>
             <span class="badge teal" id="pool-ready-badge">Ready</span>
           </div>
           <div class="pulse-main">
@@ -153,7 +152,7 @@
         </article>
         <article class="pulse-card">
           <div class="pulse-head">
-            <span data-i18n>Runway at Current Pace</span>
+            <span>Runway at Current Pace</span>
             <span class="badge violet" id="metric-forecast-window">12h</span>
           </div>
           <div class="pulse-main">
@@ -163,7 +162,7 @@
         </article>
         <article class="pulse-card lead">
           <div class="pulse-head">
-            <span data-i18n>Gateway Throughput</span>
+            <span>Gateway Throughput</span>
             <span class="pulse-accent"><span id="metric-qps" class="num">0.00</span> req/s</span>
           </div>
           <div class="pulse-main">
@@ -178,7 +177,7 @@
     <section class="section" aria-labelledby="quota-hist-title">
       <div class="chart-card">
         <div class="chart-card-head">
-          <span class="chart-card-title" id="quota-hist-title" data-i18n>Quota burn history (Gemini)</span>
+          <span class="chart-card-title" id="quota-hist-title">Quota burn history (Gemini)</span>
           <div class="quota-hist-legend" id="quota-hist-legend"></div>
           <div class="seg" id="quota-hist-seg" role="group" aria-label="History window">
             <button type="button" class="active" data-qh-hours="24">24h</button>
@@ -199,8 +198,8 @@
             <span id="bulk-status-text">Pool active &amp; ready</span>
           </div>
           <div class="tools-row">
-            <label class="toggle" id="show-email-label"><input type="checkbox" id="show_email" name="show_email"> <span data-i18n>Show full emails</span></label>
-            <button id="refresh-all-btn" type="button" class="btn" hidden data-i18n>Refresh all quotas</button>
+            <label class="toggle" id="show-email-label"><input type="checkbox" id="show_email" name="show_email"> <span>Show full emails</span></label>
+            <button id="refresh-all-btn" type="button" class="btn" hidden>Refresh all quotas</button>
           </div>
         </div>
         <div class="daily-filters">
@@ -209,10 +208,10 @@
             <input type="search" id="account-search" placeholder="Search accounts by name or email…" aria-label="Search accounts">
           </div>
           <div class="filter-pills" id="account-filter-pills" role="group" aria-label="Account filter">
-            <button type="button" class="filter-pill active" data-filter="all" data-i18n>All</button>
-            <button type="button" class="filter-pill" data-filter="active" data-i18n>Active</button>
-            <button type="button" class="filter-pill" data-filter="warning" data-i18n>Warning</button>
-            <button type="button" class="filter-pill" data-filter="disabled" data-i18n>Disabled</button>
+            <button type="button" class="filter-pill active" data-filter="all">All</button>
+            <button type="button" class="filter-pill" data-filter="active">Active</button>
+            <button type="button" class="filter-pill" data-filter="warning">Warning</button>
+            <button type="button" class="filter-pill" data-filter="disabled">Disabled</button>
           </div>
           <div class="account-count-wrap">
             <span class="count" id="accounts-count-badge">0 accounts</span>
@@ -225,13 +224,13 @@
           <table>
             <thead>
               <tr>
-                <th data-i18n>Account</th>
-                <th data-i18n>State</th>
-                <th data-i18n>5-hour quota</th>
-                <th data-i18n>Weekly quota</th>
-                <th data-i18n>Requests</th>
-                <th data-i18n>In flight</th>
-                <th id="actions-col" hidden data-i18n>Actions</th>
+                <th>Account</th>
+                <th>State</th>
+                <th>5-hour quota</th>
+                <th>Weekly quota</th>
+                <th>Requests</th>
+                <th>In flight</th>
+                <th id="actions-col" hidden>Actions</th>
               </tr>
             </thead>
             <tbody id="accounts-table-body">
@@ -624,7 +623,7 @@
       const pts = (data && data.points) || [];
       if (pts.length === 0) {
         legend.innerHTML = '';
-        wrap.innerHTML = `<div class="empty" style="padding:22px 0">${lang === 'zh' ? '暂无配额变化记录，刷新配额变化后将自动绘制。' : 'Quota history builds automatically as quota snapshots change.'}</div>`;
+        wrap.innerHTML = `<div class="empty" style="padding:22px 0">Quota history builds automatically as quota snapshots change.</div>`;
         return;
       }
       const byAcc = new Map();
@@ -707,7 +706,6 @@
         fetchForecast();
         if (++quotaHistPolls % 6 === 0) fetchQuotaHistory();
       },
-      i18n() { fetchQuotaHistory(); },
       tick: tickCountdowns,
       status(s) { showLiveCounts(s.in_flight_requests, s.qps); },
       stats(s) { showLiveCounts(s.in_flight, s.qps); },
