@@ -700,7 +700,7 @@
       }).join('');
     }
 
-    function drawTrendChart(buckets) {
+    function drawTrendChart(buckets, range, windowStart) {
       const container = $('trend-chart-container');
       const meta = $('trend-peak-meta');
       if (!container) return;
@@ -709,11 +709,63 @@
         if (meta) meta.textContent = '';
         return;
       }
-      const data = buckets.map((b) => ({
-        time: b.timestamp,
-        tokens: Number(b.total_tokens) || 0,
-        requests: Number(b.request_count) || 0,
-      }));
+
+      const byTs = new Map();
+      for (const b of buckets) {
+        const ts = Number(b.timestamp);
+        if (!Number.isFinite(ts)) continue;
+        byTs.set(ts, {
+          time: ts,
+          tokens: Number(b.total_tokens) || 0,
+          requests: Number(b.request_count) || 0,
+        });
+      }
+      const sortedTs = [...byTs.keys()].sort((a, b) => a - b);
+      if (sortedTs.length === 0) {
+        container.innerHTML = '<div class="empty" style="padding-top:40px">No usage activity in this range</div>';
+        if (meta) meta.textContent = '';
+        return;
+      }
+
+      const curHour = Math.floor(Date.now() / 3600000) * 3600;
+      const firstTs = sortedTs[0];
+      const lastTs = sortedTs[sortedTs.length - 1];
+      let tMin = firstTs;
+      let tMax = lastTs;
+      if (range === '1h') {
+        tMin = Number.isFinite(Number(windowStart)) ? Number(windowStart) : firstTs;
+        tMax = tMin;
+      } else if (range === '24h' || range === '7d') {
+        const spanHours = range === '24h' ? 23 : 167;
+        tMin = Number.isFinite(Number(windowStart)) ? Number(windowStart) : firstTs;
+        tMax = Math.max(tMin + spanHours * 3600, lastTs);
+      } else if (range === 'total') {
+        tMax = Math.max(lastTs, curHour);
+      }
+
+      const data = [];
+      if (tMax <= tMin) {
+        data.push(byTs.get(tMin) || { time: tMin, tokens: 0, requests: 0 });
+      } else if ((tMax - tMin) / 3600 <= 336) {
+        for (let t = tMin; t <= tMax; t += 3600) {
+          data.push(byTs.get(t) || { time: t, tokens: 0, requests: 0 });
+        }
+      } else {
+        for (let i = 0; i < sortedTs.length; i++) {
+          const ts = sortedTs[i];
+          if (i > 0) {
+            const prev = sortedTs[i - 1];
+            if (ts - prev > 3600) data.push({ time: prev + 3600, tokens: 0, requests: 0 });
+            if (ts - prev > 7200) data.push({ time: ts - 3600, tokens: 0, requests: 0 });
+          }
+          data.push(byTs.get(ts));
+        }
+        if (tMax > lastTs) {
+          if (tMax - lastTs > 3600) data.push({ time: lastTs + 3600, tokens: 0, requests: 0 });
+          data.push({ time: tMax, tokens: 0, requests: 0 });
+        }
+      }
+
       const maxTokens = Math.max(1, ...data.map((d) => d.tokens));
       if (meta) meta.textContent = `Peak: ${fmtTokens(maxTokens)}/hr`;
 
@@ -725,9 +777,10 @@
       const padRight = 14;
       const chartW = width - padLeft - padRight;
       const chartH = height - padTop - padBottom;
+      const span = tMax - tMin;
 
-      const points = data.map((d, i) => {
-        const x = padLeft + (data.length > 1 ? (i / (data.length - 1)) * chartW : chartW / 2);
+      const points = data.map((d) => {
+        const x = padLeft + (span > 0 ? ((d.time - tMin) / span) * chartW : chartW / 2);
         const y = padTop + chartH - (d.tokens / maxTokens) * chartH;
         return [Number(x.toFixed(1)), Number(y.toFixed(1))];
       });
@@ -738,31 +791,65 @@
       const baseY = padTop + chartH;
       const areaPath = `${linePath} L${lastX},${baseY} L${firstX},${baseY} Z`;
 
-      const labelW = 50;
-      const minGap = 12;
-      const lastIdx = data.length - 1;
-      const step = Math.max(1, Math.ceil(lastIdx / 5));
-      const labelIndices = [0];
-      if (lastIdx > 0) {
-        let prevRight = points[0][0] + labelW;
-        const lastLeft = points[lastIdx][0] - labelW;
-        for (let i = step; i < lastIdx; i += step) {
-          const x = points[i][0];
-          const left = x - labelW / 2;
-          const right = x + labelW / 2;
-          if (left >= prevRight + minGap && right + minGap <= lastLeft) {
-            labelIndices.push(i);
-            prevRight = right;
+      const ticks = [];
+      if (span <= 0) {
+        const dt = new Date(tMin * 1000);
+        ticks.push({
+          x: Number((padLeft + chartW / 2).toFixed(1)),
+          anchor: 'middle',
+          text: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        });
+      } else {
+        const minTickPx = 80;
+        const stepCandidates = [1, 2, 3, 4, 6, 12, 24, 48, 72, 168, 336, 720];
+        const stepHours = stepCandidates.find((h) => ((h * 3600) / span) * chartW >= minTickPx)
+          || Math.ceil((span / 3600) * minTickPx / chartW);
+        const tickTimes = [];
+        if (stepHours >= 24) {
+          const stepDays = Math.max(1, Math.round(stepHours / 24));
+          const d = new Date(tMin * 1000);
+          d.setHours(0, 0, 0, 0);
+          while (Math.floor(d.getTime() / 1000) < tMin) d.setDate(d.getDate() + 1);
+          while (Math.floor(d.getTime() / 1000) <= tMax) {
+            tickTimes.push(Math.floor(d.getTime() / 1000));
+            d.setDate(d.getDate() + stepDays);
+          }
+        } else {
+          const d = new Date(tMin * 1000);
+          d.setHours(0, 0, 0, 0);
+          while (Math.floor(d.getTime() / 1000) < tMin) d.setHours(d.getHours() + stepHours);
+          while (Math.floor(d.getTime() / 1000) <= tMax) {
+            tickTimes.push(Math.floor(d.getTime() / 1000));
+            d.setHours(d.getHours() + stepHours);
           }
         }
-        labelIndices.push(lastIdx);
+        const labelW = 48;
+        let prevRight = -Infinity;
+        for (const ts of tickTimes) {
+          const x = Number((padLeft + ((ts - tMin) / span) * chartW).toFixed(1));
+          const anchor = x < padLeft + 20 ? 'start' : (x > width - padRight - 20 ? 'end' : 'middle');
+          const left = anchor === 'start' ? x : (anchor === 'end' ? x - labelW : x - labelW / 2);
+          const right = anchor === 'start' ? x + labelW : (anchor === 'end' ? x : x + labelW / 2);
+          if (left < prevRight + 10) continue;
+          prevRight = right;
+          const dt = new Date(ts * 1000);
+          const text = stepHours >= 24
+            ? dt.toLocaleDateString([], { month: 'short', day: 'numeric' })
+            : dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          ticks.push({ x, anchor, text });
+        }
       }
-      const labels = labelIndices.map((idx) => {
-        const x = points[idx][0];
-        const date = new Date(data[idx].time * 1000);
-        const text = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const anchor = lastIdx === 0 ? 'middle' : (idx === 0 ? 'start' : (idx === lastIdx ? 'end' : 'middle'));
-        return `<text x="${x}" y="${height - 4}" font-size="9" fill="var(--faint)" text-anchor="${anchor}">${escapeHtml(text)}</text>`;
+      const labels = ticks.map((t) =>
+        `<line x1="${t.x}" y1="${baseY}" x2="${t.x}" y2="${baseY + 3}" stroke="var(--rule-strong)" />` +
+        `<text x="${t.x}" y="${height - 4}" font-size="9" fill="var(--faint)" text-anchor="${t.anchor}">${escapeHtml(t.text)}</text>`
+      ).join('');
+
+      const dotsHtml = points.map(([x, y], i) => {
+        if (data.length > 36 && data[i].tokens === 0) return '';
+        return `
+            <circle cx="${x}" cy="${y}" r="3" fill="var(--panel)" stroke="var(--brass)" stroke-width="1.8">
+              <title>${new Date(data[i].time * 1000).toLocaleString()}&#10;Tokens: ${fmtTokens(data[i].tokens)}&#10;Requests: ${data[i].requests}</title>
+            </circle>`;
       }).join('');
 
       container.innerHTML = `
@@ -778,11 +865,7 @@
           <line x1="${padLeft}" y1="${baseY}" x2="${width - padRight}" y2="${baseY}" stroke="var(--rule-strong)" />
           <path d="${areaPath}" fill="url(#trend-grad)" />
           <path d="${linePath}" fill="none" stroke="var(--brass)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          ${points.map(([x, y], i) => `
-            <circle cx="${x}" cy="${y}" r="3" fill="var(--panel)" stroke="var(--brass)" stroke-width="1.8">
-              <title>${new Date(data[i].time * 1000).toLocaleString()}&#10;Tokens: ${fmtTokens(data[i].tokens)}&#10;Requests: ${data[i].requests}</title>
-            </circle>
-          `).join('')}
+          ${dotsHtml}
           ${labels}
         </svg>
       `;
@@ -892,7 +975,7 @@
         : 'all time';
       $('token-window').textContent = winText;
 
-      drawTrendChart(data.buckets || []);
+      drawTrendChart(data.buckets || [], data.range, data.window_start);
       drawDonutChart(data);
 
       const parts = [
