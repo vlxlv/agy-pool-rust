@@ -12,7 +12,7 @@ const ZH_MAP = {
   'Smart routing': '智能路由', 'Most quota first': '最大配额优先',
   '5-Hour Quota': '5 小时配额', 'Weekly Quota': '每周配额',
   'Routable Account Pool': '可路由账号池', 'Runway at Current Pace': '当前速率续航',
-  'Gateway Throughput': '网关吞吐', 'Quota burn history': '配额消耗曲线',
+  'Gateway Throughput': '网关吞吐', 'Quota burn history (Gemini)': '配额消耗曲线（Gemini）',
   'Show full emails': '显示完整邮箱', 'Refresh all quotas': '刷新全部配额',
   'All': '全部', 'Active': '可用', 'Warning': '告警', 'Disabled': '已禁用',
   'Account': '账号', 'State': '状态', '5-hour quota': '5 小时配额', 'Weekly quota': '每周配额',
@@ -35,7 +35,7 @@ const ZH_MAP = {
   'Click any day cell to filter token breakdown below.': '点击任意日期格可按天过滤下方 Token 明细。',
 };
 function t(en) { return lang === 'zh' && ZH_MAP[en] ? ZH_MAP[en] : en; }
-function applyI18n() {
+function applyI18n(notify = true) {
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
   const lb = $('lang-btn');
   if (lb) lb.textContent = lang === 'zh' ? 'EN' : '中文';
@@ -47,7 +47,7 @@ function applyI18n() {
     if (el._i18nPh === undefined) el._i18nPh = el.placeholder;
     el.placeholder = t(el._i18nPh);
   });
-  callHook('i18n', lang);
+  if (notify) callHook('i18n', lang);
 }
 let accountsData = [];
 let statusData = null;
@@ -735,6 +735,6 @@ function agyBoot() {
       applyI18n();
     });
   }
-  applyI18n();
+  applyI18n(false); // page hooks may fetch; they must not run before auth is set up
   checkAuthAndStart();
 }

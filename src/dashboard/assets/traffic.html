@@ -541,7 +541,10 @@
         const ctxHtml = ctxPct === null
           ? `${prompt.toLocaleString()}${longTag}`
           : `<div class="ctx-cell"><div class="ctx-line"><span class="num">${prompt.toLocaleString()}</span><span class="num faint">${ctxPct.toFixed(0)}%</span>${longTag}</div><div class="ctx-bar ${ctxCls}" title="${fmtTokens(prompt)} / ${fmtTokens(ctxMax)} (${ctxPct.toFixed(1)}%)"><i style="width:${ctxPct.toFixed(1)}%"></i></div></div>`;
-        const foTip = [ev.from_account ? `From ${ev.from_account}` : '', ev.reason || ''].filter(Boolean).join(' · ');
+        // Failed attempts carry the failing account; only the final success "comes from" from_account.
+        const foTip = (ev.status >= 400
+          ? ['Failed, retried on the next account', ev.reason || '']
+          : [ev.from_account ? `From ${ev.from_account}` : '', ev.reason || '']).filter(Boolean).join(' · ');
         const reasonTag = (!ev.failover && ev.status >= 400 && ev.reason)
           ? ` <span class="faint" style="font-size:11px">${escapeHtml(ev.reason)}</span>` : '';
         return `
@@ -652,7 +655,13 @@
         valueEl.title = savedEl.title = 'No list price known for this model';
       }
       const note = $('audit-diag-note');
-      if (ev.failover) {
+      if (ev.failover && ev.status >= 400) {
+        const why = ev.reason ? ` (${ev.reason})` : '';
+        const cool = ev.status === 429 ? ' The pool put it on cooldown.' : '';
+        note.textContent = `${ev.account || 'This account'} failed with HTTP ${ev.status}${why} and the request was retried on the next account.${cool}`;
+        note.className = 'note';
+        note.hidden = false;
+      } else if (ev.failover) {
         const hop = ev.from_account ? `from ${ev.from_account} to ${ev.account}` : `to ${ev.account}`;
         const why = ev.reason ? ` (${ev.reason})` : '';
         note.textContent = `Failover${ev.attempt ? ` #${ev.attempt}` : ''}: switched ${hop}${why}.`;
@@ -733,21 +742,30 @@
     $('tab-stream-btn').addEventListener('click', () => showTab('stream'));
     $('tab-models-btn').addEventListener('click', () => showTab('models'));
 
-    async function fetchTokens() {
+    // The 90-day heatmap changes slowly; refetch it on start and every few token fetches, independently.
+    let heatFetches = 0;
+    async function fetchHeat() {
       try {
-        const range = tokenRange;
-        const [res, heatRes] = await Promise.all([
-          agyFetch('/api/v1/tokens?range=' + encodeURIComponent(range)),
-          range === '90d' || range === 'total' ? Promise.resolve(null) : agyFetch('/api/v1/tokens?range=90d'),
-        ]);
+        const res = await agyFetch('/api/v1/tokens?range=90d');
+        if (!res.ok) return;
+        heatTokenData = await res.json();
+        renderHeatmap(heatTokenData);
+        if (selectedHeatDay && lastTokenData) renderTokens(effectiveTokenData(lastTokenData));
+      } catch (err) {
+        console.error('Failed to fetch heatmap usage:', err);
+      }
+    }
+    async function fetchTokens() {
+      const range = tokenRange;
+      if (range !== '90d' && heatFetches++ % 5 === 0) fetchHeat();
+      try {
+        const res = await agyFetch('/api/v1/tokens?range=' + encodeURIComponent(range));
         if (!res.ok) return;
         const data = await res.json();
-        if (range === '90d' || range === 'total') {
+        if (range === '90d') {
           heatTokenData = data;
-        } else if (heatRes && heatRes.ok) {
-          heatTokenData = await heatRes.json();
+          renderHeatmap(heatTokenData);
         }
-        if (heatTokenData) renderHeatmap(heatTokenData);
         if (range === tokenRange) {
           lastTokenData = data;
           renderTokens(effectiveTokenData(data));
@@ -783,7 +801,10 @@
         ...a,
         pool_share: summary.total_tokens > 0 ? a.total_tokens / summary.total_tokens : null,
       }));
-      return { range: 'day', window_start: null, summary, accounts, by_model: rows, buckets: data.buckets || [] };
+      // day is the UTC-midnight unix second; draw that day as a 24h window.
+      const dayStart = Number(selectedHeatDay);
+      const buckets = (src.buckets || []).filter((b) => Number(b.timestamp) >= dayStart && Number(b.timestamp) < dayStart + 86400);
+      return { range: '24h', day: dayStart, window_start: dayStart, summary, accounts, by_model: rows, buckets };
     }
 
     function renderHeatmap(data) {
@@ -1125,7 +1146,9 @@
       const thinking = Number(s.thinking_tokens) || 0;
       const priced = priceUsage(data);
 
-      const winText = data.window_start
+      const winText = data.day !== undefined
+        ? new Date(data.day * 1000).toLocaleDateString([], { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }) + ' (UTC)'
+        : data.window_start
         ? 'since ' + new Date(data.window_start * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
         : 'all time';
       $('token-window').textContent = winText;
@@ -1276,14 +1299,14 @@
         donutMode = 'accounts';
         donutAccBtn.classList.add('active');
         donutModBtn.classList.remove('active');
-        if (lastTokenData) drawDonutChart(lastTokenData);
+        if (lastTokenData) drawDonutChart(effectiveTokenData(lastTokenData));
       });
       donutModBtn.addEventListener('click', () => {
         if (donutMode === 'models') return;
         donutMode = 'models';
         donutModBtn.classList.add('active');
         donutAccBtn.classList.remove('active');
-        if (lastTokenData) drawDonutChart(lastTokenData);
+        if (lastTokenData) drawDonutChart(effectiveTokenData(lastTokenData));
       });
     }
     function syncTokenViewUI() {

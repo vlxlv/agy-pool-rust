@@ -178,7 +178,7 @@
     <section class="section" aria-labelledby="quota-hist-title">
       <div class="chart-card">
         <div class="chart-card-head">
-          <span class="chart-card-title" id="quota-hist-title" data-i18n>Quota burn history</span>
+          <span class="chart-card-title" id="quota-hist-title" data-i18n>Quota burn history (Gemini)</span>
           <div class="quota-hist-legend" id="quota-hist-legend"></div>
           <div class="seg" id="quota-hist-seg" role="group" aria-label="History window">
             <button type="button" class="active" data-qh-hours="24">24h</button>
@@ -323,17 +323,18 @@
 
     function renderHero() {
       const pool = poolSummary(quotaPoolKind);
+      const kindLabel = quotaPoolKind === '3p' ? 'Claude & GPT (3P)' : 'Gemini';
       $('pool-5h-pct').innerHTML = pool.five === null ? '—' : `${pool.five.toFixed(0)}<small>%</small>`;
       $('gauge').setAttribute('aria-label', pool.five === null
-        ? '5-hour quota by account: no data yet'
-        : `5-hour quota: ${pool.five.toFixed(1)}% left on average across ${pool.active} accounts in rotation`);
+        ? `${kindLabel} 5-hour quota by account: no data yet`
+        : `${kindLabel} 5-hour quota: ${pool.five.toFixed(1)}% left on average across ${pool.active} accounts in rotation`);
 
       $('pool-weekly-pct').innerHTML = pool.weekly === null ? '—' : `${pool.weekly.toFixed(0)}<small>%</small>`;
       const weeklyGauge = $('gauge-weekly');
       if (weeklyGauge) {
         weeklyGauge.setAttribute('aria-label', pool.weekly === null
-          ? 'Weekly quota by account: no data yet'
-          : `Weekly quota: ${pool.weekly.toFixed(1)}% left on average across ${pool.active} accounts in rotation`);
+          ? `${kindLabel} weekly quota by account: no data yet`
+          : `${kindLabel} weekly quota: ${pool.weekly.toFixed(1)}% left on average across ${pool.active} accounts in rotation`);
       }
 
       $('pool-active').textContent = pool.active;

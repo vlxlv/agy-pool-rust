@@ -200,16 +200,19 @@ fn build_quota_window_from_state(win: Option<&crate::storage::QuotaWindow>, now_
     let win = win?;
     let fraction = crate::quota::parse_quota_fraction(win.fraction)?;
     let reset_time = crate::quota::parse_iso_or_timestamp(win.reset_time.as_ref()).and_then(|ts| {
-        if ts >= 0.0 {
-            Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs_f64(ts))
-        } else {
-            None
-        }
+        // try_from_secs_f64 + checked_add: absurd upstream values must not panic the endpoint.
+        let d = std::time::Duration::try_from_secs_f64(ts).ok()?;
+        std::time::SystemTime::UNIX_EPOCH.checked_add(d)
     });
     build_quota_window_dto(Some(fraction), reset_time, now_ts)
 }
 
-pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f64) -> AccountsResponse {
+pub fn build_accounts_response(
+    pool: &Pool,
+    request_show_email: bool,
+    expose_validation_url: bool,
+    now_ts: f64,
+) -> AccountsResponse {
     let show_email_allowed = crate::accounts::is_show_email_enabled(Some(pool));
     let show_email = show_email_allowed && request_show_email;
     let in_flight_map = crate::observability::all_in_flight_generations();
@@ -234,7 +237,7 @@ pub fn build_accounts_response(pool: &Pool, request_show_email: bool, now_ts: f6
             .filter(|&r| r > now_ts)
             .map(|r| (r - now_ts).ceil() as u64)
             .unwrap_or(0);
-        let validation_url = (acc.status == crate::storage::STATUS_VALIDATION_REQUIRED)
+        let validation_url = (expose_validation_url && acc.status == crate::storage::STATUS_VALIDATION_REQUIRED)
             .then_some(acc.validation_url.as_deref())
             .flatten()
             .filter(|u| u.starts_with("https://"))
@@ -460,8 +463,30 @@ pub fn build_quota_history_response(
         .collect();
     points.sort_by_key(|p| p.ts);
     if points.len() > MAX_POINTS {
-        let drop = points.len() - MAX_POINTS;
-        points.drain(..drop);
+        // Thin each account evenly across the window instead of dropping the oldest points,
+        // so the chart still spans the whole range.
+        let mut by_account: std::collections::BTreeMap<String, Vec<QuotaHistoryPointDto>> = Default::default();
+        for p in points {
+            by_account.entry(p.account_id.clone()).or_default().push(p);
+        }
+        let cap = (MAX_POINTS / by_account.len()).max(2);
+        points = by_account
+            .into_values()
+            .flat_map(|v| {
+                let n = v.len();
+                if n <= cap {
+                    return v;
+                }
+                // Evenly spaced indices including first (0) and last (n-1).
+                let keep: std::collections::BTreeSet<usize> = (0..cap).map(|i| i * (n - 1) / (cap - 1)).collect();
+                v.into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| keep.contains(i))
+                    .map(|(_, p)| p)
+                    .collect()
+            })
+            .collect();
+        points.sort_by_key(|p| p.ts);
     }
     QuotaHistoryResponse { hours, points }
 }
@@ -603,7 +628,7 @@ mod tests {
         pool.accounts = vec![acc_uninit, acc_cooling, acc_reserve, acc_disabled, acc_expired_reset];
 
         // Default config (pool.show_email == None): server forbids revealing full emails even if query requests it.
-        let res_gated = build_accounts_response(&pool, true, now);
+        let res_gated = build_accounts_response(&pool, true, true, now);
         assert!(!res_gated.show_email_allowed);
         let val_gated = serde_json::to_value(&res_gated).expect("serialize res_gated");
         let accs_gated = val_gated
@@ -618,7 +643,7 @@ mod tests {
 
         // When pool enables show_email = Some(true), client toggle controls visibility.
         pool.show_email = Some(true);
-        let res_no_email = build_accounts_response(&pool, false, now);
+        let res_no_email = build_accounts_response(&pool, false, true, now);
         assert!(res_no_email.show_email_allowed);
         let val_no_email = serde_json::to_value(&res_no_email).expect("serialize res_no_email");
         let accs_no_email = val_no_email
@@ -627,7 +652,7 @@ mod tests {
             .expect("accounts array");
         assert!(accs_no_email[0].get("email").is_none());
 
-        let res_with_email = build_accounts_response(&pool, true, now);
+        let res_with_email = build_accounts_response(&pool, true, true, now);
         assert!(res_with_email.show_email_allowed);
         let val_with_email = serde_json::to_value(&res_with_email).expect("serialize res_with_email");
         let accs_with_email = val_with_email
@@ -703,7 +728,7 @@ mod tests {
             ..Default::default()
         });
 
-        let res = build_accounts_response(&pool, false, now);
+        let res = build_accounts_response(&pool, false, true, now);
         let a = &res.accounts[0];
         assert_eq!(a.cooldown_secs, 43);
         assert_eq!(a.error_count, 3);
@@ -716,6 +741,56 @@ mod tests {
         assert_eq!(a.third_party_5h.as_ref().unwrap().reset_in_secs, 3600);
         assert_eq!(a.third_party_weekly.as_ref().unwrap().remaining_percent, 80.0);
         assert!(res.accounts[1].validation_url.is_none());
+
+        // Read-open mode (no token, no opt-out) must not leak the verification URL.
+        let res_open = build_accounts_response(&pool, false, false, now);
+        assert!(res_open.accounts[0].validation_url.is_none());
+
+        // An absurd reset time must not panic; it just drops the reset.
+        pool.accounts[0]
+            .last_quota
+            .as_mut()
+            .unwrap()
+            .third_party_5h
+            .as_mut()
+            .unwrap()
+            .reset_time = Some(serde_json::json!(1e300));
+        let res_huge = build_accounts_response(&pool, false, true, now);
+        assert_eq!(
+            res_huge.accounts[0].third_party_5h.as_ref().unwrap().remaining_percent,
+            45.0
+        );
+    }
+
+    #[test]
+    fn test_quota_history_downsample_spans_window() {
+        let _lock = crate::config::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let now = 1700000000_i64;
+        let pool = Pool::default();
+        let rec = |acc: &str, ts: i64| crate::quota::QuotaHistoryRecord {
+            account: acc.to_string(),
+            g5: 0.5,
+            g5_reset: None,
+            gw: 0.5,
+            gw_reset: None,
+            ts,
+        };
+        // 4 accounts x 300 points spread over 7 days.
+        let records: Vec<_> = (0..4)
+            .flat_map(|a| (0..300).map(move |i| rec(&format!("acc_{a}"), now - 168 * 3600 + 1 + i * 2000)))
+            .collect();
+        let res = build_quota_history_response(&pool, &records, 168, now);
+        assert!(res.points.len() <= 400);
+        for a in 0..4 {
+            let id = format!("acc_{a}");
+            let ts: Vec<i64> = res.points.iter().filter(|p| p.account_id == id).map(|p| p.ts).collect();
+            assert_eq!(ts.first(), Some(&(now - 168 * 3600 + 1)), "oldest point kept for {id}");
+            assert_eq!(
+                ts.last(),
+                Some(&(now - 168 * 3600 + 1 + 299 * 2000)),
+                "newest point kept for {id}"
+            );
+        }
     }
 
     #[test]
@@ -907,7 +982,7 @@ mod tests {
             active_account_id: Some("acc_2".to_string()),
             ..Default::default()
         };
-        let resp = build_accounts_response(&pool, false, 0.0);
+        let resp = build_accounts_response(&pool, false, true, 0.0);
         let flags: Vec<(String, bool)> = resp.accounts.iter().map(|a| (a.id.clone(), a.is_cli_base)).collect();
         assert_eq!(flags, vec![("acc_1".to_string(), false), ("acc_2".to_string(), true)]);
     }
